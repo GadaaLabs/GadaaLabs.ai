@@ -14,7 +14,8 @@ const links = {
   ],
   Company: [
     { label: "About", href: "/about" },
-    { label: "GadaaLabs.com", href: "https://gadaalabs.com" },
+    { label: "Donate", href: "/donate" },
+    { label: "Dashboard", href: "/dashboard" },
   ],
 };
 
