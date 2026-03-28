@@ -1,0 +1,283 @@
+---
+title: "Setting Up Your ML Engineering Environment"
+description: "Build a production-grade ML engineering workspace — Python, uv, VS Code with Docker support, PyTorch, MLflow, and DVC for experiment tracking and data versioning."
+publishedAt: "2026-03-29"
+author: "GadaaLabs"
+tags: ["python", "pytorch", "mlflow", "dvc", "docker", "setup"]
+difficulty: "intermediate"
+estimatedTime: 40
+prerequisites: ["python", "docker-basics"]
+lessonNumber: 0
+---
+
+# Setting Up Your ML Engineering Environment
+
+ML engineering spans the full lifecycle: data versioning, experiment tracking, training, packaging, and deployment. Your environment needs to support all of it. This lesson builds a workspace that mirrors how production ML teams work.
+
+## Install Python with pyenv
+
+```bash
+# macOS
+brew install pyenv
+echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.zshrc
+echo '[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.zshrc
+echo 'eval "$(pyenv init -)"' >> ~/.zshrc
+source ~/.zshrc
+
+pyenv install 3.12.3
+pyenv global 3.12.3
+
+# Linux
+curl https://pyenv.run | bash
+# Add the same exports to ~/.bashrc, then:
+pyenv install 3.12.3 && pyenv global 3.12.3
+```
+
+## Install uv
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Create the project:
+
+```bash
+uv init ml-engineering-course
+cd ml-engineering-course
+```
+
+## Install PyTorch
+
+PyTorch installation depends on whether your machine has a CUDA-capable GPU.
+
+### CPU Only (most laptops)
+
+```bash
+uv add torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
+
+### CUDA 12.1 (NVIDIA GPU)
+
+```bash
+uv add torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+### Verify PyTorch
+
+```python
+# verify_torch.py
+import torch
+
+print(f"PyTorch version: {torch.__version__}")
+print(f"CUDA available:  {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"CUDA version:    {torch.version.cuda}")
+    print(f"GPU:             {torch.cuda.get_device_name(0)}")
+
+# Smoke test: matrix multiply on CPU (or GPU)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+a = torch.randn(1000, 1000, device=device)
+b = torch.randn(1000, 1000, device=device)
+c = a @ b
+print(f"\nMatrix multiply on {device}: {c.shape} — OK")
+```
+
+```bash
+uv run python verify_torch.py
+```
+
+## Install Remaining ML Engineering Packages
+
+```bash
+uv add numpy pandas scikit-learn \
+        mlflow \
+        dvc \
+        jupyterlab ipykernel \
+        python-dotenv
+```
+
+> **Note:** Install `dvc[s3]`, `dvc[gcs]`, or `dvc[azure]` if you need remote storage on cloud providers. The base `dvc` package supports local and SSH remotes.
+
+## VS Code Setup
+
+Install VS Code from [code.visualstudio.com](https://code.visualstudio.com), then install these extensions:
+
+```bash
+# Core Python
+code --install-extension ms-python.python
+code --install-extension ms-python.vscode-pylance
+code --install-extension ms-toolsai.jupyter
+code --install-extension charliermarsh.ruff
+
+# Docker and containers
+code --install-extension ms-azuretools.vscode-docker
+code --install-extension ms-vscode-remote.remote-containers
+
+# Git
+code --install-extension eamodio.gitlens
+```
+
+The **Remote - Containers** extension lets you open your project inside a Docker container from VS Code. This is useful for ensuring your development environment exactly matches the training or serving container.
+
+Create `.vscode/settings.json`:
+
+```json
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "python.analysis.typeCheckingMode": "basic",
+  "jupyter.notebookFileRoot": "${workspaceFolder}",
+  "docker.defaultRegistryPath": "ghcr.io",
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.ipynb_checkpoints": true
+  }
+}
+```
+
+## MLflow: Local Experiment Tracking
+
+MLflow tracks experiments: hyperparameters, metrics, artefacts, and model versions. Run the MLflow UI server locally:
+
+```bash
+# Start the MLflow tracking server (stores runs in ./mlruns/)
+uv run mlflow server \
+  --backend-store-uri sqlite:///mlflow.db \
+  --default-artifact-root ./mlruns \
+  --host 127.0.0.1 \
+  --port 5000
+
+# Open http://localhost:5000 in your browser
+```
+
+Log a training run from Python:
+
+```python
+import mlflow
+import mlflow.sklearn
+from sklearn.datasets import make_classification
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+
+mlflow.set_tracking_uri("http://127.0.0.1:5000")
+mlflow.set_experiment("ml-engineering-course")
+
+X, y = make_classification(n_samples=500, n_features=10, random_state=42)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+with mlflow.start_run(run_name="rf-baseline"):
+    params = {"n_estimators": 100, "max_depth": 5, "random_state": 42}
+    mlflow.log_params(params)
+
+    model = RandomForestClassifier(**params)
+    model.fit(X_train, y_train)
+    acc = accuracy_score(y_test, model.predict(X_test))
+
+    mlflow.log_metric("accuracy", acc)
+    mlflow.sklearn.log_model(model, "model")
+
+    print(f"Accuracy: {acc:.4f}")
+    print("Run logged to MLflow.")
+```
+
+## DVC: Data Version Control
+
+DVC tracks large files (datasets, models) outside of git by storing them in a remote and keeping a small `.dvc` pointer file in the repo.
+
+```bash
+# Initialise DVC in your project
+uv run dvc init
+
+# This creates: .dvc/, .dvc/.gitignore, .dvcignore
+git add .dvc .dvcignore
+git commit -m "Initialize DVC"
+
+# Add a data file to DVC tracking
+mkdir data
+# (place a CSV in data/raw.csv)
+uv run dvc add data/raw.csv
+
+# This creates data/raw.csv.dvc — commit this file, not the CSV
+git add data/raw.csv.dvc data/.gitignore
+git commit -m "Add raw dataset to DVC"
+
+# Set a local remote (use S3/GCS in production)
+uv run dvc remote add -d local_remote /tmp/dvc-storage
+uv run dvc push   # Upload data to remote
+```
+
+## ML Project Directory Structure
+
+A well-structured ML project separates data, experiments, source code, and deployment artefacts:
+
+```
+ml-engineering-course/
+├── .dvc/                   # DVC config (committed)
+├── .venv/                  # Virtual environment (gitignored)
+├── .vscode/
+│   └── settings.json
+├── configs/
+│   ├── train_config.yaml   # Hyperparameters and paths
+│   └── model_config.yaml
+├── data/
+│   ├── raw/                # Original data (DVC tracked, gitignored)
+│   ├── processed/          # Transformed data (DVC tracked)
+│   └── raw.csv.dvc         # DVC pointer file (committed)
+├── models/
+│   └── .gitkeep            # Trained models (DVC tracked)
+├── notebooks/
+│   └── 01-eda.ipynb        # Exploration only, not production code
+├── src/
+│   └── ml_course/
+│       ├── __init__.py
+│       ├── data.py         # Dataset loading and transforms
+│       ├── model.py        # Model architecture
+│       ├── train.py        # Training loop
+│       └── evaluate.py     # Metrics and evaluation
+├── tests/
+│   ├── test_data.py
+│   └── test_model.py
+├── Dockerfile
+├── docker-compose.yml
+├── .gitignore
+├── pyproject.toml
+└── uv.lock
+```
+
+Add to `.gitignore`:
+
+```
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+data/raw/
+data/processed/
+models/
+*.pt
+*.pth
+*.onnx
+mlruns/
+mlflow.db
+.DS_Store
+```
+
+## Summary
+
+- Install Python via **pyenv** and manage dependencies with **uv**; the lockfile ensures every team member trains with identical library versions.
+- Install PyTorch via the official index URL — use the CPU wheel for laptops and the CUDA wheel for GPU-equipped machines.
+- Install the **Docker** and **Remote - Containers** VS Code extensions so your development environment can match your training container exactly.
+- Use **MLflow** to track every training run: log hyperparameters, metrics, and model artefacts, then compare runs in the MLflow web UI at `http://localhost:5000`.
+- Use **DVC** to version-control datasets and model files outside of git, keeping the repository lightweight while maintaining full reproducibility via `.dvc` pointer files.

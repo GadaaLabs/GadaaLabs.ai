@@ -1,0 +1,380 @@
+---
+title: "Setting Up Your AI Automation Environment"
+description: "Configure a complete AI automation workspace — Python, uv, VS Code, Groq API, Pydantic, structlog, OpenTelemetry, and n8n with Docker for workflow automation."
+publishedAt: "2026-03-29"
+author: "GadaaLabs"
+tags: ["python", "groq", "pydantic", "n8n", "docker", "opentelemetry", "setup"]
+difficulty: "intermediate"
+estimatedTime: 40
+prerequisites: ["python", "docker-basics"]
+lessonNumber: 0
+---
+
+# Setting Up Your AI Automation Environment
+
+AI automation systems — agents, multi-step workflows, automated pipelines — have stricter reliability requirements than one-off scripts. They run unattended, handle failures gracefully, and produce structured, observable outputs. Your environment needs to be set up with observability and reliability tooling from day one. This lesson builds that foundation.
+
+## Install Python with pyenv
+
+```bash
+# macOS
+brew install pyenv
+echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.zshrc
+echo '[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.zshrc
+echo 'eval "$(pyenv init -)"' >> ~/.zshrc
+source ~/.zshrc
+pyenv install 3.12.3 && pyenv global 3.12.3
+
+# Linux
+curl https://pyenv.run | bash
+# Add exports to ~/.bashrc, then:
+pyenv install 3.12.3 && pyenv global 3.12.3
+
+# Verify
+python --version   # Python 3.12.3
+```
+
+## Install uv and Create the Project
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+uv init ai-automation-course
+cd ai-automation-course
+```
+
+Install all automation stack dependencies:
+
+```bash
+uv add groq \
+        pydantic \
+        pydantic-settings \
+        structlog \
+        opentelemetry-sdk \
+        opentelemetry-exporter-otlp-proto-grpc \
+        python-dotenv \
+        httpx \
+        tenacity \
+        jupyterlab ipykernel
+```
+
+Package roles at a glance:
+
+| Package | Purpose |
+|---------|---------|
+| `groq` | Fast LLM inference (agents, completions) |
+| `pydantic` | Structured data validation, tool schemas |
+| `pydantic-settings` | Configuration from env vars |
+| `structlog` | Structured JSON logging |
+| `opentelemetry-sdk` | Distributed tracing |
+| `httpx` | Async HTTP for external tool calls |
+| `tenacity` | Retry logic with backoff |
+
+## VS Code Setup
+
+```bash
+code --install-extension ms-python.python
+code --install-extension ms-python.vscode-pylance
+code --install-extension ms-toolsai.jupyter
+code --install-extension charliermarsh.ruff
+code --install-extension ms-azuretools.vscode-docker
+code --install-extension eamodio.gitlens
+```
+
+Create `.vscode/settings.json`:
+
+```json
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "python.analysis.typeCheckingMode": "standard",
+  "jupyter.notebookFileRoot": "${workspaceFolder}",
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.ipynb_checkpoints": true
+  }
+}
+```
+
+> **Note:** Use `typeCheckingMode: "standard"` for agent development — it catches incorrect Pydantic model types and missing function signatures before you discover them at runtime in an unattended pipeline.
+
+## Groq API Key Setup
+
+Get a free key from [console.groq.com](https://console.groq.com).
+
+```bash
+# .env — DO NOT COMMIT
+GROQ_API_KEY=gsk_your_key_here
+LOG_LEVEL=INFO
+ENVIRONMENT=development
+```
+
+```bash
+# .env.example — safe to commit
+GROQ_API_KEY=your_groq_api_key_here
+LOG_LEVEL=INFO
+ENVIRONMENT=development
+```
+
+Load with Pydantic Settings for type-safe configuration:
+
+```python
+# src/config.py
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    groq_api_key: str
+    log_level: str = "INFO"
+    environment: str = "development"
+    max_retries: int = 3
+    request_timeout: float = 30.0
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+
+settings = Settings()
+```
+
+## Structlog: Structured JSON Logging
+
+Agent systems make many sequential decisions. Without structured logs, debugging a 10-step agent pipeline is nearly impossible. Structlog outputs machine-readable JSON with every decision, tool call, and error.
+
+```python
+# src/logging_config.py
+import logging
+import structlog
+
+def configure_logging(level: str = "INFO") -> None:
+    shared_processors = [
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.ExceptionRenderer(),
+    ]
+
+    if level == "DEBUG":
+        renderer = structlog.dev.ConsoleRenderer()
+    else:
+        renderer = structlog.processors.JSONRenderer()
+
+    structlog.configure(
+        processors=shared_processors + [renderer],
+        wrapper_class=structlog.make_filtering_bound_logger(
+            getattr(logging, level.upper())
+        ),
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(),
+    )
+
+# Usage
+from src.logging_config import configure_logging
+configure_logging(level="INFO")
+logger = structlog.get_logger()
+
+logger.info("agent_step", step="tool_call", tool="web_search", query="AI news 2026")
+logger.warning("retry", attempt=2, error="rate_limit", wait_seconds=4)
+```
+
+## OpenTelemetry: Distributed Tracing
+
+Tracing gives you a timeline of every operation inside your agent — which tool calls happened, how long each took, and where errors occurred.
+
+```python
+# src/tracing.py
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+
+def setup_tracing(service_name: str = "ai-automation") -> trace.Tracer:
+    provider = TracerProvider()
+    processor = BatchSpanProcessor(ConsoleSpanExporter())
+    provider.add_span_processor(processor)
+    trace.set_tracer_provider(provider)
+    return trace.get_tracer(service_name)
+
+tracer = setup_tracing()
+
+# Example: trace an agent step
+def call_tool(tool_name: str, inputs: dict) -> dict:
+    with tracer.start_as_current_span(f"tool.{tool_name}") as span:
+        span.set_attribute("tool.name", tool_name)
+        span.set_attribute("tool.inputs", str(inputs))
+        result = {"status": "ok", "output": "..."}
+        span.set_attribute("tool.status", result["status"])
+        return result
+```
+
+## n8n Workflow Automation: Docker Setup
+
+n8n is an open-source visual workflow automation platform. It runs HTTP webhooks, schedules, and triggers that connect to your Python agents and external APIs — without writing integration glue code.
+
+Create `docker-compose.yml` in your project root:
+
+```yaml
+version: "3.9"
+
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=changeme
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      - GENERIC_TIMEZONE=UTC
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  n8n_data:
+```
+
+Start n8n:
+
+```bash
+docker compose up -d
+# n8n UI at http://localhost:5678
+# Default login: admin / changeme
+```
+
+> **Note:** Change the `N8N_BASIC_AUTH_PASSWORD` before exposing n8n on any network. For production, add TLS termination via a reverse proxy (Caddy or nginx) in front of the n8n container.
+
+## Verify the Full Stack
+
+```python
+# test_automation_setup.py
+import os
+import sys
+import structlog
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Configure logging first
+from src.logging_config import configure_logging
+configure_logging(level="INFO")
+logger = structlog.get_logger()
+
+print("AI Automation Environment Verification")
+print("=" * 50)
+
+# 1. Config
+api_key = os.getenv("GROQ_API_KEY")
+if not api_key:
+    print("FAIL: GROQ_API_KEY not found in .env")
+    sys.exit(1)
+logger.info("config_check", groq_key_present=True)
+print("PASS: GROQ_API_KEY loaded")
+
+# 2. Groq API
+from groq import Groq
+client = Groq()
+response = client.chat.completions.create(
+    model="llama-3.3-70b-versatile",
+    messages=[{"role": "user", "content": "Reply with exactly: AUTOMATION_OK"}],
+    max_tokens=10,
+    temperature=0,
+)
+reply = response.choices[0].message.content.strip()
+logger.info("groq_check", response=reply)
+print(f"PASS: Groq API response: '{reply}'")
+
+# 3. Pydantic model validation
+from pydantic import BaseModel, field_validator
+
+class AgentAction(BaseModel):
+    tool: str
+    inputs: dict
+    reasoning: str
+
+    @field_validator("tool")
+    @classmethod
+    def tool_must_be_non_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("tool name cannot be empty")
+        return v.strip()
+
+action = AgentAction(
+    tool="web_search",
+    inputs={"query": "test"},
+    reasoning="Verifying setup",
+)
+logger.info("pydantic_check", action=action.model_dump())
+print(f"PASS: Pydantic model: tool='{action.tool}'")
+
+# 4. Tenacity retry decorator
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=4))
+def flaky_operation() -> str:
+    return "SUCCESS"
+
+result = flaky_operation()
+print(f"PASS: Tenacity retry: '{result}'")
+
+print("\n" + "=" * 50)
+print("All components verified successfully.")
+print("Ready to build AI automation systems.")
+```
+
+```bash
+uv run python test_automation_setup.py
+```
+
+## Project Structure for Agent Development
+
+```
+ai-automation-course/
+├── .venv/
+├── .vscode/
+│   └── settings.json
+├── docker-compose.yml      # n8n and any other services
+├── notebooks/
+│   └── 01-agent-design.ipynb
+├── src/
+│   └── automation/
+│       ├── __init__.py
+│       ├── config.py           # Pydantic Settings
+│       ├── logging_config.py   # structlog setup
+│       ├── tracing.py          # OpenTelemetry setup
+│       ├── agents/
+│       │   ├── __init__.py
+│       │   ├── base.py         # Base agent class
+│       │   └── research.py     # Research agent example
+│       └── tools/
+│           ├── __init__.py
+│           ├── web_search.py
+│           └── calculator.py
+├── tests/
+│   ├── test_agents.py
+│   └── test_tools.py
+├── .env                    # Secrets (gitignored)
+├── .env.example
+├── .gitignore
+├── pyproject.toml
+└── uv.lock
+```
+
+## Summary
+
+- Install Python via **pyenv** and use **uv** to manage the automation stack: groq, pydantic, structlog, opentelemetry-sdk, httpx, and tenacity install cleanly together.
+- Configure your **Groq API key** in `.env` and load it through **Pydantic Settings** for type-safe, validated configuration — this catches missing environment variables at startup, not mid-pipeline.
+- Use **structlog** with `JSONRenderer` from the first line of your agent: every tool call, decision, and error becomes a structured log record you can search and filter in any observability platform.
+- Instrument agent steps with **OpenTelemetry** spans to get a timeline of every operation — essential for debugging multi-step agent pipelines where a single tool call failure can cascade silently.
+- Run **n8n** with Docker Compose as your visual automation layer; it handles HTTP webhooks, scheduling, and third-party integrations, letting your Python agents focus on intelligence rather than plumbing.
