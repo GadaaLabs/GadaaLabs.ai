@@ -1,0 +1,223 @@
+---
+title: "Vector Databases in Production: HNSW, IVF, and Choosing the Right Index"
+description: "A deep technical comparison of HNSW and IVF vector indices — how they work, when each shines, and the operational tradeoffs that matter at scale."
+publishedAt: "2026-03-29"
+author: "GadaaLabs"
+tags: ["vector-databases", "hnsw", "embeddings", "production", "rag"]
+difficulty: "advanced"
+readingTime: 12
+featured: false
+---
+
+Vector search powers retrieval-augmented generation, semantic search, recommendation systems, and anomaly detection. But the moment your dataset climbs past a few hundred thousand vectors, the naive approach collapses under its own weight. This article cuts through the marketing and explains what actually happens inside the two dominant index types — HNSW and IVF — and how to pick the right one for your workload.
+
+## Why Exact Nearest-Neighbor Search Doesn't Scale
+
+The mathematically correct answer to "find the 10 vectors most similar to this query" is a brute-force scan: compute the distance from the query to every stored vector, sort, return top-k. This is exact k-NN.
+
+The problem is the O(n) scan. At 1M vectors of dimension 1536 (OpenAI's `text-embedding-3-small` output), a single query requires 1,536,000,000 floating-point multiply-accumulates. On a modern CPU that handles ~10 GFLOPS, you're looking at ~150ms per query before any I/O. At 10M vectors, it's 1.5 seconds. That's before you consider the memory bandwidth cost of streaming the entire index off RAM.
+
+Approximate Nearest Neighbor (ANN) algorithms trade a small amount of recall for orders-of-magnitude speed improvement. In practice, well-tuned ANN indices reach 95-99% recall at 10-100x the throughput of brute force. For most applications — RAG pipelines, semantic search, recommendations — 95% recall is indistinguishable from 100% in production.
+
+## HNSW: Hierarchical Navigable Small World Graphs
+
+HNSW (Malkov & Yashunin, 2018) is the dominant algorithm for in-memory vector search. It builds a multi-layer proximity graph where nodes at the top layers form a sparse long-range network and lower layers become progressively denser.
+
+### How the Graph is Built
+
+During insertion, each new vector is assigned a maximum layer using an exponential decay probability distribution — most vectors land only in layer 0 (the dense base graph), while a few reach higher layers. This mirrors skip-list construction.
+
+At insert time, the algorithm greedily navigates from the entry point down through layers to find the nearest neighbors at each layer, then creates bidirectional edges limited to `M` connections per node. The parameter `ef_construction` controls the beam width during this search — higher values find better neighbors at the cost of slower indexing.
+
+The result is a graph where you can teleport to the approximate neighborhood of any query via the sparse upper layers, then refine via the dense lower layers. Query time complexity is approximately O(log n) with the constant dominated by `M` and `ef`.
+
+### Querying HNSW
+
+A query starts at the entry node in the top layer and greedily follows edges to closer nodes. Once it can't improve, it descends to the next layer and repeats. At the base layer, it maintains a priority queue of `ef` candidates and returns the top-k.
+
+The `ef` parameter at query time is the knob you tune for the recall-speed tradeoff. Setting `ef = k` gives fastest but lowest recall; setting `ef` to 200-400 typically achieves 99%+ recall at the cost of ~2-5x more distance computations.
+
+### Key HNSW Parameters
+
+- `M` (default 16): Number of bidirectional edges per node. Higher M = better recall, more memory, slower build. Typical range: 8–64.
+- `ef_construction` (default 200): Build-time beam width. Affects index quality, not query time.
+- `ef` (query time): Beam width during search. Tune per-query or set globally.
+
+Memory footprint: roughly `M × 2 × n × 4 bytes` for the graph plus `n × d × 4 bytes` for the raw vectors. At 1M vectors, 1536 dimensions, M=16: ~6.1 GB for vectors + ~128 MB for the graph.
+
+## IVF: Inverted File Index with Voronoi Cells
+
+IVF takes a fundamentally different approach: cluster the vector space upfront, then at query time only search the clusters nearest to the query.
+
+### Construction
+
+IVF runs k-means clustering over your dataset with `nlist` centroids (Voronoi cells). Each vector is assigned to its nearest centroid and stored in that cell's inverted list. This is an offline build step that can take minutes to hours depending on dataset size.
+
+At query time, the algorithm finds the `nprobe` nearest centroids to the query, then exhaustively scans only the vectors in those cells. With `nlist=1024` and `nprobe=32`, you scan roughly 3% of the dataset — a massive reduction.
+
+### The nprobe Tradeoff
+
+`nprobe` is your primary recall-speed knob. Setting `nprobe=1` is fastest but recall collapses when the true nearest neighbor happens to be in a different cell than the query (which happens frequently near Voronoi boundaries). Increasing `nprobe` improves recall but linearly increases scan cost.
+
+A practical starting point: `nprobe = sqrt(nlist)`. For `nlist=1024`, start with `nprobe=32` and sweep upward until you hit your recall target.
+
+### HNSW vs IVF: Direct Comparison
+
+| Property | HNSW | IVF (flat) |
+|---|---|---|
+| Build time | Fast (online, incremental) | Slow (k-means required upfront) |
+| Query latency | Very low (~1ms at 1M vectors) | Low–medium (depends on nprobe) |
+| Memory usage | High (graph overhead + vectors) | Low (centroids + vectors only) |
+| Recall at default settings | High (~95%+) | Medium (tuning required) |
+| Incremental inserts | Excellent | Poor (requires re-clustering) |
+| Dataset size sweet spot | 10K – 10M | 1M – 1B+ |
+| GPU acceleration | No (standard impl) | Yes (FAISS GPU) |
+
+HNSW wins for dynamic datasets with frequent inserts. IVF wins for massive static datasets where you can afford a one-time build cost and need to run on GPU.
+
+## Quantization: Fitting 10x More Vectors in RAM
+
+Both HNSW and IVF store raw float32 vectors by default. Quantization compresses these at the cost of some recall.
+
+### Scalar Quantization (SQ8)
+
+Map each float32 dimension to an int8 value using the min/max of that dimension. Memory shrinks 4x (from 4 bytes to 1 byte per dimension component). Recall loss is minimal — typically less than 1% at equivalent ef settings because the ranking order is nearly preserved.
+
+### Product Quantization (PQ)
+
+Split the vector into `m` sub-vectors of dimension `d/m`, and independently quantize each sub-vector to one of 256 centroids (8 bits). Memory compresses to `m` bytes per vector regardless of original dimension. A 1536-dim vector with `m=96` compresses from 6144 bytes to 96 bytes — 64x reduction.
+
+The cost: PQ introduces more recall degradation, especially at high compression ratios. PQ works best combined with IVF (IVFPQ), where IVF handles coarse search and PQ handles fine-grained distance approximation within cells.
+
+## Which Database Uses What
+
+| Database | Default Index | Notes |
+|---|---|---|
+| Chroma | HNSW (hnswlib) | Simple API, good for prototyping and mid-scale |
+| Qdrant | HNSW | Rust-native, supports SQ and PQ, strong filtering |
+| Weaviate | HNSW | Supports PQ, built-in hybrid BM25+vector search |
+| Pinecone | Proprietary (HNSW-like) | Managed, no config exposure, serverless tier |
+| Milvus | IVF / HNSW / DiskANN | Most index options, Kubernetes-native |
+| pgvector | HNSW + IVF | In-Postgres, great for hybrid SQL+vector queries |
+
+Qdrant is the current production favorite for self-hosted workloads — Rust performance, first-class filtering, and a clean gRPC API. Pinecone is the zero-ops choice but vendor lock-in is real.
+
+## Python: Indexing and Querying with Chroma
+
+```python
+import chromadb
+from chromadb.utils import embedding_functions
+
+# Persistent client — data survives restarts
+client = chromadb.PersistentClient(path="./chroma_db")
+
+# Use OpenAI embeddings (swap for any compatible function)
+ef = embedding_functions.OpenAIEmbeddingFunction(
+    api_key="sk-...",
+    model_name="text-embedding-3-small",
+)
+
+collection = client.get_or_create_collection(
+    name="docs",
+    embedding_function=ef,
+    metadata={"hnsw:space": "cosine", "hnsw:M": 16, "hnsw:ef_construction": 200},
+)
+
+# Index documents with metadata for filtered retrieval
+collection.add(
+    documents=[
+        "HNSW builds a hierarchical graph for fast ANN search.",
+        "IVF clusters vectors into Voronoi cells for scalable retrieval.",
+        "Product quantization compresses vectors by 32–64x.",
+    ],
+    metadatas=[
+        {"source": "paper", "year": 2018},
+        {"source": "faiss-docs", "year": 2017},
+        {"source": "paper", "year": 2011},
+    ],
+    ids=["doc-1", "doc-2", "doc-3"],
+)
+
+# Query with metadata filter — only search papers from 2018+
+results = collection.query(
+    query_texts=["how does approximate nearest neighbor search work?"],
+    n_results=2,
+    where={"year": {"$gte": 2018}},
+    include=["documents", "metadatas", "distances"],
+)
+
+for doc, meta, dist in zip(
+    results["documents"][0],
+    results["metadatas"][0],
+    results["distances"][0],
+):
+    print(f"[{dist:.4f}] {doc[:60]}... — {meta}")
+```
+
+## Benchmarking Recall@k
+
+Never trust a vendor's recall numbers. Measure on your own data distribution:
+
+```python
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+
+def recall_at_k(queries, corpus, ann_results, k=10):
+    """
+    queries: (Q, D) float32 array
+    corpus:  (N, D) float32 array
+    ann_results: list of Q lists, each with k doc indices from ANN
+    """
+    exact_sims = cosine_similarity(queries, corpus)
+    exact_top_k = np.argsort(-exact_sims, axis=1)[:, :k]
+
+    recalls = []
+    for q_idx, ann_hits in enumerate(ann_results):
+        true_set = set(exact_top_k[q_idx])
+        hits = len(set(ann_hits) & true_set)
+        recalls.append(hits / k)
+
+    return np.mean(recalls)
+
+# Example: sweep nprobe for an IVF index and plot recall vs latency
+import time
+
+nprobe_values = [1, 4, 8, 16, 32, 64, 128]
+for nprobe in nprobe_values:
+    # index.nprobe = nprobe  # FAISS IVF index
+    t0 = time.perf_counter()
+    # ann_results = search(queries, k=10)
+    latency_ms = (time.perf_counter() - t0) * 1000
+    # r = recall_at_k(queries, corpus, ann_results, k=10)
+    # print(f"nprobe={nprobe:3d} | recall@10={r:.3f} | latency={latency_ms:.1f}ms")
+```
+
+Run this sweep on a held-out set of 1,000 queries. Plot recall vs. latency and choose the operating point that meets your SLA. A typical production target: 95% recall@10 at under 20ms p99.
+
+## Operational Concerns
+
+**Reindexing.** HNSW supports incremental inserts with no rebuild required. IVF does not — adding many new vectors degrades recall until you re-cluster. For dynamic datasets, HNSW or Qdrant's HNSW with segment merging is the right choice.
+
+**Persistence.** Chroma and Qdrant handle WAL-based persistence. If you're using FAISS directly, implement your own snapshot logic — FAISS has no built-in persistence.
+
+**Horizontal scaling.** Vector databases shard by splitting the corpus across nodes and querying all shards in parallel (scatter-gather). Pinecone handles this transparently. For self-hosted Qdrant or Milvus, plan your shard strategy before you hit 50M+ vectors — resharding is painful.
+
+**Filtering.** Pre-filtering (filter first, then search) is accurate but can leave too few vectors to search effectively. Post-filtering (search first, then filter) is fast but can return fewer than k results. Qdrant's filtered HNSW builds per-segment payload indices to handle this correctly at scale.
+
+## When NOT to Use a Vector Database
+
+Vector databases add real operational complexity. Skip them when:
+
+- Your dataset is under 100K vectors — a numpy cosine similarity scan finishes in under 50ms, requires zero infrastructure, and is exact.
+- You need exact match, not similarity — use a relational DB with a standard index.
+- You have no embedding model — the retrieval quality is entirely determined by embedding quality. A bad embedding in a perfect index still returns irrelevant results.
+- Your queries are highly structured — if users always filter by date, category, and keyword before similarity, a hybrid SQL + BM25 setup (like Postgres + pg_trgm) may outperform vector search at a fraction of the cost.
+
+## Key Takeaways
+
+- Exact k-NN is O(n) and non-negotiable to replace beyond ~100K vectors; ANN indices achieve 95-99% recall at 10-100x the speed.
+- HNSW is the right default: fast queries, incremental inserts, and high recall out of the box; tune `M` and `ef` to balance memory vs. recall.
+- IVF shines for billion-scale static datasets where GPU acceleration (FAISS-GPU) and PQ compression are viable — rebuild cost is the tradeoff.
+- Product quantization can reduce memory 32-64x at the cost of 1-3% recall loss; scalar quantization gives 4x reduction with near-zero recall cost.
+- Always benchmark recall@k on your own data distribution — vendor benchmarks rarely match production query patterns.
+- Metadata filtering strategy (pre vs. post vs. per-segment) matters as much as index type for filtered search performance in production.

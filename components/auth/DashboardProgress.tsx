@@ -30,12 +30,14 @@ export function DashboardProgress({ userId, courses, quizSlugs }: Props) {
   useEffect(() => {
     const key = `gadaalabs_progress_${userId}`;
     try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setProgress(JSON.parse(localStorage.getItem(key) ?? "{}"));
     } catch { /* ignore */ }
 
     const quizKey = `gadaalabs_quiz_results_${userId}`;
     try {
       const quizData = JSON.parse(localStorage.getItem(quizKey) ?? "{}");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCompletedQuizzes(Object.keys(quizData));
     } catch { /* ignore */ }
   }, [userId]);

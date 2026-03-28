@@ -142,9 +142,9 @@ export default function AboutPage() {
             <div className="flex-1 p-8">
               <blockquote className="text-lg font-medium italic mb-6 pl-4"
                 style={{ color: "var(--color-text-primary)", borderLeft: "3px solid var(--color-purple-500)" }}>
-                "The most dangerous gap in AI today is not between models and humans — it is between
+                &ldquo;The most dangerous gap in AI today is not between models and humans — it is between
                 engineers who understand the theory and engineers who can ship it to production.
-                GadaaLabs exists to eliminate that gap."
+                GadaaLabs exists to eliminate that gap.&rdquo;
               </blockquote>
               <div className="space-y-4 text-sm leading-relaxed" style={{ color: "var(--color-text-secondary)" }}>
                 <p>
@@ -263,7 +263,7 @@ export default function AboutPage() {
         <p className="text-sm leading-relaxed max-w-2xl mx-auto" style={{ color: "var(--color-text-muted)" }}>
           <em>Gadaa</em> is a centuries-old democratic governance and knowledge-transfer system of the Oromo people
           of East Africa — a civilisation built on the principle that knowledge and leadership must be passed
-          systematically from one generation to the next. It is one of humanity's oldest and most sophisticated
+          systematically from one generation to the next. It is one of humanity&apos;s oldest and most sophisticated
           frameworks for structured learning. GadaaLabs carries that spirit forward: structured, rigorous,
           community-centred knowledge transfer — for the age of artificial intelligence.
         </p>

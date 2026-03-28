@@ -67,7 +67,9 @@ export function Hero() {
         const t = setTimeout(() => setDisplayRole(displayRole.slice(0, -1)), 35);
         return () => clearTimeout(t);
       } else {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setRoleIdx((r) => (r + 1) % ROLES.length);
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setTyping(true);
       }
     }

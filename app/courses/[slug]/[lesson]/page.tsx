@@ -5,7 +5,7 @@ import { getCourseBySlug, getLessonBySlug, getAllLessonParams } from "@/lib/cour
 import { MDXContent } from "@/components/content/MDXContent";
 import { LessonSidebar } from "@/components/content/LessonSidebar";
 import { LessonProgress } from "@/components/content/LessonProgress";
-import { ArrowLeft, ArrowRight, Clock } from "lucide-react";
+import { ArrowLeft, Clock } from "lucide-react";
 
 export async function generateStaticParams() {
   return getAllLessonParams();

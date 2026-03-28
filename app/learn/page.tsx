@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { getAllCourses } from "@/lib/courses";
 import { getAllArticles } from "@/lib/articles";
-import { BookOpen, FileText, ArrowRight, Clock } from "lucide-react";
+import { getAllGuides } from "@/lib/guides";
+import { BookOpen, FileText, Map, ArrowRight, Clock, Timer } from "lucide-react";
 
 export const metadata: Metadata = {
   title: "Learn",
@@ -18,6 +19,7 @@ const difficultyColor = {
 export default function LearnPage() {
   const courses = getAllCourses();
   const articles = getAllArticles().slice(0, 4);
+  const guides = getAllGuides().slice(0, 3);
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-12">
@@ -74,6 +76,58 @@ export default function LearnPage() {
           })}
         </div>
       </section>
+
+      {/* Guides */}
+      {guides.length > 0 && (
+        <section className="mb-14">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold flex items-center gap-2" style={{ color: "var(--color-text-primary)" }}>
+              <Map className="h-5 w-5" style={{ color: "var(--color-cyan-400)" }} />
+              Deep-Dive Guides
+            </h2>
+            <Link href="/guides" className="text-sm flex items-center gap-1" style={{ color: "var(--color-cyan-400)" }}>
+              All guides <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            {guides.map((guide) => {
+              const d = difficultyColor[guide.difficulty];
+              return (
+                <Link key={guide.slug} href={`/guides/${guide.slug}`}
+                  className="group rounded-2xl p-5 transition-all hover:-translate-y-1"
+                  style={{ background: "var(--color-bg-surface)", border: "1px solid rgba(6,182,212,0.15)" }}>
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full capitalize"
+                      style={{ color: d.color, background: d.bg, border: `1px solid ${d.border}` }}>
+                      {guide.difficulty}
+                    </span>
+                    {guide.estimatedTime && (
+                      <span className="flex items-center gap-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
+                        <Timer className="h-3 w-3" />{guide.estimatedTime}
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="font-semibold mb-2 group-hover:text-white transition-colors"
+                    style={{ color: "var(--color-text-primary)" }}>{guide.title}</h3>
+                  <p className="text-sm line-clamp-2 mb-3" style={{ color: "var(--color-text-secondary)" }}>
+                    {guide.description}
+                  </p>
+                  {guide.prerequisites && guide.prerequisites.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {guide.prerequisites.slice(0, 2).map((pre) => (
+                        <span key={pre} className="text-xs px-2 py-0.5 rounded-md"
+                          style={{ background: "rgba(6,182,212,0.07)", color: "var(--color-cyan-400)", border: "1px solid rgba(6,182,212,0.15)" }}>
+                          {pre}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* Articles */}
       <section>

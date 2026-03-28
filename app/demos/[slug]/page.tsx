@@ -4,6 +4,8 @@ import Link from "next/link";
 import registry from "@/content/demos/registry.json";
 import { ChatDemo } from "@/components/demos/ChatDemo";
 import { TokenizerDemo } from "@/components/demos/TokenizerDemo";
+import { ModelComparison } from "@/components/demos/ModelComparison";
+import { PromptBuilder } from "@/components/demos/PromptBuilder";
 import { ArrowLeft } from "lucide-react";
 
 type DemoEntry = { slug: string; title: string; description: string; tags: string[]; component: string };
@@ -11,6 +13,8 @@ type DemoEntry = { slug: string; title: string; description: string; tags: strin
 const componentMap: Record<string, React.ComponentType> = {
   ChatDemo,
   TokenizerDemo,
+  ModelComparison,
+  PromptBuilder,
 };
 
 export function generateStaticParams() {

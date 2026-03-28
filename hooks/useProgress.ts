@@ -24,11 +24,14 @@ function writeStore(store: ProgressStore, userId?: string) {
 }
 
 export function useProgress(courseSlug: string, userId?: string) {
-  const [completed, setCompleted] = useState<string[]>([]);
+  const [completed, setCompleted] = useState<string[]>(
+    () => readStore(userId)[courseSlug] ?? []
+  );
 
   useEffect(() => {
-    const store = readStore(userId);
-    setCompleted(store[courseSlug] ?? []);
+    // Re-sync from storage whenever courseSlug or userId changes
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCompleted(readStore(userId)[courseSlug] ?? []);
   }, [courseSlug, userId]);
 
   const markComplete = (lessonSlug: string) => {

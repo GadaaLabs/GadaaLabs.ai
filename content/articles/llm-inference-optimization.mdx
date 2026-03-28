@@ -1,0 +1,231 @@
+---
+title: "LLM Inference Optimization: KV Cache, Batching, and Quantization"
+description: "The engineering playbook for making LLM inference fast and cheap — KV cache mechanics, continuous batching, speculative decoding, and quantization tradeoffs."
+publishedAt: "2026-03-29"
+author: "GadaaLabs"
+tags: ["inference", "optimization", "kv-cache", "quantization", "production"]
+difficulty: "advanced"
+readingTime: 12
+featured: false
+---
+
+Running a 70B-parameter model in production without burning your GPU budget requires understanding the physics of transformer inference. This isn't about clever prompting — it's about memory bandwidth, batching strategies, and knowing which optimization lever to pull first. Here's the engineering playbook.
+
+## Why Inference is the Bottleneck
+
+Training is compute-bound: every parameter is read once and updated once per batch. Inference is memory-bandwidth-bound: for each generated token, every weight in the model must be loaded from DRAM into the compute units — and you're doing this for a single token at a time during autoregressive decoding.
+
+A Llama 3 70B model in float16 requires 140 GB of weights. An A100 80GB GPU has ~2 TB/s memory bandwidth. Loading all weights takes roughly 70ms per decoding step. That's your hard floor: 14 tokens/second per A100, before any compute overhead.
+
+This is why inference optimization is fundamentally about reducing the number of times you touch the weights and reducing how much data moves between memory and compute — not about raw FLOPS.
+
+## KV Cache: What It Stores and Why It's Expensive
+
+During autoregressive generation, every attention layer computes Key (K) and Value (V) projections for every token in the context. Without caching, generating token N requires recomputing K and V for all N-1 previous tokens — an O(n²) disaster.
+
+The KV cache stores these computed K and V tensors so they only need to be computed once per token per layer. Subsequent tokens simply append their K/V and attend over the full cache.
+
+### KV Cache Memory Formula
+
+```
+KV cache memory = 2 × num_layers × num_kv_heads × head_dim × seq_len × bytes_per_element
+```
+
+For Llama 3 70B (80 layers, 8 KV heads, head_dim=128, bfloat16):
+
+```
+2 × 80 × 8 × 128 × seq_len × 2 bytes
+= 327,680 × seq_len bytes
+≈ 0.32 MB per token in context
+```
+
+A single 32K token context window consumes **10.2 GB** of KV cache. Multiply by batch size and you understand why context length is a first-class resource constraint, not just a model property.
+
+```python
+def kv_cache_memory_gb(
+    num_layers: int,
+    num_kv_heads: int,
+    head_dim: int,
+    seq_len: int,
+    batch_size: int,
+    bytes_per_element: int = 2,  # bfloat16
+) -> float:
+    total_bytes = (
+        2 * num_layers * num_kv_heads * head_dim
+        * seq_len * batch_size * bytes_per_element
+    )
+    return total_bytes / (1024 ** 3)
+
+# Llama 3 70B, batch=8, 8K context
+print(kv_cache_memory_gb(80, 8, 128, 8192, 8))  # ~20.5 GB
+```
+
+Grouped Query Attention (GQA), used in Llama 3 and Mistral, reduces `num_kv_heads` from `num_attention_heads` (e.g., 64) down to 8, shrinking the KV cache by 8x with minimal quality loss. This is one of the highest-leverage architectural decisions for inference efficiency.
+
+## Static vs Continuous Batching
+
+### Static Batching
+
+Classic batching: wait until you have B requests, pad them all to the same length, run as one forward pass. Simple to implement, terrible for throughput. Problems:
+
+- Requests that finish early waste GPU compute on padding.
+- Long requests block short ones from completing.
+- GPU utilization collapses when batch sizes are uneven.
+
+### Continuous Batching
+
+Continuous batching (also called in-flight batching) dynamically adds new requests to the batch as existing ones complete. Instead of treating the batch as a fixed group, the GPU is always running a forward pass over a pool of active sequences, swapping completed sequences out and new ones in at the token granularity.
+
+vLLM pioneered this approach. The practical impact is dramatic: throughput improvements of 10-23x over static batching on realistic workload distributions (Agrawal et al., 2023). The gains are largest when request lengths are heterogeneous — which is always true in production.
+
+## Speculative Decoding
+
+Speculative decoding uses a small "draft" model to generate k candidate tokens quickly, then verifies all k with the large "verifier" model in a single forward pass.
+
+If the verifier accepts token j, all tokens before it are committed for free. If it rejects at token j, you fall back to the verifier's distribution for that position. Expected tokens per verifier call is typically 2-4x k for well-matched draft/verifier pairs.
+
+When it helps: speculative decoding is most effective when:
+- Latency (time to complete a request) matters more than throughput.
+- The output distribution is predictable (code generation, structured outputs).
+- A good draft model exists for the verifier (e.g., Llama 3.2 1B as draft for Llama 3.1 70B).
+
+When it doesn't help: high-throughput batch inference, creative open-ended generation, or when no good draft model is available. The draft model also consumes GPU memory, so it's only viable when you have headroom.
+
+## Quantization: The Accuracy vs Speed Matrix
+
+Quantization reduces weight precision, shrinking model size and accelerating memory-bandwidth-bound inference. The tradeoffs vary significantly by method:
+
+| Method | Bits | Memory Reduction | Accuracy Loss | Best For |
+|---|---|---|---|---|
+| float16 / bfloat16 | 16 | 2x vs float32 | Negligible | Training, high-quality inference |
+| INT8 (LLM.int8) | 8 | 4x vs float32 | &lt;0.5% on most tasks | Serving mid-size models |
+| GPTQ | 4 | 8x vs float32 | 1-2% perplexity increase | Offline compression, RTX cards |
+| AWQ | 4 | 8x vs float32 | &lt;1% perplexity increase | Better than GPTQ for same bitwidth |
+| GGUF (Q4_K_M) | ~4.5 avg | ~7x vs float32 | 1-3% | CPU inference, llama.cpp |
+| INT4 (naive) | 4 | 8x | 3-8% | Avoid without activation-aware methods |
+
+AWQ (Activation-aware Weight Quantization) outperforms GPTQ at equivalent bit-widths because it identifies which weights are most salient (those scaled by large activations) and protects them from aggressive quantization. For 4-bit production deployment, AWQ is currently the best off-the-shelf option.
+
+GGUF is the dominant format for CPU inference via llama.cpp and Ollama. The K-quants (Q4_K_M, Q5_K_M) use mixed-precision within layers — higher precision for sensitive layers — and outperform naive INT4 by a meaningful margin.
+
+## Flash Attention
+
+Standard attention is memory-bandwidth-bound because it materializes the full N×N attention matrix in HBM (high-bandwidth memory). For N=8192, this is 8192² × 2 bytes = 128 MB per layer — loaded and stored multiple times.
+
+Flash Attention (Dao et al., 2022) fuses the attention computation into a single kernel that tiles the computation to fit in SRAM, never writing the full attention matrix to HBM. Memory complexity drops from O(n²) to O(n); wall-clock speedup is 2-4x for long sequences.
+
+Flash Attention 2 and 3 further optimize parallelism across sequence and head dimensions. It's enabled by default in most modern inference frameworks and is non-negotiable for contexts above 4K tokens.
+
+## vLLM PagedAttention
+
+The KV cache's memory waste has a deeper problem: you must pre-allocate the maximum sequence length worth of KV cache at request start, even if most requests terminate early. This wastes 60-80% of KV cache memory in typical workloads.
+
+vLLM's PagedAttention applies virtual memory paging to the KV cache. Each request's KV cache is stored in non-contiguous 16-token "pages" (blocks), allocated on demand and freed immediately on completion. A page table maps logical sequence positions to physical block locations, exactly like OS virtual memory.
+
+The result: near-zero KV cache fragmentation and waste. This is what makes vLLM's throughput so high — it fits dramatically more concurrent requests into the same GPU memory.
+
+## Groq's LPU: A Different Approach
+
+Groq's Language Processing Unit is not optimizing the same problem differently — it's changing the hardware model. The LPU is a deterministic streaming processor with massive on-chip SRAM (no DRAM, no cache hierarchy). Every weight fits in SRAM and is streamed through compute units with no memory bandwidth bottleneck.
+
+The result: Llama 3 70B at ~800 tokens/second (vs ~15 tokens/second on A100) for a single request. The tradeoff is that batch sizes are limited by the smaller on-chip memory — Groq excels at low-latency single-stream inference, not massive batch throughput.
+
+This is why Groq is ideal for developer tools, coding assistants, and interactive applications where TTFT and per-token latency are the primary metrics — and why it's free to prototype against via the Groq Cloud API.
+
+## Benchmarking TTFT and Throughput
+
+Measure what matters before optimizing. Two key metrics:
+
+- **TTFT** (Time to First Token): latency from request submission to first output token. Dominated by prefill (processing the prompt).
+- **TPOT** (Time Per Output Token): latency per generated token. Dominated by decode memory bandwidth.
+
+```python
+import time
+import statistics
+from groq import Groq
+
+client = Groq()
+
+def benchmark_inference(
+    prompt: str,
+    model: str = "llama-3.3-70b-versatile",
+    max_tokens: int = 200,
+    n_runs: int = 10,
+) -> dict:
+    ttfts = []
+    throughputs = []
+
+    for _ in range(n_runs):
+        token_count = 0
+        first_token_time = None
+        start = time.perf_counter()
+
+        stream = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            stream=True,
+        )
+
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                token_count += 1
+                if first_token_time is None:
+                    first_token_time = time.perf_counter()
+
+        end = time.perf_counter()
+        total_time = end - start
+
+        ttfts.append((first_token_time - start) * 1000)
+        throughputs.append(token_count / total_time)
+
+    return {
+        "ttft_p50_ms": statistics.median(ttfts),
+        "ttft_p95_ms": sorted(ttfts)[int(0.95 * n_runs)],
+        "throughput_tok_s_mean": statistics.mean(throughputs),
+    }
+
+results = benchmark_inference(
+    prompt="Explain the transformer attention mechanism in detail.",
+    n_runs=10,
+)
+print(results)
+# Example output: {'ttft_p50_ms': 180.4, 'ttft_p95_ms': 230.1, 'throughput_tok_s_mean': 412.3}
+```
+
+Always measure p95 latency, not just mean. The tail matters for user-facing applications.
+
+## Which Optimization to Reach for First
+
+```
+Is your bottleneck latency or throughput?
+
+LATENCY (time to complete one request):
+  → Is TTFT slow? (prompt processing)
+      → Enable Flash Attention (if not already on)
+      → Reduce prompt length / use prompt caching
+      → Consider speculative decoding with a draft model
+  → Is TPOT slow? (generation speed)
+      → Switch to a smaller model or quantized variant (AWQ 4-bit)
+      → Move to hardware with higher memory bandwidth (Groq LPU, H100)
+
+THROUGHPUT (requests per second):
+  → Use continuous batching (vLLM, TGI)
+  → Enable PagedAttention (vLLM)
+  → Apply quantization to fit larger batches in GPU memory
+  → Scale horizontally across GPUs with tensor parallelism
+
+MEMORY (can't fit the model):
+  → INT8 quantization (quick, minimal quality loss)
+  → AWQ INT4 (more aggressive, still good quality)
+  → GGUF on CPU as a last resort (10x slower but runs anywhere)
+```
+
+## Key Takeaways
+
+- Transformer inference is memory-bandwidth-bound, not compute-bound — optimizations that reduce data movement beat raw FLOPS improvements every time.
+- KV cache memory grows linearly with both sequence length and batch size; GQA cuts it by 8x at the architecture level, which is the highest-leverage reduction available.
+- Continuous batching delivers 10-23x throughput improvements over static batching on heterogeneous request distributions — it should be on by default in any production serving stack.
+- AWQ INT4 quantization is the current sweet spot for 4-bit deployment: 8x memory reduction with under 1% accuracy degradation, outperforming GPTQ at equivalent bitwidth.
+- Flash Attention and PagedAttention (vLLM) are not optional on serious workloads — they address the O(n²) attention memory problem and KV cache fragmentation respectively.
+- Groq's LPU achieves high single-stream throughput via massive on-chip SRAM that eliminates DRAM bandwidth limits — choose it for latency-sensitive developer tooling, not batch throughput workloads.
