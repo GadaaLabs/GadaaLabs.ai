@@ -2,6 +2,7 @@ import type { MetadataRoute } from "next";
 import { getAllArticleSlugs } from "@/lib/articles";
 import { getAllCourses, getAllLessonParams } from "@/lib/courses";
 import { getAllQuizzes } from "@/lib/quizzes";
+import { getAllGuideSlugs } from "@/lib/guides";
 import registry from "@/content/demos/registry.json";
 
 const BASE = "https://gadaalabs.com";
@@ -9,7 +10,7 @@ const BASE = "https://gadaalabs.com";
 export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date();
 
-  const static_routes = ["/", "/learn", "/articles", "/demos", "/playground", "/quizzes"].map((r) => ({
+  const static_routes = ["/", "/learn", "/articles", "/guides", "/demos", "/playground", "/quizzes"].map((r) => ({
     url: `${BASE}${r}`,
     lastModified: now,
     changeFrequency: "weekly" as const,
@@ -51,5 +52,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
     priority: 0.7,
   }));
 
-  return [...static_routes, ...articles, ...courses, ...lessons, ...quizzes, ...demos];
+  const guides = getAllGuideSlugs().map((slug) => ({
+    url: `${BASE}/guides/${slug}`,
+    lastModified: now,
+    changeFrequency: "monthly" as const,
+    priority: 0.7,
+  }));
+
+  return [...static_routes, ...articles, ...guides, ...courses, ...lessons, ...quizzes, ...demos];
 }

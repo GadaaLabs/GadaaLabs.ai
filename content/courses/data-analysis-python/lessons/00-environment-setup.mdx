@@ -1,0 +1,264 @@
+---
+title: "Setting Up Your Data Analysis Environment"
+description: "Install and configure a professional Python data analysis environment — pyenv, uv, VS Code, JupyterLab, and all essential scientific packages."
+publishedAt: "2026-03-29"
+author: "GadaaLabs"
+tags: ["python", "jupyter", "pandas", "numpy", "setup"]
+difficulty: "beginner"
+estimatedTime: 30
+prerequisites: []
+lessonNumber: 0
+---
+
+# Setting Up Your Data Analysis Environment
+
+Before you write a single line of analysis code, you need a stable, reproducible environment. A proper setup prevents the classic "it worked yesterday" problem and makes sharing your work with teammates straightforward. This lesson gets everything in place before Lesson 1.
+
+## Install Python with pyenv
+
+System Python is managed by your OS and should not be used for development. Use **pyenv** to install a dedicated Python version.
+
+### macOS
+
+```bash
+# Install Homebrew if needed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install pyenv
+brew install pyenv
+
+# Add to ~/.zshrc (default shell on macOS)
+echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.zshrc
+echo '[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.zshrc
+echo 'eval "$(pyenv init -)"' >> ~/.zshrc
+source ~/.zshrc
+
+pyenv install 3.12.3
+pyenv global 3.12.3
+python --version   # Python 3.12.3
+```
+
+### Linux (Ubuntu/Debian)
+
+```bash
+sudo apt update && sudo apt install -y build-essential libssl-dev zlib1g-dev \
+  libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libffi-dev liblzma-dev git
+
+curl https://pyenv.run | bash
+echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
+echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
+echo 'eval "$(pyenv init -)"' >> ~/.bashrc
+source ~/.bashrc
+
+pyenv install 3.12.3
+pyenv global 3.12.3
+```
+
+### Windows
+
+Use **pyenv-win** in PowerShell (as Administrator):
+
+```powershell
+Invoke-WebRequest -UseBasicParsing `
+  -Uri "https://raw.githubusercontent.com/pyenv-win/pyenv-win/master/pyenv-win/install-pyenv-win.ps1" `
+  -OutFile "./install-pyenv-win.ps1"
+.\install-pyenv-win.ps1
+
+# Restart PowerShell, then:
+pyenv install 3.12.3
+pyenv global 3.12.3
+```
+
+> **Note:** On Windows, WSL 2 (Windows Subsystem for Linux) is recommended for a smoother data science experience. Scientific packages like NumPy and SciPy have better support on Linux.
+
+## Install uv and Create a Virtual Environment
+
+**uv** is a fast package manager written in Rust. It replaces pip and venv in one tool.
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Verify
+uv --version
+```
+
+Create your project:
+
+```bash
+uv init data-analysis-course
+cd data-analysis-course
+
+# Install all data analysis packages at once
+uv add numpy pandas matplotlib seaborn scipy jupyterlab ipykernel
+```
+
+This creates `uv.lock` — a pinned lockfile. Commit it to git. Anyone who runs `uv sync` gets identical package versions.
+
+## VS Code Setup
+
+Download VS Code from [code.visualstudio.com](https://code.visualstudio.com), then install these extensions:
+
+```bash
+code --install-extension ms-python.python
+code --install-extension ms-python.vscode-pylance
+code --install-extension ms-toolsai.jupyter
+code --install-extension charliermarsh.ruff
+```
+
+Create `.vscode/settings.json` in your project:
+
+```json
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "editor.formatOnSave": true,
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff"
+  },
+  "jupyter.notebookFileRoot": "${workspaceFolder}",
+  "notebook.lineNumbers": "on",
+  "editor.rulers": [88],
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.ipynb_checkpoints": true
+  }
+}
+```
+
+## JupyterLab Setup
+
+JupyterLab is the browser-based environment for exploratory analysis — ideal when you want to see plots inline, iterate quickly, and mix code with narrative text.
+
+```bash
+# Start JupyterLab
+uv run jupyter lab
+# Opens in browser at http://localhost:8888
+```
+
+### Register Your Project Kernel
+
+By default, notebooks use the base Python. Register your venv as a named kernel so notebooks always use the project's packages:
+
+```bash
+uv run python -m ipykernel install --user \
+  --name data-analysis-course \
+  --display-name "Python (data-analysis-course)"
+```
+
+When you open a notebook, select **"Python (data-analysis-course)"** from the kernel dropdown.
+
+### Useful JupyterLab Extensions
+
+```bash
+uv add jupyterlab-git          # Git status panel in JupyterLab
+uv add aquirdturtle_collapsible_headings   # Collapse notebook sections
+```
+
+## VS Code Jupyter Integration
+
+You can also open `.ipynb` files directly in VS Code without a browser. The Jupyter extension renders notebooks natively inside the editor. This is convenient when you want Git blame, the integrated terminal, and IntelliSense alongside your notebook.
+
+Open any `.ipynb` file in VS Code → click the kernel picker in the top-right corner → select **"Python (data-analysis-course)"**.
+
+## Verify Your Installation
+
+Create `test_setup.py` and run it to confirm all packages are installed correctly:
+
+```python
+# test_setup.py
+import importlib
+
+packages = {
+    "numpy": "np",
+    "pandas": "pd",
+    "matplotlib": "matplotlib",
+    "seaborn": "sns",
+    "scipy": "scipy",
+}
+
+print("Package versions:")
+print("-" * 30)
+for pkg_name in packages:
+    module = importlib.import_module(pkg_name)
+    version = getattr(module, "__version__", "unknown")
+    print(f"  {pkg_name:<20} {version}")
+
+# Quick functional test
+import numpy as np
+import pandas as pd
+
+arr = np.array([1, 2, 3, 4, 5])
+df = pd.DataFrame({"values": arr, "squares": arr ** 2})
+print("\nTest DataFrame:")
+print(df)
+print("\nAll packages verified successfully.")
+```
+
+```bash
+uv run python test_setup.py
+```
+
+Expected output:
+
+```
+Package versions:
+------------------------------
+  numpy                2.x.x
+  pandas               2.x.x
+  matplotlib           3.x.x
+  seaborn              0.x.x
+  scipy                1.x.x
+
+Test DataFrame:
+   values  squares
+0       1        1
+1       2        4
+...
+
+All packages verified successfully.
+```
+
+## Project Structure for Data Analysis
+
+```
+data-analysis-course/
+├── .venv/                  # Virtual environment (gitignored)
+├── .vscode/
+│   └── settings.json
+├── data/
+│   ├── raw/                # Original datasets (gitignored if large)
+│   └── processed/          # Cleaned data
+├── notebooks/
+│   ├── 01-eda.ipynb
+│   └── 02-visualisation.ipynb
+├── src/
+│   └── utils.py            # Reusable helper functions
+├── .gitignore
+├── pyproject.toml
+└── uv.lock
+```
+
+Add this to `.gitignore`:
+
+```
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+data/raw/
+*.csv
+*.parquet
+.DS_Store
+```
+
+## Summary
+
+- Install Python via **pyenv** to avoid system Python conflicts; use version 3.12.x for this course.
+- Use **uv** to create a virtual environment and install packages; the generated `uv.lock` file guarantees every teammate gets identical package versions.
+- Install the **Python, Pylance, Jupyter, and Ruff** extensions in VS Code and set `python.defaultInterpreterPath` to your `.venv`.
+- Register your project venv as a **named Jupyter kernel** so notebooks always resolve imports from your project's packages, not the system Python.
+- Run `test_setup.py` to confirm numpy, pandas, matplotlib, seaborn, and scipy all import correctly before moving to Lesson 1.

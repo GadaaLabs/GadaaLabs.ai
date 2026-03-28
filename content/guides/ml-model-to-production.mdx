@@ -1,0 +1,496 @@
+---
+title: "Deploying ML Models to Production"
+description: "A complete playbook for taking a trained model from your laptop to a production API — serialisation, FastAPI, Docker, monitoring, and CI/CD."
+publishedAt: "2026-03-29"
+author: "GadaaLabs"
+tags: ["mlops", "fastapi", "docker", "deployment", "monitoring"]
+difficulty: "advanced"
+estimatedTime: 75
+prerequisites: ["python", "basic-ml-knowledge", "docker-basics"]
+---
+
+# Deploying ML Models to Production
+
+Training a model is 20% of the work. Getting it to serve reliable, low-latency predictions in production — and keeping it working six months later — is the other 80%. This guide is a complete playbook for that second 80%.
+
+## Model Serialisation: pickle vs joblib vs ONNX
+
+After training, your first decision is how to save the model. Three options are common:
+
+| Format | Speed | Portability | Safety |
+|--------|-------|-------------|--------|
+| `pickle` | Fast | Python-only | Unsafe (arbitrary code exec) |
+| `joblib` | Fast | Python-only | Unsafe (arbitrary code exec) |
+| `ONNX` | Fast | Cross-language | Safe |
+
+**Use ONNX for production.** ONNX (Open Neural Network Exchange) is a standardised model format that:
+- Runs in Python, C++, Java, C#, and more
+- Is runtime-agnostic (ONNX Runtime, TensorRT, OpenVINO)
+- Cannot execute arbitrary Python code (unlike pickle — a serious security risk)
+- Typically runs 2-5x faster than native PyTorch/scikit-learn at inference time
+
+`pickle` and `joblib` are fine for local experimentation. In production, they are security liabilities — a malicious pickle file executes arbitrary code on deserialization.
+
+## ONNX Export from scikit-learn
+
+```bash
+uv add scikit-learn onnx skl2onnx onnxruntime numpy
+```
+
+```python
+import numpy as np
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.datasets import make_classification
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from skl2onnx import convert_sklearn
+from skl2onnx.common.data_types import FloatTensorType
+import onnxruntime as rt
+
+# Train a simple model
+X, y = make_classification(n_samples=1000, n_features=10, random_state=42)
+pipeline = Pipeline([
+    ("scaler", StandardScaler()),
+    ("clf", GradientBoostingClassifier(n_estimators=100)),
+])
+pipeline.fit(X, y)
+
+# Export to ONNX
+initial_type = [("float_input", FloatTensorType([None, X.shape[1]]))]
+onnx_model = convert_sklearn(pipeline, initial_types=initial_type, target_opset=18)
+
+with open("model.onnx", "wb") as f:
+    f.write(onnx_model.SerializeToString())
+print("Saved model.onnx")
+
+# Verify: load with ONNX Runtime and run inference
+sess = rt.InferenceSession("model.onnx", providers=["CPUExecutionProvider"])
+input_name = sess.get_inputs()[0].name
+output_name = sess.get_outputs()[0].name
+
+test_input = X[:5].astype(np.float32)
+predictions = sess.run([output_name], {input_name: test_input})[0]
+print("ONNX predictions:", predictions)
+```
+
+## ONNX Export from PyTorch
+
+```python
+import torch
+import torch.nn as nn
+
+class SimpleNet(nn.Module):
+    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.layers(x)
+
+model = SimpleNet(10, 64, 2)
+model.eval()  # Critical: set eval mode before export
+
+dummy_input = torch.randn(1, 10)
+
+torch.onnx.export(
+    model,
+    dummy_input,
+    "model.onnx",
+    export_params=True,
+    opset_version=18,
+    do_constant_folding=True,
+    input_names=["float_input"],
+    output_names=["output"],
+    dynamic_axes={
+        "float_input": {0: "batch_size"},  # Allow variable batch size
+        "output": {0: "batch_size"},
+    },
+)
+print("Exported PyTorch model to model.onnx")
+```
+
+> **Note:** Always call `model.eval()` before exporting PyTorch models. Dropout and BatchNorm behave differently in train vs eval mode — forgetting this is a common source of prediction inconsistencies between training and serving.
+
+## FastAPI Inference Endpoint
+
+FastAPI is the standard for Python ML inference APIs. It is fast, async-native, and generates OpenAPI docs automatically.
+
+```bash
+uv add fastapi uvicorn[standard] pydantic onnxruntime numpy python-multipart
+```
+
+Create `src/api/main.py`:
+
+```python
+import asyncio
+import logging
+import time
+from contextlib import asynccontextmanager
+from typing import Any
+
+import numpy as np
+import onnxruntime as rt
+import structlog
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel, Field, field_validator
+
+logger = structlog.get_logger()
+
+# --- Globals (loaded once at startup) ---
+SESSION: rt.InferenceSession | None = None
+INPUT_NAME: str = ""
+OUTPUT_NAME: str = ""
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load the ONNX model at startup, release at shutdown."""
+    global SESSION, INPUT_NAME, OUTPUT_NAME
+    logger.info("Loading ONNX model", path="model.onnx")
+    SESSION = rt.InferenceSession(
+        "model.onnx",
+        providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+    INPUT_NAME = SESSION.get_inputs()[0].name
+    OUTPUT_NAME = SESSION.get_outputs()[0].name
+    logger.info("Model loaded", input=INPUT_NAME, output=OUTPUT_NAME)
+    yield
+    SESSION = None
+    logger.info("Model released")
+
+app = FastAPI(title="ML Inference API", version="1.0.0", lifespan=lifespan)
+
+# --- Request / Response Models ---
+class PredictRequest(BaseModel):
+    features: list[float] = Field(..., min_length=10, max_length=10)
+
+    @field_validator("features")
+    @classmethod
+    def check_finite(cls, v: list[float]) -> list[float]:
+        if any(not np.isfinite(x) for x in v):
+            raise ValueError("All features must be finite numbers (no NaN or Inf)")
+        return v
+
+class PredictResponse(BaseModel):
+    prediction: int
+    probability: float
+    latency_ms: float
+
+class HealthResponse(BaseModel):
+    status: str
+    model_loaded: bool
+
+# --- Endpoints ---
+@app.get("/health", response_model=HealthResponse)
+async def health():
+    return {"status": "ok", "model_loaded": SESSION is not None}
+
+@app.get("/ready")
+async def ready():
+    """Kubernetes readiness probe."""
+    if SESSION is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    return {"status": "ready"}
+
+@app.post("/predict", response_model=PredictResponse)
+async def predict(request: PredictRequest):
+    if SESSION is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    start = time.perf_counter()
+
+    # Run inference in a thread pool to avoid blocking the event loop
+    input_array = np.array([request.features], dtype=np.float32)
+    loop = asyncio.get_event_loop()
+    raw_output = await loop.run_in_executor(
+        None,
+        lambda: SESSION.run([OUTPUT_NAME], {INPUT_NAME: input_array})[0],
+    )
+
+    latency_ms = (time.perf_counter() - start) * 1000
+
+    # raw_output shape: (1, 2) for binary classification (class 0 prob, class 1 prob)
+    probs = raw_output[0]
+    prediction = int(np.argmax(probs))
+    probability = float(probs[prediction])
+
+    logger.info(
+        "prediction",
+        prediction=prediction,
+        probability=round(probability, 4),
+        latency_ms=round(latency_ms, 2),
+    )
+
+    return PredictResponse(
+        prediction=prediction,
+        probability=probability,
+        latency_ms=round(latency_ms, 2),
+    )
+```
+
+Run the API locally:
+
+```bash
+uvicorn src.api.main:app --reload --port 8000
+# API docs at http://localhost:8000/docs
+```
+
+## Structured Logging with structlog
+
+JSON logs are machine-readable and integrate with every observability platform (Datadog, Grafana Loki, CloudWatch).
+
+```python
+import logging
+import structlog
+
+def configure_logging(level: str = "INFO") -> None:
+    structlog.configure(
+        processors=[
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.dev.ConsoleRenderer() if level == "DEBUG"
+            else structlog.processors.JSONRenderer(),
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(
+            getattr(logging, level.upper())
+        ),
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(),
+    )
+```
+
+Add this to your `lifespan` function before loading the model:
+
+```python
+configure_logging(level=os.getenv("LOG_LEVEL", "INFO"))
+```
+
+## Dockerfile: Lean Multi-Stage Build
+
+A naive Python Docker image is 1+ GB. Multi-stage builds separate build dependencies from the runtime image, yielding images under 200 MB.
+
+```dockerfile
+# Stage 1: Build
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+RUN pip install uv
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Stage 2: Runtime
+FROM python:3.12-slim AS runtime
+
+# Security: run as non-root user
+RUN addgroup --system app && adduser --system --group app
+USER app
+
+WORKDIR /app
+
+# Copy only the installed packages and the model
+COPY --from=builder /app/.venv /app/.venv
+COPY model.onnx ./
+COPY src/ ./src/
+
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV LOG_LEVEL=INFO
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+```
+
+Build and run:
+
+```bash
+docker build -t ml-inference:latest .
+docker run -p 8000:8000 ml-inference:latest
+
+# Test
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"features": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]}'
+```
+
+## docker-compose for Local Development
+
+```yaml
+# docker-compose.yml
+version: "3.9"
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./model.onnx:/app/model.onnx:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Optional: Prometheus metrics scraper
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+```
+
+Start everything:
+
+```bash
+docker compose up --build
+```
+
+## Environment Variables and Secrets Management
+
+Never bake secrets into Docker images or docker-compose files. Use environment variables injected at runtime:
+
+```bash
+# Local dev: .env file (gitignored)
+API_KEY=secret123
+MODEL_PATH=/app/model.onnx
+MAX_BATCH_SIZE=32
+```
+
+In production (Kubernetes):
+- Use **Kubernetes Secrets** mounted as environment variables
+- Or use **AWS Secrets Manager / GCP Secret Manager** with a secrets sidecar
+
+In your FastAPI app, load configuration with Pydantic Settings:
+
+```python
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    model_path: str = "model.onnx"
+    max_batch_size: int = 32
+    log_level: str = "INFO"
+    api_key: str  # Required — will raise if missing
+
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
+```
+
+## Basic Drift Detection
+
+Model drift occurs when the statistical distribution of incoming data shifts away from the training distribution. Undetected drift causes silent accuracy degradation.
+
+A simple approach: log every prediction and periodically compare distributions.
+
+```python
+import json
+from datetime import datetime
+from pathlib import Path
+
+LOG_FILE = Path("./predictions.jsonl")
+
+def log_prediction(features: list[float], prediction: int, probability: float) -> None:
+    record = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "features": features,
+        "prediction": prediction,
+        "probability": probability,
+    }
+    with LOG_FILE.open("a") as f:
+        f.write(json.dumps(record) + "\n")
+```
+
+Run a weekly drift check with a script that computes the Population Stability Index (PSI) between the training feature distribution and the last 7 days of logged features. If PSI &gt; 0.2 for any feature, trigger a retraining alert.
+
+## GitHub Actions CI: Test → Build → Push
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Run tests
+        run: uv run pytest tests/ -v --tb=short
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/ml-inference:latest
+            ghcr.io/${{ github.repository }}/ml-inference:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+```
+
+## Deployment Checklist
+
+Before sending traffic to a new model version, verify:
+
+```
+[ ] ONNX model validated: predictions match sklearn/PyTorch outputs within 1e-5
+[ ] /health endpoint returns 200 within 1s under load
+[ ] /ready endpoint returns 503 before model loads and 200 after
+[ ] Input validation tested with edge cases (missing fields, NaN, Inf, wrong shape)
+[ ] Structured JSON logs emitting to stdout with correct fields
+[ ] Docker image runs as non-root user
+[ ] Secrets loaded from environment, not hardcoded
+[ ] CI pipeline passes: all tests green, image builds and pushes successfully
+[ ] Drift logging active: every prediction written to append-only log
+[ ] Rollback plan documented: previous image tag recorded, rollback command ready
+[ ] Load test: p99 latency under 100ms at expected peak QPS
+```
+
+## Summary
+
+- Use **ONNX** for production model serialisation — it is cross-language, runtime-agnostic, and cannot execute arbitrary code like pickle can.
+- Build your inference API with **FastAPI** using Pydantic request/response models for automatic validation, and run ONNX Runtime in a thread pool executor to keep the async event loop unblocked.
+- Write a **multi-stage Dockerfile** that separates build and runtime stages; run the final image as a non-root user; the result is a lean, secure image under 200 MB.
+- Use **structlog** with `JSONRenderer` in production so every prediction and error is machine-readable and can be ingested by any observability platform.
+- Log every prediction to a JSONL file and run periodic **drift detection** (PSI score) to catch distribution shift before it silently degrades accuracy in production.

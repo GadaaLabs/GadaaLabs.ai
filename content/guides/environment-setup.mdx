@@ -1,0 +1,402 @@
+---
+title: "Complete AI Development Environment Setup"
+description: "Set up a professional AI engineering workspace from scratch — Python, VS Code, Jupyter, virtual environments, and your first Groq API call."
+publishedAt: "2026-03-29"
+author: "GadaaLabs"
+tags: ["python", "vscode", "jupyter", "setup", "environment"]
+difficulty: "beginner"
+estimatedTime: 45
+prerequisites: []
+---
+
+# Complete AI Development Environment Setup
+
+A reproducible, isolated development environment is the foundation of every serious AI project. If you skip this step and rely on system Python or ad-hoc package installs, you will eventually hit a dependency conflict that costs you hours. This guide walks you through a professional setup from scratch — the same way engineers at production AI teams work.
+
+## Why Environment Setup Matters
+
+Two properties matter most in AI development: **reproducibility** and **isolation**.
+
+**Reproducibility** means another engineer (or your future self) can clone your repo, run one command, and get an identical working environment. Without it, "works on my machine" becomes a recurring nightmare.
+
+**Isolation** means your project's dependencies do not conflict with each other or with system tools. AI projects routinely require pinned versions of PyTorch, NumPy, and transformers libraries that are mutually incompatible across projects. Isolated virtual environments solve this completely.
+
+## Python Installation with pyenv
+
+Never use your operating system's Python. System Python is managed by the OS, can be updated or removed by system upgrades, and is used by OS-level tools that can break if you install packages globally. Use **pyenv** instead — it lets you install and switch between any Python version per-project.
+
+### macOS
+
+```bash
+# Install Homebrew if you don't have it
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install pyenv
+brew install pyenv
+
+# Add pyenv to your shell (for zsh — the macOS default)
+echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.zshrc
+echo '[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.zshrc
+echo 'eval "$(pyenv init -)"' >> ~/.zshrc
+source ~/.zshrc
+
+# Install Python 3.12 (current stable for AI work)
+pyenv install 3.12.3
+pyenv global 3.12.3
+
+# Verify
+python --version   # Python 3.12.3
+```
+
+### Linux (Ubuntu/Debian)
+
+```bash
+# Install build dependencies
+sudo apt update && sudo apt install -y \
+  build-essential libssl-dev zlib1g-dev libbz2-dev \
+  libreadline-dev libsqlite3-dev wget curl llvm \
+  libncursesw5-dev xz-utils tk-dev libxml2-dev \
+  libxmlsec1-dev libffi-dev liblzma-dev git
+
+# Install pyenv
+curl https://pyenv.run | bash
+
+# Add to ~/.bashrc or ~/.zshrc
+echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
+echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
+echo 'eval "$(pyenv init -)"' >> ~/.bashrc
+source ~/.bashrc
+
+pyenv install 3.12.3
+pyenv global 3.12.3
+```
+
+### Windows
+
+On Windows, use **pyenv-win**:
+
+```powershell
+# In PowerShell (as Administrator)
+Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/pyenv-win/pyenv-win/master/pyenv-win/install-pyenv-win.ps1" -OutFile "./install-pyenv-win.ps1"
+.\install-pyenv-win.ps1
+
+# Restart PowerShell, then:
+pyenv install 3.12.3
+pyenv global 3.12.3
+python --version
+```
+
+> **Note:** On Windows, prefer WSL 2 (Windows Subsystem for Linux) for serious AI development. Most ML tooling is Linux-first, and you avoid many compatibility headaches by working inside Ubuntu on WSL 2.
+
+## Virtual Environments: venv vs conda vs uv
+
+You have three mainstream options:
+
+| Tool | Speed | Lockfile | Best for |
+|------|-------|----------|----------|
+| `venv` | Slow | No | Simple scripts |
+| `conda` | Medium | Yes | Data science (handles non-Python deps) |
+| `uv` | Very fast | Yes (uv.lock) | Modern Python projects |
+
+**Recommendation: use `uv`.** It is a drop-in replacement for pip and venv written in Rust. It resolves and installs packages 10-100x faster than pip, produces a lockfile, and handles Python version management natively.
+
+### Install uv
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Verify
+uv --version
+```
+
+### Start a New Project with uv
+
+```bash
+# Create a new project
+uv init my-ai-project
+cd my-ai-project
+
+# uv creates: pyproject.toml, .python-version, main.py, .venv/
+# Install a package
+uv add groq python-dotenv
+
+# Run a script inside the venv
+uv run python main.py
+
+# Or activate the venv directly
+source .venv/bin/activate   # macOS/Linux
+.venv\Scripts\activate      # Windows
+```
+
+The `uv.lock` file that `uv` generates pins every transitive dependency. Commit it to git — it is your reproducibility guarantee.
+
+## VS Code Setup
+
+VS Code is the standard IDE for AI/ML work. Install it from [code.visualstudio.com](https://code.visualstudio.com).
+
+### Essential Extensions
+
+Install these extensions from the VS Code Extensions panel (Ctrl+Shift+X / Cmd+Shift+X):
+
+| Extension | Publisher | Purpose |
+|-----------|-----------|---------|
+| Python | Microsoft | Language support, debugger |
+| Pylance | Microsoft | Fast type checking, IntelliSense |
+| Jupyter | Microsoft | .ipynb support inside VS Code |
+| GitLens | GitKraken | Git blame, history, diffs |
+| Ruff | Astral Software | Fast linter + formatter |
+
+Install them via the command line:
+
+```bash
+code --install-extension ms-python.python
+code --install-extension ms-python.vscode-pylance
+code --install-extension ms-toolsai.jupyter
+code --install-extension eamodio.gitlens
+code --install-extension charliermarsh.ruff
+```
+
+### VS Code settings.json for Python
+
+Open your project in VS Code, then create `.vscode/settings.json`:
+
+```json
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "charliermarsh.ruff",
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "ruff.lint.enable": true,
+  "ruff.format.enable": true,
+  "jupyter.notebookFileRoot": "${workspaceFolder}",
+  "python.analysis.typeCheckingMode": "basic",
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/*.pyc": true
+  }
+}
+```
+
+> **Note:** The `python.defaultInterpreterPath` points to the `.venv` inside your project. VS Code will automatically use this interpreter for linting, formatting, and running code — no manual selection needed after first open.
+
+## JupyterLab Setup
+
+JupyterLab is the browser-based notebook interface. Install it in your project venv:
+
+```bash
+# With uv
+uv add jupyterlab
+
+# Start JupyterLab
+uv run jupyter lab
+# Opens at http://localhost:8888
+```
+
+### Register Your Project Kernel
+
+By default, notebooks run in the base Python environment. Register your project's venv as a named kernel so notebooks always use your project's packages:
+
+```bash
+uv add ipykernel
+uv run python -m ipykernel install --user --name my-ai-project --display-name "Python (my-ai-project)"
+```
+
+Now, when you open a notebook in JupyterLab, select **"Python (my-ai-project)"** from the kernel menu.
+
+### Useful JupyterLab Extensions
+
+```bash
+uv add jupyterlab-git        # Git panel inside JupyterLab
+uv add jupyterlab-lsp        # Language Server Protocol (autocomplete, hover docs)
+uv add python-lsp-server     # LSP backend for Python
+```
+
+### VS Code Jupyter Integration
+
+You do not need to leave VS Code to use notebooks. Open any `.ipynb` file in VS Code — the Jupyter extension provides a full notebook UI. Select your registered kernel from the kernel picker in the top-right of the notebook editor.
+
+This gives you the best of both worlds: notebook interactivity with VS Code's editor features (IntelliSense, GitLens, integrated terminal).
+
+## Project Structure Best Practices
+
+A well-organised AI project looks like this:
+
+```
+my-ai-project/
+├── .venv/                  # Virtual environment (gitignored)
+├── .vscode/
+│   └── settings.json       # Project-specific VS Code settings
+├── data/
+│   ├── raw/                # Original, immutable data (gitignored if large)
+│   └── processed/          # Cleaned, transformed data
+├── notebooks/
+│   ├── 01-eda.ipynb        # Numbered for ordering
+│   └── 02-experiments.ipynb
+├── src/
+│   └── my_ai_project/
+│       ├── __init__.py
+│       ├── data.py
+│       └── model.py
+├── tests/
+│   └── test_data.py
+├── .env                    # Secrets — NEVER commit (gitignored)
+├── .env.example            # Template with placeholder values (committed)
+├── .gitignore
+├── pyproject.toml          # Project metadata and dependencies
+├── uv.lock                 # Pinned dependency lockfile (committed)
+└── README.md
+```
+
+## Environment Variables and the .env Pattern
+
+Never hardcode API keys in source code. Use environment variables loaded from a `.env` file during development.
+
+```bash
+uv add python-dotenv
+```
+
+Create `.env` in your project root:
+
+```bash
+# .env — DO NOT COMMIT THIS FILE
+GROQ_API_KEY=gsk_your_key_here
+```
+
+Create `.env.example` with placeholder values (safe to commit):
+
+```bash
+# .env.example — copy to .env and fill in your values
+GROQ_API_KEY=your_groq_api_key_here
+```
+
+Load the variables in Python:
+
+```python
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # Loads .env into environment
+
+api_key = os.getenv("GROQ_API_KEY")
+if not api_key:
+    raise ValueError("GROQ_API_KEY not set. Copy .env.example to .env and add your key.")
+```
+
+## Git Setup for AI Projects
+
+Initialize git and add a proper `.gitignore`:
+
+```bash
+git init
+git config user.name "Your Name"
+git config user.email "you@example.com"
+```
+
+Create `.gitignore`:
+
+```
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Data and models (large files)
+data/raw/
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.onnx
+*.bin
+models/
+
+# IDE
+.vscode/extensions.json
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+```
+
+> **Note:** Use Git LFS (`git lfs install`) if you must version-control model files or large datasets. Never commit binary model files to regular git — they bloat the repository permanently.
+
+## Your First Groq API Call
+
+Get a free API key from [console.groq.com](https://console.groq.com). It takes under two minutes.
+
+Install the Groq client:
+
+```bash
+uv add groq python-dotenv
+```
+
+Create `test_groq.py`:
+
+```python
+from dotenv import load_dotenv
+from groq import Groq
+
+load_dotenv()
+
+client = Groq()  # Reads GROQ_API_KEY from environment automatically
+
+response = client.chat.completions.create(
+    model="llama-3.3-70b-versatile",
+    messages=[
+        {
+            "role": "user",
+            "content": "Explain what a vector embedding is in two sentences."
+        }
+    ],
+    temperature=0.7,
+    max_tokens=150,
+)
+
+print(response.choices[0].message.content)
+print(f"\nTokens used: {response.usage.total_tokens}")
+```
+
+Run it:
+
+```bash
+uv run python test_groq.py
+```
+
+You should see a clean explanation and a token count. If you get an `AuthenticationError`, double-check that your `.env` file is in the project root and `GROQ_API_KEY` is set correctly.
+
+## Summary
+
+- Use **pyenv** to install and manage Python versions — never use system Python.
+- Use **uv** for virtual environments and package management; it is 10-100x faster than pip and produces a lockfile for reproducibility.
+- Install **Python, Pylance, Jupyter, GitLens, and Ruff** extensions in VS Code and configure `settings.json` to format on save.
+- Register your project's venv as a named **Jupyter kernel** so notebooks always use your project's packages.
+- Store secrets in a `.env` file loaded with **python-dotenv**, add `.env` to `.gitignore`, and commit `.env.example` as a template.

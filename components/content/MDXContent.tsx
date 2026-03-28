@@ -72,7 +72,7 @@ function Callout({
   );
 }
 
-const components = {
+export const MDXComponents = {
   // Headings
   h1: (p: React.HTMLAttributes<HTMLHeadingElement>) => (
     <h1 className="text-3xl font-bold mt-10 mb-4 scroll-mt-20" style={{ color: "var(--color-text-primary)" }} {...p} />
@@ -168,7 +168,7 @@ const components = {
 export function MDXContent({ source }: { source: string }) {
   return (
     <div className="mdx-content max-w-none">
-      <MDXRemote source={source} components={components} />
+      <MDXRemote source={source} components={MDXComponents} />
     </div>
   );
 }

@@ -8,7 +8,9 @@ import { AuthButton } from "@/components/auth/AuthButton";
 
 const nav = [
   { label: "Learn", href: "/learn" },
+  { label: "Guides", href: "/guides" },
   { label: "Articles", href: "/articles" },
+  { label: "Quizzes", href: "/quizzes" },
   { label: "DataLab", href: "/datalab" },
   { label: "Demos", href: "/demos" },
   { label: "Playground", href: "/playground" },
