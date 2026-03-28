@@ -4,8 +4,8 @@ import { Zap, Code2, Share2 } from "lucide-react";
 const links = {
   Learn: [
     { label: "Courses", href: "/learn" },
-    { label: "Articles", href: "/articles" },
     { label: "Guides", href: "/guides" },
+    { label: "Articles", href: "/articles" },
     { label: "Quizzes", href: "/quizzes" },
   ],
   Tools: [

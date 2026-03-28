@@ -249,6 +249,39 @@ body {
 }
 
 /* ============================================================
+   Navigation link hover animation
+   ============================================================ */
+
+.nav-link {
+  position: relative;
+  transition: color 0.18s ease, transform 0.18s ease;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.nav-link:hover {
+  transform: translateY(-1px) scale(1.08);
+}
+
+.nav-link::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 50%;
+  transform: translateX(-50%) scaleX(0);
+  width: 70%;
+  height: 2px;
+  background: linear-gradient(90deg, var(--color-purple-500), var(--color-cyan-400));
+  border-radius: 2px;
+  transition: transform 0.2s ease;
+}
+
+.nav-link:hover::after,
+.nav-link.nav-active::after {
+  transform: translateX(-50%) scaleX(1);
+}
+
+/* ============================================================
    Cursor blink
    ============================================================ */
 

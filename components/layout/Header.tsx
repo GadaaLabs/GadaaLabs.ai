@@ -9,7 +9,6 @@ import { AuthButton } from "@/components/auth/AuthButton";
 const nav = [
   { label: "Learn", href: "/learn" },
   { label: "Guides", href: "/guides" },
-  { label: "Articles", href: "/articles" },
   { label: "Quizzes", href: "/quizzes" },
   { label: "DataLab", href: "/datalab" },
   { label: "Demos", href: "/demos" },
@@ -58,7 +57,7 @@ export function Header() {
               <Link
                 key={item.href}
                 href={item.href}
-                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                className={`nav-link px-4 py-2 rounded-lg${active ? " nav-active" : ""}`}
                 style={{
                   color: active ? "var(--color-purple-400)" : "var(--color-text-secondary)",
                   background: active ? "rgba(124, 58, 237, 0.1)" : "transparent",
