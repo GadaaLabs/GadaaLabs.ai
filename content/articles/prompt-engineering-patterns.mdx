@@ -1,0 +1,217 @@
+---
+title: "Prompt Engineering Patterns Every Developer Should Know"
+description: "Practical, battle-tested patterns for writing prompts that produce reliable, structured output from LLMs — with code examples you can copy and ship."
+publishedAt: "2026-03-25"
+author: "GadaaLabs"
+tags: ["prompt-engineering", "patterns", "practical", "beginner-friendly"]
+difficulty: "beginner"
+readingTime: 8
+featured: true
+---
+
+Prompt engineering isn't magic. It's a set of repeatable patterns with predictable effects. This article covers the ones that matter most in production — the patterns you'll reach for every week.
+
+## 1. Role + Task + Format
+
+The most fundamental pattern. Give the model a role, specify the task, and define the output format explicitly.
+
+```
+You are a senior backend engineer at a fintech company.
+
+Task: Review the following Python function for security vulnerabilities.
+
+Output format:
+- List each vulnerability on its own line
+- Prefix with severity: [CRITICAL], [HIGH], [MEDIUM], [LOW]
+- Include a one-line fix recommendation after each
+
+Code to review:
+{code}
+```
+
+Without the role, the model gives generic advice. Without the format spec, you get prose you have to parse. Both make downstream handling much harder.
+
+## 2. Chain-of-Thought (CoT)
+
+Adding "think step by step" or "reason before answering" dramatically improves accuracy on multi-step problems.
+
+```python
+system_prompt = """
+You are a data analysis assistant.
+Before giving your final answer, reason through the problem step by step
+inside <thinking> tags. Then give your final answer inside <answer> tags.
+"""
+
+user_message = """
+A dataset has 1,000 rows. After filtering, 340 remain.
+Of those, 12% have missing values in column A.
+How many complete rows do we have?
+"""
+```
+
+The model's output will show its work, making errors easier to catch — and it will get the right answer more often because it's forced to reason before concluding.
+
+## 3. Few-Shot Examples
+
+When zero-shot fails, add 2–3 examples of input → output pairs. This is especially powerful for formatting tasks, classification, and extraction.
+
+```python
+prompt = """
+Extract the entity and sentiment from each customer message.
+Return JSON only.
+
+Examples:
+
+Input: "The checkout flow on your app is absolutely broken"
+Output: {"entity": "checkout flow", "sentiment": "negative", "severity": "high"}
+
+Input: "Love how fast the search is now"
+Output: {"entity": "search", "sentiment": "positive", "severity": "low"}
+
+Input: "Your support team took 3 days to respond"
+Output: {"entity": "support team", "sentiment": "negative", "severity": "medium"}
+
+Now extract from:
+Input: "{customer_message}"
+Output:"""
+```
+
+Keep examples diverse — don't just show the happy path.
+
+## 4. Output Anchoring
+
+Start the assistant's response for it. This is one of the most reliable ways to get structured output without a JSON mode.
+
+```python
+messages = [
+    {"role": "system", "content": "You extract data from text. Always respond with valid JSON."},
+    {"role": "user", "content": f"Extract all dates and events from: {text}"},
+    {"role": "assistant", "content": "{"},   # ← anchor the response
+]
+```
+
+By starting the response with `{`, you've made it nearly impossible for the model to respond with prose. Combine with a stop sequence of `}` for strict JSON extraction.
+
+## 5. Structured Output via XML Tags
+
+For complex outputs with multiple fields, XML-style tags are more reliable than asking for nested JSON in a single shot.
+
+```
+Analyze this code review and produce:
+
+<summary>One sentence overall assessment</summary>
+<issues>
+  List each issue, one per line
+</issues>
+<verdict>APPROVE | REQUEST_CHANGES | NEEDS_DISCUSSION</verdict>
+<confidence>0.0 to 1.0</confidence>
+```
+
+Parse these tags with a simple regex:
+
+```python
+import re
+
+def extract_tag(text: str, tag: str) -> str:
+    match = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
+    return match.group(1).strip() if match else ""
+
+summary = extract_tag(response, "summary")
+verdict = extract_tag(response, "verdict")
+```
+
+## 6. Negative Instructions
+
+Tell the model what NOT to do. LLMs respond well to explicit exclusions.
+
+```
+Summarize this technical document.
+
+Rules:
+- Do NOT include page numbers or headers
+- Do NOT use bullet points — write in prose
+- Do NOT exceed 150 words
+- Do NOT add your own opinions or caveats
+```
+
+Negative instructions are particularly useful when you're getting consistent unwanted behaviors — adding them explicitly is faster than trying to engineer them away with positive framing.
+
+## 7. Self-Consistency via Temperature Sampling
+
+For high-stakes decisions, sample the same prompt multiple times at temperature > 0 and take a majority vote.
+
+```python
+async def self_consistent_classify(text: str, n: int = 5) -> str:
+    results = []
+    for _ in range(n):
+        response = await client.chat(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": f"Classify as SPAM or HAM: {text}"}],
+            temperature=0.7,
+        )
+        results.append(response.strip())
+
+    # Majority vote
+    return max(set(results), key=results.count)
+```
+
+This trades latency and cost for reliability. Use it when a single wrong classification has real consequences.
+
+## 8. Prompt Caching Awareness
+
+If your provider supports prompt caching (prefill caching), structure prompts so the static prefix is long and placed first — the dynamic part at the end.
+
+```python
+# Good: static system prompt first, dynamic content at the end
+messages = [
+    {"role": "system", "content": LONG_STATIC_SYSTEM_PROMPT},  # cached
+    {"role": "user",   "content": dynamic_user_question},       # not cached
+]
+
+# Bad: mixing static and dynamic makes caching less effective
+messages = [
+    {"role": "system", "content": f"{STATIC_INTRO}\n{dynamic_context}\n{STATIC_RULES}"},
+]
+```
+
+With Groq's infrastructure, the first call warms the cache; subsequent calls with the same prefix are significantly cheaper and faster.
+
+## Combining Patterns
+
+Real prompts combine multiple patterns. Here's a production-grade extraction prompt:
+
+```python
+SYSTEM = """
+You are a precise data extraction engine.
+Think through each extraction step by step inside <reasoning> tags.
+Then output the result as valid JSON inside <result> tags.
+Never add prose outside these tags.
+"""
+
+USER = """
+Extract all API endpoints from this code.
+For each endpoint include: method, path, auth_required (bool), rate_limited (bool).
+
+Example output:
+<reasoning>
+I see a GET /users route with @require_auth decorator...
+</reasoning>
+<result>
+[
+  {"method": "GET", "path": "/users", "auth_required": true, "rate_limited": true}
+]
+</result>
+
+Code:
+{code}
+"""
+```
+
+## What Doesn't Work
+
+- **Politeness** — "Please" and "thank you" have no effect on output quality.
+- **Threats** — "Or I'll fire you" and similar don't improve reliability in current models.
+- **Vague length requests** — "Be concise" is ignored. "Respond in under 50 words" works.
+- **Assuming JSON without enforcement** — Always validate and have a fallback parser.
+
+The patterns above work because they constrain the model's output space. The more precisely you define what you want, the less the model has to guess.

@@ -1,0 +1,140 @@
+---
+title: "Workflow Automation"
+description: "Build LLM-powered workflows in n8n with webhook triggers, code nodes, and human-in-the-loop approval gates."
+order: 4
+duration: 15
+---
+
+Not every AI automation needs to be a Python service. For connecting SaaS tools, processing form submissions, or routing support tickets, a visual workflow tool like n8n is often faster to build and easier to maintain than custom code. This lesson builds a production-ready LLM workflow with n8n as the orchestrator.
+
+## n8n Architecture for AI Workflows
+
+n8n executes workflows as directed graphs of nodes. Each node receives input JSON, processes it, and passes output JSON to the next node.
+
+| Node type | Purpose | LLM use case |
+|---|---|---|
+| Webhook | Receive HTTP requests | Entry point for user submissions |
+| HTTP Request | Call external APIs | Call OpenAI / Anthropic API |
+| Code | Run JavaScript | Parse LLM output, custom logic |
+| IF | Conditional branching | Route based on LLM classification |
+| Wait | Pause for approval | Human-in-the-loop gate |
+| Send Email / Slack | Notifications | Alert on LLM output or errors |
+
+## Defining the Workflow
+
+A document triage workflow:
+
+```
+Webhook (POST /triage)
+    │
+    ▼
+HTTP Request → Anthropic API (classify document)
+    │
+    ▼
+Code Node (parse classification JSON)
+    │
+    ▼
+IF Node: category == "legal"?
+    │yes                   │no
+    ▼                      ▼
+Wait (human approval)   Auto-process Node
+    │
+    ▼
+Send Slack (notify reviewer)
+    │
+    ▼
+HTTP Request → Internal API (route document)
+```
+
+## The LLM Classification Node
+
+```javascript
+// n8n Code Node: call Anthropic and parse response
+const anthropicApiKey = $env.ANTHROPIC_API_KEY;
+const document = $input.first().json.text;
+
+const response = await $http.request({
+  method: 'POST',
+  url: 'https://api.anthropic.com/v1/messages',
+  headers: {
+    'x-api-key': anthropicApiKey,
+    'anthropic-version': '2023-06-01',
+    'content-type': 'application/json',
+  },
+  body: JSON.stringify({
+    model: 'claude-haiku-4-5',
+    max_tokens: 100,
+    messages: [{
+      role: 'user',
+      content: `Classify this document. Return ONLY valid JSON: {"category": "legal|technical|hr|general", "confidence": 0.0-1.0, "reason": "one sentence"}
+
+Document: ${document.substring(0, 1000)}`
+    }]
+  })
+});
+
+const text = response.content[0].text;
+// Strip markdown code fences if present
+const clean = text.replace(/```json\n?|\n?```/g, '').trim();
+const parsed = JSON.parse(clean);
+
+return [{ json: { ...parsed, original_text: document } }];
+```
+
+## Human-in-the-Loop Approval Gate
+
+```javascript
+// n8n Wait Node configuration
+// Pause execution until an approval webhook is received
+
+// Approval webhook URL: POST /webhook/approve/{executionId}
+// Expected body: { "approved": true, "reviewer": "alice@company.com", "note": "..." }
+
+// Code node after Wait:
+const approval = $input.first().json;
+if (!approval.approved) {
+  // Route to rejection workflow
+  return [{ json: { status: 'rejected', reason: approval.note } }];
+}
+return [{ json: { status: 'approved', reviewer: approval.reviewer } }];
+```
+
+## Webhook Trigger with Validation
+
+```python
+# Python-side: send a document for triage
+import httpx
+
+def submit_for_triage(document_text: str, document_id: str) -> dict:
+    resp = httpx.post(
+        "https://n8n.company.com/webhook/triage",
+        json={
+            "document_id": document_id,
+            "text":        document_text,
+            "submitted_at": "2024-03-27T10:00:00Z",
+        },
+        headers={"X-Webhook-Secret": WEBHOOK_SECRET},
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    return resp.json()
+```
+
+## Error Handling in Workflows
+
+| Failure point | n8n mitigation |
+|---|---|
+| LLM API timeout | Error workflow branch + retry |
+| Invalid JSON from LLM | Code node try/catch + fallback category |
+| Approval webhook not received | Wait node timeout → escalation |
+| Downstream API failure | Error node → Slack alert |
+
+Always add an "Error Workflow" in n8n settings — it fires on any unhandled exception and prevents silent failures.
+
+## Summary
+
+- n8n orchestrates LLM workflows as visual node graphs, reducing boilerplate for SaaS integrations.
+- Use HTTP Request nodes to call LLM APIs and Code nodes to parse and transform the output.
+- Add human-in-the-loop gates via n8n's Wait node for sensitive document categories or high-stakes actions.
+- Always validate LLM JSON output in a Code node with try/catch and provide a fallback so a malformed response does not break the workflow.
+- Configure n8n error workflows for every production workflow to catch and alert on silent failures.

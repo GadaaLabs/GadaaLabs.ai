@@ -1,0 +1,98 @@
+---
+title: "Designing ML Systems"
+description: "Translate business requirements into a concrete ML architecture with data flow diagrams and component boundaries."
+order: 1
+duration: 15
+---
+
+Good ML engineering starts long before the first line of model code. A system design session forces you to surface hidden assumptions — about data freshness, labeling cost, acceptable latency, and failure modes — before those assumptions become expensive bugs. This lesson walks through a repeatable process for converting a product requirement into a deployable architecture.
+
+## Requirements Gathering
+
+Start with four axes:
+
+| Axis | Question to answer | Example answer |
+|---|---|---|
+| Prediction type | Classification, regression, generation, ranking? | Binary classification |
+| Latency budget | Real-time (&lt;100 ms), near-real-time (&lt;2 s), batch? | Near-real-time |
+| Throughput | Requests per second at peak | 500 RPS |
+| Data freshness | How stale can features be? | 15 minutes |
+
+Write down answers before opening a code editor. They drive every downstream decision.
+
+## Anatomy of an ML System
+
+A production system has five distinct planes:
+
+1. **Data plane** — raw sources, ingestion, feature store
+2. **Training plane** — pipeline, compute, experiment registry
+3. **Serving plane** — model server, API gateway, caching
+4. **Monitoring plane** — metrics, drift detectors, alerting
+5. **Control plane** — CI/CD, retraining triggers, rollback logic
+
+Sketch these as boxes and arrows before choosing frameworks. The sketch also becomes documentation.
+
+## Data Flow Planning
+
+Trace every feature from its raw source to the model input tensor:
+
+```python
+# Pseudo-code: document the transformation lineage
+FEATURE_LINEAGE = {
+    "user_click_rate_7d": {
+        "source": "kafka.events.clicks",
+        "transform": "windowed_count / session_count",
+        "latency_sla_minutes": 15,
+        "owner": "data-platform",
+    },
+    "item_embedding": {
+        "source": "postgres.items",
+        "transform": "two-tower model v3",
+        "latency_sla_minutes": 1440,  # daily batch
+        "owner": "recommendations",
+    },
+}
+```
+
+Documenting latency SLAs per feature reveals mismatches early: if your model needs a 15-minute-fresh feature but the pipeline runs hourly, you have a design gap to resolve before training.
+
+## Choosing the Right Architecture Pattern
+
+Three patterns cover most use cases:
+
+```
+Pattern A — Request-time inference
+  Client → API Gateway → Feature Server → Model Server → Response
+
+Pattern B — Pre-computed scores
+  Batch job → Feature Store → Model → Score Table
+  Client → API Gateway → Score Table → Response
+
+Pattern C — Streaming inference
+  Event Stream → Feature Processor → Model → Output Stream
+```
+
+Pattern A is simplest but fails above ~1000 RPS without caching. Pattern B trades freshness for cost. Pattern C is most complex but enables sub-second freshness at scale.
+
+## Capacity Estimation
+
+Back-of-envelope math catches sizing mistakes before deployment:
+
+```python
+peak_rps = 500
+avg_inference_ms = 40          # measured from prototype
+p99_inference_ms = 120         # assume 3x average for tail
+replicas_needed = (peak_rps * avg_inference_ms / 1000) / 0.7  # 70% CPU target
+
+print(f"Minimum replicas: {replicas_needed:.1f}")  # → 28.6 → round up to 30
+```
+
+Add 30% headroom for traffic spikes and rolling restarts.
+
+## Summary
+
+- Gather requirements on four axes before writing code: prediction type, latency, throughput, and data freshness.
+- Split every ML system into five planes: data, training, serving, monitoring, and control.
+- Document feature lineage and per-feature latency SLAs to catch pipeline gaps early.
+- Choose among request-time, pre-computed, or streaming inference based on freshness vs. cost tradeoffs.
+- Do capacity math upfront — replicas needed = (RPS × inference time) / target utilisation.

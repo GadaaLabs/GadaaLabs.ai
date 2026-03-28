@@ -1,0 +1,16 @@
+[
+  {
+    "slug": "chat",
+    "title": "Streaming Chat",
+    "description": "A live streaming chat powered by Llama 3.3 70B via Groq. Experiment with system prompts and see how they shape the model's responses.",
+    "tags": ["chat", "streaming", "llama"],
+    "component": "ChatDemo"
+  },
+  {
+    "slug": "tokenizer",
+    "title": "Token Visualizer",
+    "description": "See exactly how your text is tokenised before it reaches the model. Each token gets a unique colour — great for understanding prompt costs.",
+    "tags": ["tokenizer", "tokens", "client-side"],
+    "component": "TokenizerDemo"
+  }
+]

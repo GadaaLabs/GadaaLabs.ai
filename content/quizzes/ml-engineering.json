@@ -1,0 +1,80 @@
+{
+  "slug": "ml-engineering",
+  "title": "Machine Learning Engineering Quiz",
+  "description": "Test your knowledge of PyTorch training loops, MLOps practices, ONNX export, and drift detection.",
+  "difficulty": "intermediate",
+  "questions": [
+    {
+      "id": "q1",
+      "question": "Which PyTorch function should you call immediately before computing the loss in a training loop?",
+      "options": [
+        "optimizer.zero_grad()",
+        "model.eval()",
+        "torch.no_grad()",
+        "scheduler.step()"
+      ],
+      "correct": 0,
+      "explanation": "optimizer.zero_grad() clears gradients accumulated from the previous batch. Forgetting this causes gradients to accumulate across batches, leading to incorrect parameter updates. It must be called before the forward pass so the backward pass only accumulates gradients from the current batch."
+    },
+    {
+      "id": "q2",
+      "question": "Why is nn.BCEWithLogitsLoss preferred over nn.BCELoss(torch.sigmoid(logits)) for binary classification?",
+      "options": [
+        "It is faster because it skips the sigmoid computation entirely",
+        "It combines sigmoid and BCE in a numerically stable way, avoiding overflow for extreme logit values",
+        "It automatically applies label smoothing",
+        "It supports multi-class classification without modification"
+      ],
+      "correct": 1,
+      "explanation": "BCEWithLogitsLoss uses the log-sum-exp trick to compute sigmoid and BCE in a single numerically stable operation. When logits are very large or very small, computing sigmoid separately can produce 0.0 or 1.0 due to float32 limits, causing log(0) = -inf in the BCE formula. The fused version avoids this."
+    },
+    {
+      "id": "q3",
+      "question": "When exporting a model to ONNX, what is the purpose of the dynamic_axes parameter?",
+      "options": [
+        "It enables the use of dynamic quantization during inference",
+        "It specifies which dimensions (e.g., batch size) can vary at inference time",
+        "It activates ONNX Runtime's dynamic graph optimisation mode",
+        "It sets the ONNX opset version used during export"
+      ],
+      "correct": 1,
+      "explanation": "By default, torch.onnx.export bakes the exact input shape used during export into the computation graph. Setting dynamic_axes={'input': {0: 'batch_size'}} tells the exporter that dimension 0 is variable, producing an ONNX graph that accepts any batch size at runtime."
+    },
+    {
+      "id": "q4",
+      "question": "In MLflow, what is the correct method to transition a registered model from 'Staging' to 'Production'?",
+      "options": [
+        "mlflow.promote_model(name, stage='Production')",
+        "client.transition_model_version_stage(name, version, stage='Production')",
+        "mlflow.set_model_stage(name, 'Production')",
+        "client.update_registered_model(name, stage='Production')"
+      ],
+      "correct": 1,
+      "explanation": "MlflowClient.transition_model_version_stage() is the correct API. It takes the model name, version number, and target stage. The archive_existing_versions parameter controls whether the current Production version is automatically archived. This explicit gate prevents accidental deployments."
+    },
+    {
+      "id": "q5",
+      "question": "What does the Population Stability Index (PSI) measure in model monitoring?",
+      "options": [
+        "The stability of model weights between retraining runs",
+        "The shift in the distribution of a feature between a reference period and a current period",
+        "The variance of prediction confidence scores over time",
+        "The ratio of correct predictions in a sliding window"
+      ],
+      "correct": 1,
+      "explanation": "PSI quantifies how much a feature's distribution has shifted between two time windows (e.g., training data vs. recent production traffic). PSI < 0.1 indicates no significant shift; 0.1–0.2 is moderate shift requiring monitoring; > 0.2 indicates major drift and typically triggers a retraining pipeline."
+    },
+    {
+      "id": "q6",
+      "question": "In an ML CI/CD pipeline, why should the evaluation script exit with code 1 when the new model does not meet the improvement threshold?",
+      "options": [
+        "To trigger the rollback webhook in Kubernetes",
+        "To cause the GitHub Actions job to fail, preventing the packaging and deployment stages from running",
+        "To write a failure record to the MLflow model registry",
+        "To notify the on-call engineer via PagerDuty"
+      ],
+      "correct": 1,
+      "explanation": "GitHub Actions (and most CI systems) treat any non-zero exit code from a step as a failure and stop the workflow at that point. By exiting with code 1, the evaluation script acts as a hard gate: no model that fails the quality bar can proceed to packaging or deployment, regardless of what comes after it in the YAML."
+    }
+  ]
+}

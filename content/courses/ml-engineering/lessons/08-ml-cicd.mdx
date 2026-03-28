@@ -1,0 +1,146 @@
+---
+title: "CI/CD for Machine Learning"
+description: "Automate the full ML lifecycle — training, evaluation, packaging, and rollback — with a GitHub Actions pipeline."
+order: 8
+duration: 17
+---
+
+Manual deployments create invisible risk. Without automation, a model trained on Friday gets deployed on Monday without anyone verifying it still outperforms the current production version. ML CI/CD enforces a gate: every model that reaches production must have beaten its predecessor on a held-out evaluation set, automatically.
+
+## Pipeline Stages
+
+| Stage | Trigger | Success criterion |
+|---|---|---|
+| Lint & unit test | Every PR | All tests pass |
+| Data validation | Push to `main` | Great Expectations suite passes |
+| Training | Push to `main` | Loss converges; no NaN gradients |
+| Evaluation | After training | New model beats baseline by ≥1% accuracy |
+| Packaging | After evaluation | ONNX export + numerical validation pass |
+| Staging deploy | After packaging | Smoke test returns HTTP 200 |
+| Production promote | Manual approval | Human reviews evaluation report |
+| Rollback | On alert fire | Previous model version restored |
+
+## GitHub Actions Workflow
+
+```yaml
+# .github/workflows/ml-pipeline.yml
+name: ML Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: pytest tests/ -v --tb=short
+
+  train-and-evaluate:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+
+      - name: Pull dataset
+        run: |
+          pip install dvc[s3]
+          dvc pull data/processed/
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Train
+        run: python scripts/train.py --config configs/prod.yaml
+
+      - name: Evaluate against baseline
+        run: |
+          python scripts/evaluate.py \
+            --new-model artifacts/model.onnx \
+            --baseline-model artifacts/baseline.onnx \
+            --eval-data data/eval/ \
+            --min-improvement 0.01
+        id: eval
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifacts
+          path: artifacts/
+```
+
+## Evaluation Script with Automatic Baseline Comparison
+
+```python
+# scripts/evaluate.py
+import argparse, json, sys
+import onnxruntime as ort
+import numpy as np
+from pathlib import Path
+
+def evaluate_model(model_path: str, eval_dir: str) -> float:
+    session = ort.InferenceSession(model_path)
+    data    = np.load(f"{eval_dir}/features.npy")
+    labels  = np.load(f"{eval_dir}/labels.npy")
+    logits  = session.run(None, {"input": data.astype(np.float32)})[0]
+    preds   = logits.argmax(axis=1)
+    return (preds == labels).mean()
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--new-model")
+parser.add_argument("--baseline-model")
+parser.add_argument("--eval-data")
+parser.add_argument("--min-improvement", type=float, default=0.01)
+args = parser.parse_args()
+
+new_acc      = evaluate_model(args.new_model, args.eval_data)
+baseline_acc = evaluate_model(args.baseline_model, args.eval_data)
+
+print(f"New model accuracy:      {new_acc:.4f}")
+print(f"Baseline accuracy:       {baseline_acc:.4f}")
+print(f"Improvement:             {new_acc - baseline_acc:+.4f}")
+
+report = {"new_acc": new_acc, "baseline_acc": baseline_acc,
+          "improvement": new_acc - baseline_acc}
+Path("artifacts/eval_report.json").write_text(json.dumps(report, indent=2))
+
+if new_acc < baseline_acc + args.min_improvement:
+    print("FAIL: new model does not meet minimum improvement threshold")
+    sys.exit(1)
+
+print("PASS: new model promoted")
+```
+
+## Automatic Rollback
+
+```bash
+# Triggered by a monitoring alert webhook
+#!/bin/bash
+set -e
+echo "Rolling back to previous model version"
+kubectl set image deployment/inference-server \
+    server=gcr.io/myproject/inference:${PREVIOUS_IMAGE_TAG}
+kubectl rollout status deployment/inference-server
+echo "Rollback complete"
+```
+
+Store the previous image tag in a config map or secrets manager so the rollback script never hardcodes a version.
+
+## Summary
+
+- Structure ML CI/CD as eight explicit stages: lint, data validation, training, evaluation, packaging, staging, production, and rollback.
+- Gate model promotion on an automatic comparison to the current production baseline — never deploy blindly.
+- Use DVC to pull the exact versioned dataset inside the CI job, ensuring training is reproducible.
+- Write an evaluation script that exits with code 1 on failure so GitHub Actions marks the run as failed.
+- Automate rollback via a webhook from your monitoring system so drift alerts restore the previous model without human intervention.

@@ -1,0 +1,159 @@
+---
+title: "Your First API Call"
+description: "Make a real streaming request to an open-source LLM using the Groq API — with error handling, token counting, and a reusable client wrapper."
+order: 3
+duration: 15
+---
+
+Enough theory. Let's write code that calls a real model.
+
+We'll use the **Groq API** — it hosts open-source models (Llama 3, Mixtral) and has a generous free tier. By the end of this lesson you'll have a reusable async client you can drop into any project.
+
+## Prerequisites
+
+1. A Groq API key — free at [console.groq.com](https://console.groq.com)
+2. Python 3.9+ or Node.js 18+
+
+## Python: Basic Completion
+
+```python
+from groq import Groq
+
+client = Groq(api_key="your_groq_api_key")
+
+response = client.chat.completions.create(
+    model="llama-3.3-70b-versatile",
+    messages=[
+        {
+            "role": "system",
+            "content": "You are a concise technical assistant. Answer in 2-3 sentences."
+        },
+        {
+            "role": "user",
+            "content": "What is the difference between a parameter and a hyperparameter?"
+        }
+    ],
+    temperature=0.5,
+    max_tokens=256,
+)
+
+print(response.choices[0].message.content)
+print(f"\nTokens used: {response.usage.total_tokens}")
+```
+
+## Python: Streaming Response
+
+For better UX in real applications, stream the response so text appears incrementally:
+
+```python
+from groq import Groq
+
+client = Groq(api_key="your_groq_api_key")
+
+stream = client.chat.completions.create(
+    model="llama-3.3-70b-versatile",
+    messages=[{"role": "user", "content": "Explain gradient descent briefly."}],
+    stream=True,
+)
+
+for chunk in stream:
+    delta = chunk.choices[0].delta.content
+    if delta:
+        print(delta, end="", flush=True)
+
+print()  # newline after stream ends
+```
+
+## TypeScript: Reusable Client
+
+```typescript
+import Groq from "groq-sdk";
+
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+interface Message {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export async function chat(
+  messages: Message[],
+  options: { model?: string; temperature?: number; maxTokens?: number } = {}
+): Promise<string> {
+  const response = await groq.chat.completions.create({
+    model: options.model ?? "llama-3.3-70b-versatile",
+    messages,
+    temperature: options.temperature ?? 0.7,
+    max_tokens: options.maxTokens ?? 1024,
+  });
+
+  return response.choices[0].message.content ?? "";
+}
+
+// Usage
+const answer = await chat([
+  { role: "system", content: "You are a helpful AI tutor." },
+  { role: "user",   content: "What is a transformer?" },
+]);
+console.log(answer);
+```
+
+## Error Handling
+
+Always handle rate limits and network errors:
+
+```python
+from groq import Groq, RateLimitError, APIError
+import time
+
+def chat_with_retry(client: Groq, messages: list, max_retries: int = 3) -> str:
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=messages,
+                max_tokens=512,
+            )
+            return response.choices[0].message.content
+
+        except RateLimitError:
+            if attempt == max_retries - 1:
+                raise
+            wait = 2 ** attempt  # exponential backoff: 1s, 2s, 4s
+            print(f"Rate limited. Retrying in {wait}s...")
+            time.sleep(wait)
+
+        except APIError as e:
+            print(f"API error {e.status_code}: {e.message}")
+            raise
+```
+
+## Understanding the Response Object
+
+```python
+response = client.chat.completions.create(...)
+
+# Content
+response.choices[0].message.content   # the text
+response.choices[0].finish_reason      # "stop" | "length" | "tool_calls"
+
+# Token usage — critical for cost tracking
+response.usage.prompt_tokens           # tokens in your messages
+response.usage.completion_tokens       # tokens in the response
+response.usage.total_tokens            # sum
+
+# Model metadata
+response.model                         # exact model version used
+response.id                            # unique request ID for debugging
+```
+
+`finish_reason == "length"` means the model hit `max_tokens` before finishing — increase the limit or the response is truncated.
+
+## What to Build Next
+
+You now have everything to build:
+- A CLI chatbot (maintain a `messages` list, append each turn)
+- A document summariser (chunk text, summarise each chunk, summarise summaries)
+- A code reviewer (pass code as user message, structured output as JSON)
+
+The playground on this site lets you experiment with all of these without writing any setup code. Head there to try different models and parameters live.

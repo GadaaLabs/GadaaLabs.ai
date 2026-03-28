@@ -1,0 +1,58 @@
+---
+title: "What Are Large Language Models?"
+description: "Understanding the core mechanics of LLMs — how they're trained, what they actually do, and why they're different from earlier AI approaches."
+order: 1
+duration: 10
+---
+
+A large language model is a neural network trained to predict the next token in a sequence. That's it. Everything else — writing code, explaining concepts, summarising documents — emerges from doing that one thing extremely well, at scale, on almost all the text ever written.
+
+## How Training Works
+
+LLMs are trained using **self-supervised learning**. Given a corpus of text, the model is shown a partial sequence and asked: what token comes next?
+
+```
+Input:  "The capital of France is"
+Target: "Paris"
+```
+
+This is repeated for trillions of token pairs, across billions of documents. The model adjusts its weights after each prediction error — via backpropagation and gradient descent.
+
+No human labelling is required for pre-training. The supervision signal comes directly from the data itself.
+
+## The Transformer Architecture
+
+Modern LLMs are all based on the **transformer**, introduced in the 2017 paper *Attention Is All You Need*.
+
+The key insight: instead of processing tokens sequentially (like RNNs), transformers process all tokens in parallel and use **attention** to let each token dynamically decide which other tokens matter for understanding its own meaning.
+
+```
+"The bank can guarantee deposits will eventually cover future tuition
+ costs because it invests in growing interest."
+```
+
+The word "bank" could mean a riverbank or a financial institution. Attention allows the model to look at "deposits", "invests", and "interest" — and resolve the ambiguity correctly.
+
+## What LLMs Are Not
+
+- They are **not databases**. They don't "look up" facts — they pattern-match against learned statistical associations.
+- They are **not reasoning engines**. They generate plausible continuations, which often looks like reasoning.
+- They are **not deterministic**. Temperature > 0 means the same prompt can produce different outputs.
+
+Understanding these limitations is as important as understanding the capabilities.
+
+## The Pre-train → Fine-tune → Align Pipeline
+
+Modern LLMs go through three stages:
+
+| Stage | What happens |
+|-------|-------------|
+| Pre-training | Train on internet-scale text, learn general language patterns |
+| Fine-tuning (SFT) | Train on curated instruction/response pairs, learn to follow instructions |
+| Alignment (RLHF/DPO) | Optimise for human preferences — helpfulness, safety, honesty |
+
+When you call an API like Groq's Llama 3, you're using a model that has completed all three stages.
+
+## Key Takeaway
+
+LLMs are next-token predictors trained at massive scale. Their "intelligence" is emergent from the scale of training, not from explicit programming. In the next lesson, we'll look at how text becomes tokens — the fundamental unit the model actually sees.

@@ -1,0 +1,80 @@
+{
+  "slug": "ai-automation",
+  "title": "AI Automation Quiz",
+  "description": "Test your knowledge of AI agents, function calling, the ReAct loop, and production guardrails.",
+  "difficulty": "advanced",
+  "questions": [
+    {
+      "id": "q1",
+      "question": "In the ReAct (Reason + Act) agent pattern, what is the correct order of steps in a single iteration?",
+      "options": [
+        "Act → Observe → Think → Answer",
+        "Think → Act → Observe → (repeat or Answer)",
+        "Observe → Think → Plan → Act",
+        "Plan → Think → Act → Verify"
+      ],
+      "correct": 1,
+      "explanation": "ReAct alternates between Thought (the model reasons about what to do next), Action (the model invokes a tool), and Observation (the tool result is fed back). The loop continues until the model emits a Final Answer. This interleaving of reasoning and acting is what makes ReAct more robust than pure chain-of-thought or pure tool-use approaches."
+    },
+    {
+      "id": "q2",
+      "question": "When the Anthropic API returns stop_reason: 'tool_use', what must your code send in the next API request?",
+      "options": [
+        "A new user message repeating the original question",
+        "A tool_result message containing the output of the executed tool, matched to the tool_use block's id",
+        "An empty assistant message to continue the conversation",
+        "A system message instructing the model to summarise its tool calls"
+      ],
+      "correct": 1,
+      "explanation": "When stop_reason is 'tool_use', the model has paused and is waiting for the tool result. You must execute the tool, then send a message of role 'user' with content type 'tool_result', setting tool_use_id to match the id field from the tool_use block. Without this, the model cannot continue reasoning with the tool output."
+    },
+    {
+      "id": "q3",
+      "question": "What is the primary advantage of the planner-executor pattern over a single ReAct loop for long tasks?",
+      "options": [
+        "It requires fewer total LLM API calls",
+        "It separates high-level task decomposition from low-level tool execution, reducing context confusion in complex tasks",
+        "It eliminates the need for error handling in individual steps",
+        "It automatically parallelises all tool calls"
+      ],
+      "correct": 1,
+      "explanation": "In a single ReAct loop, the model must simultaneously maintain the high-level goal, track completed steps, and decide the next immediate action — all in one growing context. The planner-executor pattern delegates these concerns: the planner generates a structured step list once, and each executor call focuses only on a single step. This reduces the cognitive load on the model and makes failures easier to isolate."
+    },
+    {
+      "id": "q4",
+      "question": "Why is sys.exit(1) insufficient for safe tool execution in an agent loop? What should be used instead?",
+      "options": [
+        "Because sys.exit(1) terminates the entire Python process; tool errors should be caught and returned as structured error dictionaries",
+        "Because sys.exit(1) is not supported in async contexts",
+        "Because the Anthropic SDK intercepts sys.exit calls",
+        "Because 1 is not a valid exit code on all operating systems"
+      ],
+      "correct": 0,
+      "explanation": "sys.exit(1) raises SystemExit, which propagates up and kills the entire server process. In an agent loop, a tool failure should never crash the application — it should return a structured error like {'error': 'FileNotFoundError: ...'} that the LLM can read and reason about. The model can then try a different approach or report the error to the user gracefully."
+    },
+    {
+      "id": "q5",
+      "question": "Which technique defeats path traversal attacks (e.g., ../../etc/passwd) when validating tool-generated file paths?",
+      "options": [
+        "Checking that the path string does not contain '..'",
+        "Calling Path(path_str).resolve() to get the absolute path, then checking it is relative to the allowed directory",
+        "Rejecting any path longer than 100 characters",
+        "URL-encoding the path before comparing it to the allowlist"
+      ],
+      "correct": 1,
+      "explanation": "String checks for '..' can be defeated by encoding variations (e.g., %2e%2e) or by constructing paths that resolve to sensitive locations without containing '..'. Path.resolve() calls the OS to canonicalise the path — resolving symlinks, normalising separators, and eliminating all '..' components — before the boundary check. This makes it robust against all path traversal variants."
+    },
+    {
+      "id": "q6",
+      "question": "In OpenTelemetry-instrumented agent code, what is the correct way to record a caught exception on the current span so it appears as an error in the trace?",
+      "options": [
+        "span.add_event('error', {'message': str(e)})",
+        "span.record_exception(e) followed by span.set_status(trace.StatusCode.ERROR, str(e))",
+        "tracer.log_exception(e, span_id=span.context.span_id)",
+        "span.set_attribute('error', True) and span.set_attribute('error.message', str(e))"
+      ],
+      "correct": 1,
+      "explanation": "The OpenTelemetry Python SDK provides span.record_exception(e) which captures the exception type, message, and stack trace as a structured span event. You must also call span.set_status(StatusCode.ERROR) separately — record_exception alone does not change the span's status code, so the span would appear as successful in the trace even though it caught an exception."
+    }
+  ]
+}

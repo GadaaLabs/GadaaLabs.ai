@@ -1,0 +1,122 @@
+---
+title: "Vector Databases"
+description: "Understand HNSW and IVF indexing, compare Pinecone, Chroma, and Qdrant, and design metadata filters for precision retrieval."
+order: 4
+duration: 16
+---
+
+A vector database stores high-dimensional embeddings and answers approximate nearest-neighbour (ANN) queries in milliseconds. The word "approximate" is key: ANN trades a small accuracy loss for orders-of-magnitude speed improvement over exact nearest-neighbour search across millions of vectors.
+
+## ANN Index Algorithms
+
+| Algorithm | Full name | Best for | Trade-offs |
+|---|---|---|---|
+| HNSW | Hierarchical Navigable Small World | Low-latency online queries | High memory usage |
+| IVF | Inverted File Index | Large-scale batch retrieval | Requires training on corpus |
+| IVF+PQ | IVF + Product Quantization | Very large corpora (>100M) | Lower accuracy |
+| FLAT | Exact brute force | < 100k vectors | O(n) per query, no approximation |
+
+HNSW is the default in most production RAG systems. It builds a layered graph where upper layers provide coarse navigation and lower layers provide fine-grained search, achieving O(log n) average query time.
+
+## Vector Database Comparison
+
+| Database | Hosting | HNSW | Metadata filtering | Pricing model |
+|---|---|---|---|---|
+| Pinecone | Managed cloud | Yes | Yes (rich) | Per vector/query |
+| Qdrant | Self-host or cloud | Yes | Yes (payload filters) | Open source + cloud |
+| Chroma | Local / self-host | Yes | Yes (where clauses) | Open source |
+| pgvector | PostgreSQL extension | Yes (v0.5+) | Full SQL | Self-host |
+| Weaviate | Self-host or cloud | Yes | Yes (GraphQL) | Open source + cloud |
+
+For prototyping and teams without infrastructure constraints, Chroma is the fastest path. For production at scale with SLA requirements, Qdrant self-hosted or Pinecone managed are the most common choices.
+
+## Chroma — Local Prototype
+
+```python
+import chromadb
+from sentence_transformers import SentenceTransformer
+
+client  = chromadb.PersistentClient(path="./chroma_db")
+model   = SentenceTransformer("BAAI/bge-large-en-v1.5")
+
+collection = client.get_or_create_collection(
+    name="knowledge_base",
+    metadata={"hnsw:space": "cosine"},
+)
+
+# Upsert documents
+chunks     = ["The Gadaa system divides society into grades...", "Siqqee is..."]
+embeddings = model.encode(chunks, normalize_embeddings=True).tolist()
+metadatas  = [{"source": "wiki", "year": 2023}, {"source": "paper", "year": 2021}]
+
+collection.upsert(
+    ids        = [f"chunk_{i}" for i in range(len(chunks))],
+    embeddings = embeddings,
+    documents  = chunks,
+    metadatas  = metadatas,
+)
+
+# Query with metadata filter
+results = collection.query(
+    query_embeddings = model.encode(["Gadaa democracy"], normalize_embeddings=True).tolist(),
+    n_results        = 3,
+    where            = {"year": {"$gte": 2022}},  # only recent sources
+)
+```
+
+## Qdrant — Production Setup
+
+```python
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, Range
+
+client = QdrantClient(url="http://localhost:6333")
+
+client.recreate_collection(
+    collection_name="knowledge_base",
+    vectors_config=VectorParams(size=1024, distance=Distance.COSINE),
+)
+
+# Upload points with payload (metadata)
+points = [
+    PointStruct(
+        id      = i,
+        vector  = embeddings[i],
+        payload = {"text": chunks[i], "source": "wiki", "year": 2023},
+    )
+    for i in range(len(chunks))
+]
+client.upsert(collection_name="knowledge_base", points=points)
+
+# Query with payload filter
+results = client.search(
+    collection_name = "knowledge_base",
+    query_vector    = query_embedding,
+    limit           = 5,
+    query_filter    = Filter(
+        must=[FieldCondition(key="year", range=Range(gte=2022))]
+    ),
+)
+```
+
+## Index Tuning for HNSW
+
+```python
+# HNSW parameters (passed at collection creation)
+HNSW_CONFIG = {
+    "m":            16,     # number of edges per node — higher = better recall, more memory
+    "ef_construct": 200,    # search width during index build — higher = better quality, slower build
+    # ef at query time (set per-query)
+    "ef":           128,    # higher = better recall, slower queries
+}
+```
+
+As a rule: increase `m` to improve recall, increase `ef_construct` for higher index quality, and increase `ef` to trade query latency for recall.
+
+## Summary
+
+- ANN indexes (HNSW, IVF) trade a small accuracy loss for O(log n) query performance instead of O(n) brute force.
+- HNSW is the default for production RAG — it offers the best latency-recall trade-off for online query workloads.
+- Chroma is ideal for prototypes; Qdrant is a strong self-hosted production choice; Pinecone is the easiest fully managed option.
+- Use metadata filters at query time to narrow the search space — they are far more efficient than post-retrieval filtering.
+- Tune HNSW parameters (`m`, `ef_construct`, `ef`) based on your recall@k target and acceptable query latency.

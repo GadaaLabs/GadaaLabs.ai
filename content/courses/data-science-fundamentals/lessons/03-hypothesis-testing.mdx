@@ -1,0 +1,156 @@
+---
+title: "Hypothesis Testing"
+description: "Understand null hypotheses, Type I and II errors, p-values, and when to use a t-test versus a chi-square test — plus the most common pitfalls that invalidate results."
+order: 3
+duration: 13
+---
+
+Hypothesis testing gives you a principled framework for making decisions from noisy data. It is used in A/B testing, clinical trials, product analytics, and scientific research. Unfortunately, it is also one of the most widely misunderstood concepts in quantitative work. This lesson teaches the mechanics and the mindset to apply it correctly.
+
+## The Null Hypothesis Framework
+
+Every hypothesis test involves two competing explanations:
+
+- **Null hypothesis (H₀)**: The default assumption — there is no effect, no difference, no relationship. We assume H₀ is true until evidence overwhelmingly suggests otherwise.
+- **Alternative hypothesis (H₁)**: The claim we want to support — there is an effect, difference, or relationship.
+
+The test does not prove H₁. It asks: "How unlikely is the data I observed, assuming H₀ is true?" If the data is very unlikely under H₀, we reject H₀ in favour of H₁.
+
+## Type I and Type II Errors
+
+Two types of mistakes are possible:
+
+| | H₀ is True | H₀ is False |
+|---|---|---|
+| **Reject H₀** | Type I Error (False Positive) — α | Correct (Power = 1 − β) |
+| **Fail to Reject H₀** | Correct | Type II Error (False Negative) — β |
+
+- **α (significance level)**: The probability of a Type I error you are willing to accept. Conventionally set at 0.05.
+- **β**: The probability of a Type II error. Power = 1 − β; you want power ≥ 0.80.
+- Reducing α (being more conservative) increases β — there is a fundamental tradeoff.
+
+## P-Values: What They Are and Are Not
+
+The **p-value** is the probability of observing data as extreme as (or more extreme than) what you observed, *given that H₀ is true*.
+
+A p-value of 0.03 means: "If H₀ were true, there is a 3% chance of seeing a result this extreme or more extreme by random variation alone."
+
+What a p-value is **not**:
+- The probability that H₀ is true.
+- A measure of effect size or practical significance.
+- Proof of anything.
+
+## The Independent Samples t-Test
+
+Use the t-test when you want to compare the means of two groups drawn from approximately normal distributions:
+
+```python
+import numpy as np
+from scipy import stats
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+np.random.seed(42)
+
+# A/B test: does a new checkout page increase order value?
+control  = np.random.normal(loc=45.0, scale=15.0, size=200)  # old page
+treatment = np.random.normal(loc=48.5, scale=15.0, size=200)  # new page
+
+t_stat, p_value = stats.ttest_ind(control, treatment, equal_var=True)
+
+print(f"Control mean:   ${control.mean():.2f}")
+print(f"Treatment mean: ${treatment.mean():.2f}")
+print(f"Difference:     ${treatment.mean() - control.mean():.2f}")
+print(f"t-statistic:    {t_stat:.4f}")
+print(f"p-value:        {p_value:.4f}")
+
+alpha = 0.05
+if p_value < alpha:
+    print(f"\nReject H₀: significant difference at α={alpha}")
+else:
+    print(f"\nFail to reject H₀: insufficient evidence at α={alpha}")
+```
+
+Check assumptions before interpreting results:
+
+```python
+# Normality check — Shapiro-Wilk (suitable for n < 2000)
+_, p_normal_control   = stats.shapiro(control[:50])
+_, p_normal_treatment = stats.shapiro(treatment[:50])
+print(f"Shapiro p-value (control):   {p_normal_control:.4f}")
+print(f"Shapiro p-value (treatment): {p_normal_treatment:.4f}")
+
+# Equal variance check — Levene's test
+_, p_levene = stats.levene(control, treatment)
+print(f"Levene p-value: {p_levene:.4f}")
+# If p_levene < 0.05, use equal_var=False (Welch's t-test)
+```
+
+## The Chi-Square Test
+
+Use the chi-square test for independence when both variables are categorical:
+
+```python
+import pandas as pd
+
+# Did the checkout page variant affect payment method preference?
+observed = pd.DataFrame(
+    [[85, 65, 50],   # control: credit, debit, paypal
+     [90, 55, 55]],  # treatment
+    index=["control", "treatment"],
+    columns=["credit", "debit", "paypal"]
+)
+
+chi2, p_chi2, dof, expected = stats.chi2_contingency(observed)
+
+print(f"Chi-square statistic: {chi2:.4f}")
+print(f"Degrees of freedom:   {dof}")
+print(f"p-value:              {p_chi2:.4f}")
+
+print("\nExpected frequencies:")
+print(pd.DataFrame(expected.round(1), index=observed.index, columns=observed.columns))
+```
+
+## Choosing the Right Test
+
+| Situation | Recommended Test |
+|---|---|
+| Compare means of 2 independent groups (normal data) | Independent samples t-test |
+| Compare means of 2 paired/repeated groups | Paired t-test |
+| Compare means of 3+ groups | One-way ANOVA |
+| Test association between 2 categorical variables | Chi-square test of independence |
+| Compare 2 groups with non-normal distributions | Mann-Whitney U test |
+| Test correlation between 2 continuous variables | Pearson correlation (normal) / Spearman (rank) |
+
+## Common Pitfalls
+
+**P-hacking (data dredging)**: Running many tests and reporting only the ones with p < 0.05. If you run 20 tests at α = 0.05, you expect 1 false positive by chance. Correct for multiple comparisons using Bonferroni correction (divide α by the number of tests) or the Benjamini-Hochberg procedure.
+
+```python
+# Bonferroni correction
+n_tests = 10
+alpha_corrected = 0.05 / n_tests   # 0.005
+print(f"Bonferroni-corrected alpha: {alpha_corrected}")
+```
+
+**Ignoring effect size**: A p-value of 0.001 with n = 100,000 may indicate a trivially small, practically meaningless difference. Always report effect size alongside p-values:
+
+```python
+# Cohen's d — standardised effect size for t-tests
+def cohens_d(a, b):
+    pooled_std = np.sqrt(((len(a)-1)*a.std()**2 + (len(b)-1)*b.std()**2) / (len(a)+len(b)-2))
+    return (a.mean() - b.mean()) / pooled_std
+
+d = cohens_d(treatment, control)
+print(f"Cohen's d: {d:.3f}")   # 0.2 small, 0.5 medium, 0.8 large
+```
+
+**Stopping early**: Peeking at A/B test results and stopping as soon as p < 0.05 inflates Type I error. Use sequential testing methods (e.g., always-valid p-values) or pre-register your sample size using a power analysis.
+
+## Summary
+
+- The null hypothesis assumes no effect; the test asks how improbable the observed data is under that assumption.
+- α (Type I error rate) and β (Type II error rate) are in fundamental tension; set both before collecting data.
+- A p-value is the probability of the data given H₀ — not the probability that H₀ is true.
+- Use the t-test for comparing two group means (check normality and equal variance); use the chi-square test for associations between categorical variables.
+- P-hacking, ignoring effect size, and early stopping are the three most common ways hypothesis testing goes wrong in practice.

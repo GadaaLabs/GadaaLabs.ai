@@ -1,0 +1,108 @@
+---
+title: "Embedding Models"
+description: "Understand contrastive learning, compare embedding models on MTEB benchmarks, and fine-tune for domain-specific retrieval."
+order: 3
+duration: 15
+---
+
+An embedding model converts text into a dense vector where semantic similarity becomes geometric proximity. The choice of model determines the ceiling of your retrieval quality — no amount of clever chunking or re-ranking recovers from a poorly calibrated embedding space. This lesson covers how embedding models are trained, how to select one from public benchmarks, and when to fine-tune.
+
+## How Embedding Models Learn
+
+Modern embedding models are trained with contrastive learning on (query, positive passage, negative passages) triplets:
+
+```python
+# Conceptual training objective
+def contrastive_loss(query_emb, pos_emb, neg_embs, temperature=0.07):
+    """
+    InfoNCE loss: maximise similarity to positive, minimise to negatives.
+    """
+    import torch, torch.nn.functional as F
+
+    pos_sim  = F.cosine_similarity(query_emb, pos_emb, dim=-1) / temperature
+    neg_sims = F.cosine_similarity(
+        query_emb.unsqueeze(0), torch.stack(neg_embs), dim=-1
+    ) / temperature
+
+    logits = torch.cat([pos_sim.unsqueeze(0), neg_sims])
+    target = torch.tensor([0])  # positive is at index 0
+    return F.cross_entropy(logits.unsqueeze(0), target)
+```
+
+The temperature parameter controls sharpness: lower values push the model to produce more discriminative embeddings.
+
+## MTEB Benchmark Comparison
+
+The Massive Text Embedding Benchmark (MTEB) evaluates models across 56 tasks. For RAG, focus on the Retrieval category:
+
+| Model | MTEB Retrieval (avg NDCG@10) | Dimensions | Max tokens | License |
+|---|---|---|---|---|
+| `bge-large-en-v1.5` | 54.29 | 1024 | 512 | MIT |
+| `text-embedding-3-large` | 55.44 | 3072 | 8191 | Commercial |
+| `e5-large-v2` | 50.56 | 1024 | 512 | MIT |
+| `all-MiniLM-L6-v2` | 40.69 | 384 | 256 | Apache 2.0 |
+| `nomic-embed-text-v1` | 53.61 | 768 | 8192 | Apache 2.0 |
+
+For most production systems, `bge-large-en-v1.5` or `nomic-embed-text-v1` give excellent quality-to-cost ratios. Use `all-MiniLM-L6-v2` for prototyping only.
+
+## Using sentence-transformers
+
+```python
+from sentence_transformers import SentenceTransformer
+import numpy as np
+
+model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+
+# BGE models require a query prefix for retrieval
+queries   = ["Instruction: Represent this sentence for searching relevant passages\n"
+             + q for q in ["What is the Gadaa system?"]]
+passages  = ["The Gadaa system is a democratic institution of the Oromo people."]
+
+q_embs = model.encode(queries,  normalize_embeddings=True, batch_size=32)
+p_embs = model.encode(passages, normalize_embeddings=True, batch_size=32)
+
+scores = q_embs @ p_embs.T
+print(f"Similarity: {scores[0][0]:.4f}")
+```
+
+Always normalise embeddings before computing cosine similarity — it lets you use dot product (faster) in place of the full cosine formula.
+
+## Domain Fine-Tuning with sentence-transformers
+
+When the pre-trained model underperforms on your domain, fine-tune with your own (query, relevant passage) pairs:
+
+```python
+from sentence_transformers import SentenceTransformer, InputExample, losses
+from torch.utils.data import DataLoader
+
+base_model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+
+train_examples = [
+    InputExample(texts=["How does Gadaa governance work?",
+                         "The Gadaa system divides society into grades..."]),
+    InputExample(texts=["What is the Siqqee institution?",
+                         "Siqqee is the parallel institution for Oromo women..."]),
+    # ... hundreds more pairs
+]
+
+loader = DataLoader(train_examples, shuffle=True, batch_size=16)
+loss   = losses.MultipleNegativesRankingLoss(model=base_model)
+
+base_model.fit(
+    train_objectives=[(loader, loss)],
+    epochs=3,
+    warmup_steps=100,
+    output_path="models/gadaa-bge-finetuned",
+    show_progress_bar=True,
+)
+```
+
+You need at least 500–1000 high-quality pairs for fine-tuning to improve over the base model. Mine them from user search logs: queries that led to clicks are positive pairs.
+
+## Summary
+
+- Embedding models learn via contrastive loss: minimise the distance to positive passages and maximise distance to negatives.
+- Use MTEB Retrieval scores to compare models objectively; do not rely on model marketing claims.
+- `bge-large-en-v1.5` and `nomic-embed-text-v1` are strong open-source choices; `text-embedding-3-large` leads on benchmarks with a commercial API.
+- Always normalise embeddings to unit length before computing similarity — it makes cosine similarity equivalent to dot product.
+- Fine-tune on domain-specific (query, passage) pairs when general-purpose models underperform; source pairs from click logs or expert annotations.

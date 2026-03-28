@@ -1,0 +1,80 @@
+{
+  "slug": "data-science-fundamentals",
+  "title": "Data Science Fundamentals",
+  "description": "Test your knowledge of descriptive statistics, hypothesis testing, regression, classification, and model evaluation.",
+  "difficulty": "beginner",
+  "questions": [
+    {
+      "id": "q1",
+      "question": "A dataset of employee salaries has a mean of $92,000 and a median of $68,000. A data scientist reports the mean as the 'typical' salary. What is wrong with this choice?",
+      "options": [
+        "Nothing — the mean is always the most accurate measure of central tendency",
+        "The mean is pulled upward by a small number of very high salaries, making the median a more representative measure of 'typical'",
+        "The median should only be used for categorical data",
+        "The mean and median should always be averaged together for a reliable estimate"
+      ],
+      "correct": 1,
+      "explanation": "When mean > median, the distribution is right-skewed. High-salary outliers (executives, specialists) pull the mean far above what most employees earn. The median — the salary that splits the workforce exactly in half — is the correct summary for skewed data and is robust to extreme values."
+    },
+    {
+      "id": "q2",
+      "question": "A medical test for a rare disease (1% prevalence) has 99% sensitivity and 95% specificity. A patient tests positive. Approximately what is the probability they actually have the disease?",
+      "options": [
+        "99% — the test has 99% sensitivity",
+        "95% — the test has 95% specificity",
+        "About 17% — the low base rate makes false positives dominate",
+        "50% — with a binary outcome, the probability is always 50%"
+      ],
+      "correct": 2,
+      "explanation": "Applying Bayes' theorem: P(positive) = 0.99 × 0.01 + 0.05 × 0.99 ≈ 0.0594. P(disease | positive) = (0.99 × 0.01) / 0.0594 ≈ 0.167, or about 17%. The low base rate (1%) means false positives far outnumber true positives even with an accurate test — this is the base rate fallacy."
+    },
+    {
+      "id": "q3",
+      "question": "A team runs an A/B test with n=50 per group and gets p=0.048. A colleague suggests running the test for two more weeks to 'confirm'. Why is this problematic?",
+      "options": [
+        "It is never problematic to collect more data",
+        "Peeking at results and extending the test only when p is close to 0.05 inflates the Type I error rate above the nominal alpha",
+        "The test should be stopped because p < 0.05 proves the alternative hypothesis",
+        "Two more weeks will always reduce the p-value further"
+      ],
+      "correct": 1,
+      "explanation": "This is the 'optional stopping' problem. Repeatedly checking p-values and extending the experiment when p is near the threshold inflates the true Type I error rate well above 5%. The sample size must be pre-registered using a power analysis before data collection begins. Sequential testing methods (like always-valid p-values) exist for principled continuous monitoring."
+    },
+    {
+      "id": "q4",
+      "question": "In a linear regression model predicting house price, the coefficient on 'sqft' is 150 and the coefficient on 'bedrooms' is 30,000. How should the bedroom coefficient be interpreted?",
+      "options": [
+        "A house with more bedrooms costs $30,000 in total",
+        "Each additional bedroom is associated with a $30,000 increase in predicted price, holding square footage constant",
+        "30,000 is the baseline price before any features are considered",
+        "The model predicts bedroom count from price with a slope of 30,000"
+      ],
+      "correct": 1,
+      "explanation": "In multiple linear regression, each coefficient represents the marginal effect of that feature on the target, holding all other features constant (ceteris paribus). The bedroom coefficient of 30,000 means: for two houses of identical square footage, the one with one more bedroom is predicted to sell for $30,000 more."
+    },
+    {
+      "id": "q5",
+      "question": "A fraud detection model achieves 99.2% accuracy on a dataset where 0.8% of transactions are fraudulent. Is this a good model?",
+      "options": [
+        "Yes — 99.2% accuracy is excellent by any standard",
+        "Not necessarily — a model that always predicts 'not fraud' achieves 99.2% accuracy without detecting any fraud",
+        "Yes — fraud detection requires accuracy above 99%",
+        "No — accuracy above 99% always indicates overfitting"
+      ],
+      "correct": 1,
+      "explanation": "This is the accuracy paradox. When the positive class (fraud) is rare at 0.8%, predicting the majority class for every observation yields 99.2% accuracy with zero fraud caught. The relevant metrics are recall (what fraction of actual fraud is detected) and precision (of flagged transactions, how many are actual fraud), not accuracy."
+    },
+    {
+      "id": "q6",
+      "question": "A learning curve shows that training accuracy is 97% and validation accuracy is 72%, and both curves have plateaued with more data. What is the most appropriate next step?",
+      "options": [
+        "Collect more training data",
+        "Increase model complexity — the model is underfitting",
+        "Apply regularisation or use a simpler model — the model is overfitting (high variance)",
+        "Lower the classification threshold to improve validation accuracy"
+      ],
+      "correct": 2,
+      "explanation": "A large gap between training and validation accuracy, even after adding more data, is the hallmark of high variance (overfitting). The model has memorised training patterns that do not generalise. The correct interventions are regularisation (Ridge, Lasso, dropout, pruning), reducing model complexity, or adding more features with greater signal. Collecting more data can help but does not address the fundamental model complexity issue when curves have already plateaued."
+    }
+  ]
+}

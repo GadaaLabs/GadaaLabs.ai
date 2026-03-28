@@ -1,0 +1,80 @@
+{
+  "slug": "data-analysis-python",
+  "title": "Data Analysis with Python",
+  "description": "Test your understanding of pandas GroupBy, dtype casting, merge join types, numpy broadcasting, and core EDA concepts.",
+  "difficulty": "beginner",
+  "questions": [
+    {
+      "id": "q1",
+      "question": "You run df.groupby('region')['revenue'].agg(['mean', 'sum', 'count']). Which of the following statements about the result is TRUE?",
+      "options": [
+        "The result has the same number of rows as the original DataFrame",
+        "The result has one row per unique value of 'region', with columns 'mean', 'sum', and 'count'",
+        "The 'region' column remains as a regular column rather than becoming the index",
+        "The 'count' column includes null values in its count"
+      ],
+      "correct": 1,
+      "explanation": ".agg() reduces each group to a single summary row. By default, the groupby key ('region') becomes the index of the result. The 'count' aggregation counts only non-null values."
+    },
+    {
+      "id": "q2",
+      "question": "A column of ZIP codes was loaded from CSV and has dtype float64, with values like 1001.0, 10001.0, 2030.0. What is the correct sequence of operations to fix this?",
+      "options": [
+        "df['zip'] = df['zip'].astype(str)",
+        "df['zip'] = df['zip'].astype(int).astype(str).str.zfill(5)",
+        "df['zip'] = df['zip'].astype(str).str.replace('.0', '', regex=False).str.zfill(5)",
+        "Both B and C are correct approaches"
+      ],
+      "correct": 3,
+      "explanation": "Both approaches work correctly. Option B casts to int (dropping the .0), then to str, then zero-pads to 5 digits. Option C strips the trailing '.0' from the string representation then zero-pads. If the column contains nulls, option C with errors='coerce' is safer since int cannot store NaN."
+    },
+    {
+      "id": "q3",
+      "question": "You call orders.merge(customers, on='customer_id', how='left'). The orders DataFrame has 500 rows and the customers DataFrame has 300 rows. Some customer_ids in orders do not exist in customers. What will the merged result contain?",
+      "options": [
+        "Exactly 300 rows — only rows where both DataFrames have the key",
+        "Exactly 500 rows — all orders, with NaN in customer columns where no match exists",
+        "Up to 500 rows — rows from orders with no match are dropped",
+        "More than 500 rows — unmatched customer rows are appended"
+      ],
+      "correct": 1,
+      "explanation": "A left join retains ALL rows from the left DataFrame (orders). For orders whose customer_id has no corresponding row in customers, the columns sourced from customers are filled with NaN. The right DataFrame's unmatched rows are discarded."
+    },
+    {
+      "id": "q4",
+      "question": "Given a 2-D NumPy array `matrix` of shape (100, 4) and a 1-D array `means` of shape (4,) computed as matrix.mean(axis=0), what does `matrix - means` produce?",
+      "options": [
+        "A ValueError — shapes (100, 4) and (4,) are incompatible",
+        "A shape (100, 4) array where each row has the column means subtracted from it",
+        "A shape (4,) array of zeros",
+        "A shape (100,) array of row-wise mean differences"
+      ],
+      "correct": 1,
+      "explanation": "NumPy broadcasting pads means from shape (4,) to (1, 4), then stretches it to (100, 4) to match matrix. The subtraction is applied element-wise, centering each column by its mean. This is a standard data-centering operation."
+    },
+    {
+      "id": "q5",
+      "question": "Which pandas method is most appropriate for converting a DataFrame from wide format (one column per year: '2021', '2022', '2023') to long format (two columns: 'year' and 'value')?",
+      "options": [
+        "df.pivot_table()",
+        "df.groupby()",
+        "df.melt()",
+        "df.stack()"
+      ],
+      "correct": 2,
+      "explanation": "df.melt() is specifically designed for wide-to-long reshaping. You specify id_vars (columns to keep as identifiers), value_vars (columns to unpivot), var_name (name for the new key column), and value_name (name for the new value column). df.stack() can also produce long format but results in a MultiIndex Series rather than a clean DataFrame."
+    },
+    {
+      "id": "q6",
+      "question": "During an EDA workflow, you notice that a numeric column's mean is $14,300 but its median is $8,200. What does this pattern most strongly suggest?",
+      "options": [
+        "The column has many missing values that are being ignored",
+        "The distribution is left-skewed with a long lower tail",
+        "The distribution is right-skewed — a small number of large values are pulling the mean upward",
+        "The column has been incorrectly cast from a string type"
+      ],
+      "correct": 2,
+      "explanation": "When mean > median, the distribution is right-skewed (positively skewed). A small number of unusually large values pull the mean above the median. This is typical of income, transaction amounts, and house prices. The recommended fix before modelling is a log transform."
+    }
+  ]
+}

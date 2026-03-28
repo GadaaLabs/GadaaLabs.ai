@@ -1,0 +1,140 @@
+---
+title: "Multi-Step Agents"
+description: "Implement the ReAct loop from scratch, add a reflection step for error correction, and build a planner-executor pattern for complex tasks."
+order: 3
+duration: 16
+---
+
+Single-tool agents are straightforward. The difficulty escalates when a task requires five or more sequential tool calls where each step depends on the last, the model may choose a wrong path, and recovery requires understanding why the previous step failed. This lesson builds progressively more capable multi-step agents.
+
+## ReAct from Scratch
+
+The ReAct loop encodes reasoning and acting in alternating text blocks. Implementing it explicitly (rather than relying on a framework) gives you full control:
+
+```python
+SYSTEM_PROMPT = """You are a research assistant. For each task:
+
+1. Write a Thought explaining your reasoning.
+2. Write an Action in the format: Action: tool_name({"arg": "value"})
+3. Wait for the Observation.
+4. Repeat until you have a Final Answer.
+5. Write: Final Answer: <your answer>
+
+Available tools: search_web, read_url, calculator, write_file
+"""
+
+def parse_action(text: str) -> tuple[str, dict] | None:
+    import re, json
+    match = re.search(r"Action:\s*(\w+)\((\{.*?\})\)", text, re.DOTALL)
+    if not match:
+        return None
+    tool_name = match.group(1)
+    args      = json.loads(match.group(2))
+    return tool_name, args
+
+def react_agent(task: str, max_steps: int = 8) -> str:
+    history = f"Task: {task}\n"
+
+    for step in range(max_steps):
+        response = llm_call(system=SYSTEM_PROMPT, user=history)
+        history += response + "\n"
+
+        if "Final Answer:" in response:
+            return response.split("Final Answer:")[-1].strip()
+
+        action = parse_action(response)
+        if not action:
+            history += "Observation: No valid action found. Try again.\n"
+            continue
+
+        tool_name, args = action
+        result = execute_tool(tool_name, args)
+        history += f"Observation: {result}\n"
+
+    return "Reached step limit without a final answer."
+```
+
+## Reflection Step
+
+Adding a reflection step after tool failures dramatically reduces stuck loops:
+
+```python
+REFLECT_PROMPT = """The previous action failed. Analyse what went wrong and suggest a correction.
+
+Failed action: {action}
+Error: {error}
+Task context: {context}
+
+What should the agent do differently?"""
+
+def reflect_on_error(action: dict, error: str, context: str) -> str:
+    return llm_call(
+        system = "You are a debugging assistant for AI agents.",
+        user   = REFLECT_PROMPT.format(
+            action  = json.dumps(action),
+            error   = error,
+            context = context,
+        )
+    )
+```
+
+Insert the reflection output back into the agent's history as a synthetic "Observation: [reflection]" so it informs the next action.
+
+## Planner-Executor Pattern
+
+For long tasks (10+ steps), decompose planning from execution. The planner generates a step-by-step plan; the executor runs each step:
+
+```python
+PLANNER_PROMPT = """Break this task into a numbered list of specific, executable steps.
+Each step must be independently actionable. Output ONLY the numbered list.
+
+Task: {task}"""
+
+EXECUTOR_PROMPT = """Execute this single step as part of a larger task.
+
+Overall task: {overall_task}
+Completed steps: {completed}
+Current step: {current_step}
+
+Use the available tools to complete this step, then output: Step Result: <result>"""
+
+def planner_executor_agent(task: str) -> list[str]:
+    # Phase 1: plan
+    plan_text = llm_call(system="You are a task planner.",
+                         user=PLANNER_PROMPT.format(task=task))
+    steps = [line.split(". ", 1)[1] for line in plan_text.strip().split("\n")
+             if line and line[0].isdigit()]
+
+    completed_steps = []
+
+    # Phase 2: execute each step
+    for step in steps:
+        result = react_agent(
+            task=EXECUTOR_PROMPT.format(
+                overall_task   = task,
+                completed      = "\n".join(completed_steps) or "None",
+                current_step   = step,
+            ),
+            max_steps=4,
+        )
+        completed_steps.append(f"{step} → {result}")
+
+    return completed_steps
+```
+
+## Comparison of Agent Architectures
+
+| Architecture | Steps | Error recovery | Cost | Best for |
+|---|---|---|---|---|
+| Single-loop ReAct | Unlimited | Low (no backtracking) | Low | Simple tool tasks |
+| ReAct + reflection | Unlimited | Medium (local correction) | Medium | Tasks with unreliable tools |
+| Planner-executor | Fixed plan | Low (re-plan if needed) | Medium | Long, structured tasks |
+| Multi-agent | Per-agent | High (peer review) | High | Complex research or coding |
+
+## Summary
+
+- Implement ReAct explicitly when you need full control over the agent loop, stopping conditions, and history management.
+- Add a reflection step that fires on tool errors and injects corrective reasoning back into the conversation history.
+- Use the planner-executor pattern to decompose tasks with 10+ steps: planning and execution require different LLM behaviours.
+- Set hard step limits on every agent loop — runaway agents are both expensive and difficult to debug after the fact.
+- Log the full reasoning trace (Thoughts, Actions, Observations) for every production run; it is your only debugging tool when an agent fails silently.

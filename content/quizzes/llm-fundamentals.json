@@ -1,0 +1,70 @@
+{
+  "slug": "llm-fundamentals",
+  "title": "LLM Fundamentals",
+  "description": "Test your understanding of how large language models work — tokens, attention, context windows, and the training pipeline.",
+  "difficulty": "beginner",
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What is the primary training objective of a large language model during pre-training?",
+      "options": [
+        "Classify images into categories",
+        "Predict the next token in a sequence",
+        "Translate text between languages",
+        "Generate SQL queries from natural language"
+      ],
+      "correct": 1,
+      "explanation": "LLMs are trained via self-supervised next-token prediction. Everything else — translation, coding, summarisation — emerges from doing this at massive scale."
+    },
+    {
+      "id": "q2",
+      "question": "Approximately how many tokens does the sentence 'The quick brown fox' contain?",
+      "options": ["2 tokens", "4 tokens", "8 tokens", "12 tokens"],
+      "correct": 1,
+      "explanation": "Common English words are usually 1 token each. 'The', 'quick', 'brown', 'fox' = 4 tokens. The rule of thumb is 1 token ≈ 0.75 words."
+    },
+    {
+      "id": "q3",
+      "question": "What is the computational complexity of the attention mechanism with respect to sequence length n?",
+      "options": ["O(n)", "O(n log n)", "O(n²)", "O(2^n)"],
+      "correct": 2,
+      "explanation": "Standard self-attention is O(n²) in sequence length because every token attends to every other token. This is why long contexts cost significantly more compute."
+    },
+    {
+      "id": "q4",
+      "question": "What does a KV cache store during transformer inference?",
+      "options": [
+        "The model weights for fast loading",
+        "Key and value matrices from previously processed tokens",
+        "A cache of previous API responses",
+        "Embeddings for the entire vocabulary"
+      ],
+      "correct": 1,
+      "explanation": "The KV cache stores the key and value projections of previously seen tokens so the model doesn't recompute them on every generation step. It trades memory for speed."
+    },
+    {
+      "id": "q5",
+      "question": "Which training stage teaches an LLM to follow instructions?",
+      "options": [
+        "Pre-training on internet text",
+        "Supervised Fine-Tuning (SFT) on instruction/response pairs",
+        "Embedding layer initialisation",
+        "Tokeniser training with BPE"
+      ],
+      "correct": 1,
+      "explanation": "Pre-training gives general language understanding. SFT on curated instruction/response pairs teaches the model to follow user instructions reliably."
+    },
+    {
+      "id": "q6",
+      "question": "What is the 'lost in the middle' problem?",
+      "options": [
+        "Tokens in the middle of a word are often split incorrectly",
+        "Models perform worse at recalling information placed in the middle of a long context",
+        "The model loses track of the conversation after 10 turns",
+        "Embeddings in the middle layers are less informative"
+      ],
+      "correct": 1,
+      "explanation": "Research shows models recall information better from the start and end of a context window than from the middle. Critical information should be placed at the edges."
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+---
+title: "Tokens, Embeddings & Vector Space"
+description: "How text is converted into numbers that a neural network can process — the full pipeline from raw string to model input."
+order: 2
+duration: 12
+---
+
+Before a model can process text, the text must become numbers. This happens in two stages: **tokenisation** → **embedding**. Understanding both is essential for writing efficient prompts and debugging unexpected model behaviour.
+
+## Tokenisation
+
+A tokeniser splits text into chunks called tokens. Most modern LLMs use **Byte Pair Encoding (BPE)**, which builds a vocabulary of common subword units by iteratively merging the most frequent pairs.
+
+```python
+# Install: pip install tiktoken
+import tiktoken
+
+enc = tiktoken.get_encoding("cl100k_base")
+
+examples = [
+    "Hello",           # 1 token
+    "tokenization",    # 3 tokens: "token", "ization" -> actually "token", "iz", "ation"
+    "supercalifragilistic",  # many tokens
+    "print('hello')",  # code is tokenised differently
+]
+
+for text in examples:
+    tokens = enc.encode(text)
+    print(f"{text!r:30} → {len(tokens)} tokens: {tokens}")
+```
+
+Key observations:
+- Common English words → 1 token
+- Rare words, names, and code identifiers → multiple tokens
+- Numbers are often split digit-by-digit: `1234` → `["12", "34"]`
+- Whitespace is included in tokens: `" hello"` ≠ `"hello"`
+
+## Why Tokenisation Matters for You
+
+**Counting costs**: API pricing is per token, not per character. A 10,000-word document is roughly 13,000–15,000 tokens.
+
+**Arithmetic errors**: `9.9 > 9.11` confuses some models because `9.11` is tokenised as `["9", ".", "1", "1"]` — four separate tokens without inherent numeric meaning.
+
+**Code vs prose**: Code is token-inefficient. `function getUserById(id: string)` takes more tokens than its meaning suggests.
+
+## Embeddings
+
+After tokenisation, each token ID is looked up in an **embedding table** — a matrix of learned float vectors. A token ID becomes a dense vector of, say, 4096 numbers.
+
+```
+Token "Paris" → ID 23714 → [0.21, -0.83, 0.45, ..., 0.11]  (4096 dimensions)
+```
+
+These vectors encode meaning. Similar concepts land near each other in this high-dimensional space:
+
+```python
+# Conceptually (not literal values):
+embedding("Paris")  ≈  embedding("London") + embedding("France") - embedding("England")
+embedding("king")   ≈  embedding("queen") - embedding("woman") + embedding("man")
+```
+
+This is not a toy property — it's how the model stores and retrieves factual associations.
+
+## The Attention Layer and Contextual Embeddings
+
+The raw embedding table gives each token a fixed vector regardless of context. The transformer's attention layers transform these into **contextual embeddings** — vectors that encode not just the token's identity but its meaning in the current sequence.
+
+```
+"I deposited cash at the bank."
+"We picnicked by the river bank."
+```
+
+After attention, the vector for "bank" in these two sentences will point in different directions in the embedding space — the model has resolved the ambiguity.
+
+## Practical Implications
+
+1. **Token budgeting**: Use a tokeniser before sending large inputs. Don't guess.
+2. **Semantic search**: Store document embeddings; query with an embedding of the question. Cosine similarity finds relevant chunks. This is the foundation of RAG.
+3. **Unexpected failures**: If a model fails on a specific word or name, check how it tokenises — fragmented tokenisation often explains unusual failures.
+
+In the next lesson, we'll put this knowledge to use and make our first real API call.

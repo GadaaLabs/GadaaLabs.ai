@@ -1,0 +1,164 @@
+---
+title: "Probability Fundamentals"
+description: "Understand conditional probability, the three most important probability distributions, and the intuition behind Bayesian thinking."
+order: 2
+duration: 14
+---
+
+Probability is the mathematical language of uncertainty. Every machine learning model is, at its core, a probability machine — it estimates the likelihood that an input belongs to a class, or the distribution of possible output values. Understanding probability distributions and Bayesian reasoning will make every modelling decision you make more principled.
+
+## Conditional Probability and Independence
+
+Conditional probability answers: "What is the probability of A, given that B has already occurred?"
+
+P(A | B) = P(A ∩ B) / P(B)
+
+```python
+import numpy as np
+from scipy import stats
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Concrete example: email spam detection
+# P(spam) = 0.30 (30% of emails are spam)
+# P(word "free" | spam) = 0.65
+# P(word "free" | not spam) = 0.10
+
+p_spam       = 0.30
+p_free_spam  = 0.65
+p_free_notspam = 0.10
+
+# P(word "free") — total probability
+p_free = p_free_spam * p_spam + p_free_notspam * (1 - p_spam)
+
+# Bayes' theorem: P(spam | "free") = P("free" | spam) * P(spam) / P("free")
+p_spam_given_free = (p_free_spam * p_spam) / p_free
+
+print(f"P(free):              {p_free:.3f}")
+print(f"P(spam | 'free'):     {p_spam_given_free:.3f}")  # ~0.736
+```
+
+Two events are **independent** if P(A | B) = P(A) — knowing B occurred gives no information about A. The naive Bayes classifier assumes all features are independent given the class label, which is rarely true but works surprisingly well in practice.
+
+## The Normal (Gaussian) Distribution
+
+The normal distribution is the most important distribution in statistics. The **Central Limit Theorem** guarantees that the mean of many independent random variables tends toward a normal distribution, regardless of the underlying distribution — which is why means and regression errors are often approximately normal.
+
+```python
+# Normal distribution: N(mu, sigma)
+mu, sigma = 170, 10   # mean height (cm) and std dev
+
+normal_dist = stats.norm(loc=mu, scale=sigma)
+
+# Probability of being taller than 185 cm
+p_above_185 = 1 - normal_dist.cdf(185)
+print(f"P(height > 185cm): {p_above_185:.3f}")   # ~0.067
+
+# The 68-95-99.7 rule
+for n_sigma in [1, 2, 3]:
+    pct = normal_dist.cdf(mu + n_sigma * sigma) - normal_dist.cdf(mu - n_sigma * sigma)
+    print(f"Within {n_sigma}σ: {pct:.3f}")
+
+# Plot the PDF
+x = np.linspace(mu - 4*sigma, mu + 4*sigma, 300)
+fig, ax = plt.subplots(figsize=(9, 4))
+ax.plot(x, normal_dist.pdf(x), color="#2196F3", linewidth=2.5)
+ax.fill_between(x, normal_dist.pdf(x),
+                where=(x >= mu - sigma) & (x <= mu + sigma),
+                alpha=0.3, label="68% (±1σ)", color="#2196F3")
+ax.set_title("Normal Distribution N(170, 10)")
+ax.set_xlabel("Height (cm)")
+ax.set_ylabel("Probability Density")
+ax.legend()
+plt.show()
+```
+
+Distribution properties at a glance:
+
+| Distribution | Shape | Parameters | Common use case |
+|---|---|---|---|
+| Normal | Symmetric bell | μ (mean), σ (std) | Measurement errors, heights, test scores |
+| Poisson | Right-skewed, discrete | λ (rate) | Event counts per unit time/area |
+| Binomial | Discrete, bounded | n (trials), p (success prob) | Binary outcomes over repeated trials |
+| Exponential | Right-skewed, continuous | λ (rate) | Time between events |
+
+## Poisson Distribution
+
+The Poisson distribution models the number of events occurring in a fixed interval when events happen at a known average rate and independently:
+
+```python
+# A server receives on average 12 requests per second
+lam = 12
+poisson_dist = stats.poisson(mu=lam)
+
+# Probability of exactly 15 requests in 1 second
+p_15 = poisson_dist.pmf(15)
+print(f"P(X = 15): {p_15:.4f}")   # ~0.0724
+
+# Probability of more than 20 requests (tail risk)
+p_overflow = 1 - poisson_dist.cdf(20)
+print(f"P(X > 20): {p_overflow:.4f}")   # ~0.0083
+
+k = np.arange(0, 30)
+fig, ax = plt.subplots(figsize=(9, 4))
+ax.bar(k, poisson_dist.pmf(k), color="#4CAF50", alpha=0.8)
+ax.axvline(lam, color="red", linestyle="--", label=f"λ = {lam}")
+ax.set_title(f"Poisson Distribution (λ={lam})")
+ax.set_xlabel("Number of events")
+ax.set_ylabel("Probability")
+ax.legend()
+plt.show()
+```
+
+## Binomial Distribution
+
+The binomial distribution models the number of successes in n independent Bernoulli trials, each with probability p of success:
+
+```python
+# A classifier has accuracy 0.82. If we test on 100 samples,
+# what is the probability of getting at least 85 correct?
+n, p = 100, 0.82
+binom_dist = stats.binom(n=n, p=p)
+
+p_at_least_85 = 1 - binom_dist.cdf(84)
+print(f"P(correct >= 85): {p_at_least_85:.4f}")
+
+# Expected value and std
+print(f"Expected correct: {n*p:.1f}")
+print(f"Std dev:          {np.sqrt(n*p*(1-p)):.2f}")
+```
+
+## Bayesian Intuition
+
+Bayesian thinking updates beliefs as evidence accumulates:
+
+- **Prior**: What you believe before seeing data. P(hypothesis).
+- **Likelihood**: How probable the observed data is under the hypothesis. P(data | hypothesis).
+- **Posterior**: Updated belief after seeing data. P(hypothesis | data) ∝ P(data | hypothesis) × P(hypothesis).
+
+```python
+# Medical test example
+# Disease prevalence: 1%
+# Test sensitivity (true positive rate): 99%
+# Test specificity (true negative rate): 95%
+
+p_disease     = 0.01
+p_pos_disease = 0.99   # sensitivity
+p_pos_healthy = 0.05   # 1 - specificity (false positive rate)
+
+p_positive = p_pos_disease * p_disease + p_pos_healthy * (1 - p_disease)
+
+# P(disease | positive test) — Bayes' theorem
+p_disease_given_pos = (p_pos_disease * p_disease) / p_positive
+print(f"P(disease | positive test): {p_disease_given_pos:.3f}")
+# ~0.167 — only 17%! Base rate matters enormously.
+```
+
+This result surprises most people. A test that sounds "99% accurate" produces positive results that are wrong 83% of the time when the disease is rare. This is the **base rate fallacy** — ignoring the prior probability leads to drastically overestimating posterior probabilities.
+
+## Summary
+
+- Conditional probability P(A|B) describes the probability of A given that B is already known; Bayes' theorem inverts this to update beliefs after observing evidence.
+- The **normal distribution** (symmetric bell) appears wherever many small independent factors add together; the 68-95-99.7 rule provides quick intuition for standard deviation ranges.
+- The **Poisson distribution** models event counts per interval at a fixed rate; the **binomial** models success counts over repeated binary trials.
+- Bayesian reasoning quantifies belief update: posterior is proportional to likelihood times prior. Low base rates (small priors) can make even accurate tests unreliable — always account for prevalence.

@@ -1,0 +1,118 @@
+---
+title: "Data Pipelines for ML"
+description: "Build reliable ingestion pipelines with schema validation, dataset versioning, and failure-safe transformations."
+order: 2
+duration: 16
+---
+
+A model is only as good as its training data. Silent data quality failures — a nullable column that suddenly contains NaN, a categorical field with a new unseen label, a timestamp in the wrong timezone — can poison a model without raising a single exception. This lesson builds a pipeline that fails loudly and keeps every dataset version reproducible.
+
+## Pipeline Stages
+
+Every ML data pipeline passes through the same logical stages:
+
+| Stage | Responsibility | Failure mode |
+|---|---|---|
+| Ingestion | Pull raw data from sources | Source unavailable, partial read |
+| Validation | Assert schema and value ranges | Silent corruption passes through |
+| Transformation | Compute features, encode categoricals | Leakage from future data |
+| Versioning | Snapshot the processed dataset | Irreproducible experiments |
+| Loading | Write to feature store or disk | Partial write, wrong partition |
+
+## Ingestion with Error Boundaries
+
+Use context managers and explicit error handling so partial reads never reach the transformation step:
+
+```python
+from pathlib import Path
+import pandas as pd
+
+def ingest_parquet(source_path: str) -> pd.DataFrame:
+    path = Path(source_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Source not found: {path}")
+
+    df = pd.read_parquet(path)
+
+    if df.empty:
+        raise ValueError(f"Ingested empty dataframe from {path}")
+
+    return df
+```
+
+## Schema Validation with Great Expectations
+
+Great Expectations lets you encode your assumptions as executable tests:
+
+```python
+import great_expectations as gx
+
+context = gx.get_context()
+
+# Define expectations once, run them every pipeline execution
+suite = context.add_expectation_suite("raw_events_suite")
+
+validator = context.get_validator(
+    datasource_name="local_filesystem",
+    data_asset_name="raw_events",
+)
+
+validator.expect_column_to_exist("user_id")
+validator.expect_column_values_to_not_be_null("user_id")
+validator.expect_column_values_to_be_between("click_rate", min_value=0.0, max_value=1.0)
+validator.expect_column_values_to_be_in_set("country", {"US", "GB", "DE", "FR"})
+
+results = validator.validate()
+if not results.success:
+    raise RuntimeError(f"Validation failed: {results.statistics}")
+```
+
+If validation fails, the pipeline raises an exception — no silently corrupted datasets downstream.
+
+## Dataset Versioning with DVC
+
+DVC (Data Version Control) tracks large binary files in Git-compatible fashion:
+
+```bash
+# Track a processed dataset
+dvc add data/processed/features_2024_03.parquet
+
+# Push to remote storage (S3, GCS, Azure)
+dvc push
+
+# Pin to a specific version in experiments
+git checkout abc1234
+dvc pull  # restores exact dataset state for that commit
+```
+
+Each DVC-tracked file generates a `.dvc` pointer file that you commit to Git. Your experiment code and its exact dataset are coupled through the Git commit SHA.
+
+## Feature Transformation Without Leakage
+
+Fit scalers only on training data, then apply the same fitted object to validation and test:
+
+```python
+from sklearn.preprocessing import StandardScaler
+import numpy as np
+
+def build_features(train_df, val_df, test_df):
+    num_cols = ["age", "click_rate", "session_duration"]
+
+    scaler = StandardScaler()
+    # ONLY fit on training data — prevents leakage
+    train_df[num_cols] = scaler.fit_transform(train_df[num_cols])
+    val_df[num_cols]   = scaler.transform(val_df[num_cols])
+    test_df[num_cols]  = scaler.transform(test_df[num_cols])
+
+    return train_df, val_df, test_df, scaler
+```
+
+Save the fitted scaler alongside the model artifact; inference time must apply the identical transformation.
+
+## Summary
+
+- Structure every pipeline into five stages: ingestion, validation, transformation, versioning, and loading.
+- Use Great Expectations to turn data assumptions into automated, executable checks that fail loudly.
+- Version datasets with DVC so every experiment can be traced back to the exact data it was trained on.
+- Fit preprocessing transformers only on training data and persist the fitted object with the model to prevent train-serve skew.
+- Treat partial writes as failures: use atomic rename patterns or transactional writes to avoid corrupt partitions reaching downstream consumers.

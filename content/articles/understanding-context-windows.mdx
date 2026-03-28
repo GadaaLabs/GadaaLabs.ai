@@ -1,0 +1,118 @@
+---
+title: "Understanding Context Windows in LLMs"
+description: "A deep technical dive into how large language models manage context — token limits, KV cache, attention complexity, and what it means for your applications."
+publishedAt: "2026-03-20"
+author: "GadaaLabs"
+tags: ["llm-internals", "architecture", "context-window", "performance"]
+difficulty: "intermediate"
+readingTime: 10
+featured: true
+---
+
+Every large language model has a context window — the maximum number of tokens it can process in a single pass. But understanding *why* that limit exists, and what happens near it, is what separates engineers who just call APIs from engineers who build reliable AI systems.
+
+## What Is a Token?
+
+Before diving into context windows, let's be precise about tokens. A token is not a word — it's a chunk of text produced by a tokenizer (usually BPE — Byte Pair Encoding). Common English words are often a single token, but rare words, code identifiers, and non-Latin scripts can be 2–5+ tokens per "word".
+
+```python
+# Using the tiktoken library (OpenAI's tokenizer)
+import tiktoken
+
+enc = tiktoken.get_encoding("cl100k_base")
+tokens = enc.encode("Hello, world!")
+print(tokens)        # [9906, 11, 1917, 0]
+print(len(tokens))   # 4
+```
+
+Rule of thumb: **1 token ≈ 0.75 English words**, or ~4 characters.
+
+## The Attention Mechanism and Why Context Has a Cost
+
+The key operation in a transformer is self-attention. Every token attends to every other token in the sequence. This means attention complexity is **O(n²)** in sequence length.
+
+```
+Attention(Q, K, V) = softmax(QK^T / √d_k) · V
+```
+
+If you double the context length, the attention computation quadruples. This is why longer contexts cost more money per token — it's not linear.
+
+| Context Length | Relative Compute |
+|---------------|-----------------|
+| 4K tokens     | 1×              |
+| 8K tokens     | 4×              |
+| 32K tokens    | 64×             |
+| 128K tokens   | 1,024×          |
+
+Modern architectures (Flash Attention, sliding window attention, linear attention variants) reduce this constant factor significantly, but the fundamental scaling remains a challenge.
+
+## The KV Cache
+
+During inference, the model doesn't recompute attention for previously seen tokens — it stores the key and value matrices in a **KV cache**. This is why generating token-by-token is efficient after the initial prefill step.
+
+```
+Prefill phase:   process all input tokens at once → populate KV cache
+Generation phase: generate one token at a time, reading from KV cache
+```
+
+The KV cache size grows with context length. At 128K tokens with a large model, the KV cache alone can consume tens of gigabytes of GPU memory. This is often the bottleneck for long-context inference — not compute, but memory bandwidth.
+
+## What Happens at the Context Limit?
+
+When input exceeds the context window, you have three options:
+
+**1. Truncation** — Drop the oldest tokens. Simple but lossy — you lose potentially critical information.
+
+```python
+def truncate_to_limit(messages: list, limit: int, tokenizer) -> list:
+    total = 0
+    result = []
+    for msg in reversed(messages):
+        tokens = len(tokenizer.encode(msg["content"]))
+        if total + tokens > limit:
+            break
+        result.insert(0, msg)
+        total += tokens
+    return result
+```
+
+**2. Summarization** — Periodically compress older context into a summary. Preserves meaning but introduces latency and potential hallucination.
+
+**3. RAG (Retrieval-Augmented Generation)** — Don't put everything in context. Retrieve only relevant chunks at query time. This scales to arbitrarily large knowledge bases.
+
+## Practical Implications for Your Applications
+
+**Leave headroom.** Never fill the context window to 100% — leave 20–30% for the response. Models degrade in quality as they approach their limit.
+
+**Count tokens before sending.** Use a tokenizer library client-side to estimate costs and avoid silent truncation.
+
+```python
+def estimate_cost(messages: list, model: str = "llama-3.3-70b") -> dict:
+    enc = tiktoken.get_encoding("cl100k_base")
+    total_tokens = sum(
+        len(enc.encode(m["content"])) for m in messages
+    )
+    return {
+        "input_tokens": total_tokens,
+        "fits_in_8k": total_tokens < 8_000,
+        "fits_in_32k": total_tokens < 32_000,
+    }
+```
+
+**Monitor context utilization in production.** Log token counts per request. If p95 usage is consistently above 70% of your limit, either increase the window or implement RAG before you hit problems.
+
+## The Lost in the Middle Problem
+
+Research has shown that models perform worse at recalling information placed in the middle of a long context compared to the beginning or end. This is the **"lost in the middle"** problem.
+
+Practical implication: if you're building a RAG system, put the most critical retrieved chunks at the start or end of the context — not buried in the middle.
+
+## Summary
+
+- Token ≠ word. Use a tokenizer to count accurately.
+- Attention is O(n²) — longer context = quadratically more compute.
+- KV cache trades memory for speed; it's the primary memory bottleneck for long contexts.
+- At the limit: truncate, summarize, or use RAG.
+- Models degrade near their context limit and recall middle-of-context worse than edges.
+
+Understanding these mechanics will directly inform your architecture decisions — from choosing a model to designing your retrieval pipeline.

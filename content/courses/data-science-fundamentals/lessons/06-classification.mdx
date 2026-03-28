@@ -1,0 +1,181 @@
+---
+title: "Classification"
+description: "Build classification models using logistic regression and decision trees, understand the sigmoid function, CART splitting, and evaluate with precision, recall, and F1."
+order: 6
+duration: 15
+---
+
+Classification is the task of predicting which discrete category a new observation belongs to. It underlies spam detection, medical diagnosis, credit scoring, and churn prediction. This lesson covers two foundational algorithms — logistic regression and decision trees — and the evaluation metrics that distinguish good classifiers from lucky ones.
+
+## Logistic Regression and the Sigmoid Function
+
+Despite its name, logistic regression is a classification algorithm. It predicts the **probability** that an observation belongs to the positive class by passing a linear combination of features through the sigmoid function:
+
+σ(z) = 1 / (1 + e^(−z))
+
+The sigmoid squashes any real-valued input to the range (0, 1), making it interpretable as a probability.
+
+```python
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (classification_report, confusion_matrix,
+                              precision_score, recall_score, f1_score)
+from sklearn.preprocessing import StandardScaler
+
+# Visualise the sigmoid function
+z = np.linspace(-8, 8, 200)
+sigmoid = 1 / (1 + np.exp(-z))
+
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(z, sigmoid, color="#2196F3", linewidth=2.5)
+ax.axhline(0.5, color="grey", linestyle="--", alpha=0.6)
+ax.axvline(0, color="grey", linestyle="--", alpha=0.6)
+ax.fill_between(z, sigmoid, 0.5, where=(sigmoid > 0.5), alpha=0.15, color="#4CAF50")
+ax.fill_between(z, sigmoid, 0.5, where=(sigmoid < 0.5), alpha=0.15, color="#F44336")
+ax.set_xlabel("z (linear combination of features)")
+ax.set_ylabel("Predicted probability")
+ax.set_title("Sigmoid Function — Converts Linear Score to Probability")
+plt.show()
+```
+
+## Training a Logistic Regression Classifier
+
+```python
+# Load the Titanic dataset
+df = sns.load_dataset("titanic").dropna(subset=["age", "fare", "survived"])
+df = df[["survived", "pclass", "age", "fare", "sex"]].copy()
+df["sex"] = (df["sex"] == "female").astype(int)
+
+X = df.drop("survived", axis=1)
+y = df["survived"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+scaler = StandardScaler()
+X_train_s = scaler.fit_transform(X_train)
+X_test_s  = scaler.transform(X_test)
+
+log_reg = LogisticRegression(max_iter=1000, random_state=42)
+log_reg.fit(X_train_s, y_train)
+
+y_pred = log_reg.predict(X_test_s)
+y_prob = log_reg.predict_proba(X_test_s)[:, 1]  # probability of class 1
+
+print(classification_report(y_test, y_pred, target_names=["Died", "Survived"]))
+```
+
+### Interpreting Logistic Regression Coefficients
+
+Coefficients in logistic regression are on the log-odds scale. Exponentiating them gives **odds ratios**:
+
+```python
+coef_df = pd.DataFrame({
+    "feature":    X.columns,
+    "log_odds":   log_reg.coef_[0],
+    "odds_ratio": np.exp(log_reg.coef_[0])
+}).sort_values("odds_ratio", ascending=False)
+
+print(coef_df)
+# e.g., sex=female (odds_ratio ~4.0) → being female multiplies survival odds by 4
+```
+
+## Decision Trees and CART
+
+Decision trees partition the feature space into rectangular regions using a sequence of binary splits. The **CART (Classification and Regression Trees)** algorithm greedily selects the feature and threshold that best separates the classes at each node.
+
+**Gini impurity** measures how often a randomly chosen element from the node would be incorrectly classified:
+
+Gini = 1 − Σ(pᵢ²)
+
+A pure node (all one class) has Gini = 0. CART chooses the split that minimises the weighted average Gini of the two child nodes.
+
+```python
+tree = DecisionTreeClassifier(max_depth=4, min_samples_leaf=10, random_state=42)
+tree.fit(X_train, y_train)
+y_pred_tree = tree.predict(X_test)
+
+print(classification_report(y_test, y_pred_tree, target_names=["Died", "Survived"]))
+
+# Visualise the tree
+fig, ax = plt.subplots(figsize=(20, 8))
+plot_tree(tree, feature_names=X.columns, class_names=["Died", "Survived"],
+          filled=True, rounded=True, fontsize=9, ax=ax)
+plt.title("Decision Tree — Titanic Survival")
+plt.tight_layout()
+plt.show()
+
+# Feature importance from the tree
+imp = pd.Series(tree.feature_importances_, index=X.columns).sort_values(ascending=False)
+print(f"\nFeature importance:\n{imp}")
+```
+
+## Precision, Recall, and F1 Score
+
+Accuracy alone is misleading when classes are imbalanced. If 95% of credit card transactions are legitimate, a model that always predicts "not fraud" achieves 95% accuracy while being completely useless.
+
+```python
+# Confusion matrix
+cm = confusion_matrix(y_test, y_pred)
+fig, ax = plt.subplots(figsize=(5, 4))
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+            xticklabels=["Pred Died","Pred Survived"],
+            yticklabels=["True Died","True Survived"])
+ax.set_title("Confusion Matrix")
+plt.show()
+
+# Classification metrics
+precision = precision_score(y_test, y_pred)
+recall    = recall_score(y_test, y_pred)
+f1        = f1_score(y_test, y_pred)
+
+print(f"Precision: {precision:.3f}")
+print(f"Recall:    {recall:.3f}")
+print(f"F1 Score:  {f1:.3f}")
+```
+
+| Metric | Formula | Answers |
+|---|---|---|
+| Accuracy | (TP + TN) / All | What fraction of all predictions are correct? |
+| Precision | TP / (TP + FP) | Of those predicted positive, how many actually are? |
+| Recall (Sensitivity) | TP / (TP + FN) | Of all actual positives, how many did we catch? |
+| F1 Score | 2 × P × R / (P + R) | Harmonic mean — balances precision and recall |
+| Specificity | TN / (TN + FP) | Of all actual negatives, how many did we correctly reject? |
+
+**When to prioritise precision**: When false positives are costly (spam filter flagging important emails).
+
+**When to prioritise recall**: When false negatives are costly (cancer screening missing a tumour).
+
+## Adjusting the Decision Threshold
+
+By default, `predict()` uses a threshold of 0.5. Shifting the threshold trades precision for recall:
+
+```python
+thresholds = np.arange(0.1, 0.9, 0.05)
+metrics = []
+for t in thresholds:
+    y_pred_t = (y_prob >= t).astype(int)
+    metrics.append({
+        "threshold": t,
+        "precision": precision_score(y_test, y_pred_t, zero_division=0),
+        "recall":    recall_score(y_test, y_pred_t, zero_division=0),
+        "f1":        f1_score(y_test, y_pred_t, zero_division=0)
+    })
+
+metrics_df = pd.DataFrame(metrics)
+print(metrics_df.to_string(index=False))
+```
+
+## Summary
+
+- Logistic regression applies the sigmoid function to a linear combination of features, producing a probability between 0 and 1; the decision boundary is linear in feature space.
+- Coefficients are on the log-odds scale; exponentiating them gives odds ratios directly interpretable as multiplicative effects on the probability of the positive class.
+- Decision trees (CART) partition feature space by greedily minimising Gini impurity at each split; `max_depth` and `min_samples_leaf` are the primary overfitting controls.
+- Accuracy is a misleading metric for imbalanced datasets; use precision (positive predictive value) and recall (sensitivity) and their harmonic mean, F1.
+- The classification threshold of 0.5 is not sacred — shift it to tune the precision-recall tradeoff based on the asymmetric cost of each error type.

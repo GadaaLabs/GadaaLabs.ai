@@ -1,0 +1,167 @@
+---
+title: "Merging, Joining & Reshaping"
+description: "Combine DataFrames with .merge() and .concat(), reshape between wide and long formats with .melt() and .pivot(), and understand join semantics."
+order: 6
+duration: 13
+---
+
+Real-world data is distributed across multiple tables — a fact table of transactions, a dimension table of customers, a reference table of product metadata. Combining these tables correctly, and reshaping the result into the form your analysis needs, is one of the most frequently executed operations in data work.
+
+## `.merge()` — SQL-Style Joins
+
+`pd.merge()` (or `df.merge()`) joins two DataFrames on one or more key columns. The `how` parameter controls which rows are retained:
+
+```python
+import pandas as pd
+
+orders = pd.DataFrame({
+    "order_id":    [1, 2, 3, 4],
+    "customer_id": [101, 102, 103, 999],
+    "amount":      [50, 80, 30, 20]
+})
+
+customers = pd.DataFrame({
+    "customer_id": [101, 102, 103, 104],
+    "name":        ["Alice", "Bob", "Carol", "Dave"],
+    "tier":        ["Gold", "Silver", "Gold", "Bronze"]
+})
+
+# Inner join — only matched rows (default)
+inner = orders.merge(customers, on="customer_id", how="inner")
+
+# Left join — all orders; unmatched customers get NaN
+left  = orders.merge(customers, on="customer_id", how="left")
+
+# Outer join — all rows from both tables
+outer = orders.merge(customers, on="customer_id", how="outer")
+
+# Right join — all customers; unmatched orders get NaN
+right = orders.merge(customers, on="customer_id", how="right")
+```
+
+Join type summary:
+
+| `how` | Rows retained |
+|---|---|
+| `"inner"` | Only rows where the key exists in both DataFrames |
+| `"left"` | All rows from the left DataFrame; NaN for unmatched right |
+| `"right"` | All rows from the right DataFrame; NaN for unmatched left |
+| `"outer"` | All rows from both DataFrames; NaN where unmatched |
+
+### Joining on Different Column Names
+
+```python
+# left key = "cust_id", right key = "customer_id"
+merged = orders.merge(
+    customers,
+    left_on  = "cust_id",
+    right_on = "customer_id",
+    how      = "left",
+    suffixes = ("_order", "_customer")   # disambiguate duplicate column names
+)
+```
+
+### Detecting Join Explosions
+
+When a key is not unique in both tables, a merge can produce more rows than either input — a "many-to-many explosion". Always validate:
+
+```python
+n_left  = len(orders)
+n_right = len(customers)
+n_merged = len(inner)
+
+if n_merged > n_left:
+    print(f"WARNING: join inflated rows {n_left} -> {n_merged}")
+
+# Enforce cardinality using validate parameter (raises on violation)
+orders.merge(customers, on="customer_id", how="left", validate="many_to_one")
+```
+
+## `.join()` — Index-Based Joining
+
+`.join()` aligns on the DataFrame's index rather than a column — cleaner when you've already set the index to your join key:
+
+```python
+customers_idx = customers.set_index("customer_id")
+orders_idx    = orders.set_index("customer_id")
+
+result = orders_idx.join(customers_idx, how="left")
+```
+
+## `.concat()` — Stacking DataFrames
+
+`pd.concat` stacks DataFrames either vertically (appending rows) or horizontally (appending columns):
+
+```python
+q1 = pd.read_csv("sales_q1.csv")
+q2 = pd.read_csv("sales_q2.csv")
+q3 = pd.read_csv("sales_q3.csv")
+
+# Stack vertically — requires same column schema
+full_year = pd.concat([q1, q2, q3], axis=0, ignore_index=True)
+
+# Add a label to track source
+full_year = pd.concat(
+    [q1, q2, q3],
+    keys=["Q1", "Q2", "Q3"],
+    names=["quarter", "original_idx"]
+)
+
+# Stack horizontally — requires same row count / index alignment
+features = pd.concat([df_numeric, df_categorical], axis=1)
+```
+
+## `.melt()` — Wide to Long
+
+Many datasets arrive in "wide" format where each measurement has its own column. Long format has one row per observation and is required by Seaborn's plotting functions and many ML pipelines:
+
+```python
+wide = pd.DataFrame({
+    "country": ["USA", "Germany", "Japan"],
+    "2021":    [500, 300, 420],
+    "2022":    [530, 310, 440],
+    "2023":    [560, 325, 460]
+})
+
+long = wide.melt(
+    id_vars    = ["country"],      # columns to keep as identifiers
+    value_vars = ["2021", "2022", "2023"],   # columns to unpivot
+    var_name   = "year",           # name for the new key column
+    value_name = "gdp_index"       # name for the new value column
+)
+
+print(long.head(6))
+# country  year  gdp_index
+# USA      2021     500
+# Germany  2021     300
+# ...
+```
+
+## `.pivot()` — Long to Wide
+
+`.pivot()` is the inverse of `.melt()`. It takes a long-format DataFrame and spreads one column's values across new columns:
+
+```python
+# pivot requires unique (index, columns) combinations
+wide_again = long.pivot(
+    index   = "country",
+    columns = "year",
+    values  = "gdp_index"
+)
+
+# pivot_table handles duplicates by aggregating them
+wide_agg = long.pivot_table(
+    index   = "country",
+    columns = "year",
+    values  = "gdp_index",
+    aggfunc = "mean"
+)
+```
+
+## Summary
+
+- `pd.merge()` performs SQL-style joins on column keys; `how` determines which rows survive: `"inner"`, `"left"`, `"right"`, or `"outer"`.
+- Use the `validate` parameter to catch accidental many-to-many explosions before they corrupt downstream analysis.
+- `.join()` aligns on the DataFrame index — convenient after `set_index()` but equivalent in power to `merge`.
+- `pd.concat()` stacks DataFrames along an axis: `axis=0` appends rows, `axis=1` appends columns; use `keys` to create a labelled MultiIndex.
+- `.melt()` converts wide format to long (required by Seaborn and ML pipelines); `.pivot()` and `.pivot_table()` convert long format back to wide.

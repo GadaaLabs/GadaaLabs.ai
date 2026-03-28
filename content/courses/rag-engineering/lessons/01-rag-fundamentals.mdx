@@ -1,0 +1,102 @@
+---
+title: "Why RAG?"
+description: "Understand the hallucination problem, the retrieval architecture that solves it, and when RAG is the wrong choice."
+order: 1
+duration: 12
+---
+
+LLMs are remarkably good at generating fluent, confident text — including fluent, confident text that is completely wrong. This lesson explains why that happens, how retrieval-augmented generation addresses it, and when a simpler approach is preferable.
+
+## The Hallucination Problem
+
+LLMs are trained to predict the next token given the previous ones. When asked a factual question, the model generates tokens that are statistically likely given the question context — not tokens that are provably true. Three failure modes are common:
+
+| Failure mode | Example | Root cause |
+|---|---|---|
+| Fabricated facts | Incorrect citation author or date | Statistical plausibility ≠ factual accuracy |
+| Stale knowledge | Answers from the training cutoff | Knowledge frozen at training time |
+| Out-of-domain gaps | Internal company policy not in training data | Private knowledge never in training corpus |
+
+Fine-tuning addresses the third problem partially, but fine-tuning on facts does not reliably prevent hallucinations — it changes style, not factual fidelity.
+
+## RAG Architecture
+
+A RAG system adds a retrieval step before generation:
+
+```
+User query
+    │
+    ▼
+Query Encoder → dense vector
+    │
+    ▼
+Vector Database → top-k most similar document chunks
+    │
+    ▼
+Prompt Assembly: [system prompt] + [retrieved chunks] + [user query]
+    │
+    ▼
+LLM → response grounded in retrieved chunks
+```
+
+The LLM never needs to "remember" facts. It only needs to read and synthesise the retrieved context — a task LLMs are genuinely good at.
+
+## When NOT to Use RAG
+
+RAG is not universally better than alternatives:
+
+```python
+# Decision heuristic
+def choose_approach(knowledge_changes_daily, corpus_size_docs, needs_reasoning):
+    if corpus_size_docs < 20:
+        return "stuff all docs into system prompt"
+    if not knowledge_changes_daily and corpus_size_docs < 5000:
+        return "fine-tune on the corpus"
+    if needs_reasoning and not knowledge_changes_daily:
+        return "fine-tune + optional RAG for long-tail"
+    return "RAG"
+```
+
+| Scenario | Better approach |
+|---|---|
+| < 20 short documents | Fit in context window (no retrieval needed) |
+| Stable knowledge, < 5k docs | Fine-tuning |
+| Complex multi-hop reasoning | Chain-of-thought or code execution |
+| Real-time data (stock prices) | API tool call, not RAG |
+
+## Minimal Working RAG
+
+```python
+from sentence_transformers import SentenceTransformer
+import numpy as np
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+corpus = [
+    "The Gadaa system is an Oromo democracy originating in Ethiopia.",
+    "The Gadaa cycle lasts eight years.",
+    "Women in Gadaa hold a parallel institution called Siqqee.",
+]
+
+corpus_embeddings = model.encode(corpus, normalize_embeddings=True)
+
+def retrieve(query: str, k: int = 2):
+    q_emb = model.encode(query, normalize_embeddings=True)
+    scores = corpus_embeddings @ q_emb        # cosine similarity (pre-normalised)
+    top_k  = np.argsort(scores)[::-1][:k]
+    return [corpus[i] for i in top_k]
+
+results = retrieve("How long does a Gadaa cycle last?")
+context = "\n".join(results)
+prompt  = f"Answer using only this context:\n{context}\n\nQuestion: How long does a Gadaa cycle last?"
+# → pass `prompt` to your LLM of choice
+```
+
+This is the simplest possible implementation. The following lessons improve each component.
+
+## Summary
+
+- LLMs hallucinate because they maximise token likelihood, not factual accuracy.
+- RAG grounds every response in retrieved documents rather than model weights, eliminating the stale-knowledge and out-of-domain problems.
+- Do not use RAG if your corpus fits in the context window, knowledge is stable, or reasoning requires multi-hop logic that retrieval cannot support.
+- The core RAG loop is: encode query → retrieve top-k chunks → assemble prompt → generate response.

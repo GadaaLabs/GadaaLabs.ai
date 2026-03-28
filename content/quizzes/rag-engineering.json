@@ -1,0 +1,80 @@
+{
+  "slug": "rag-engineering",
+  "title": "RAG Engineering Quiz",
+  "description": "Test your knowledge of chunking strategies, vector databases, hybrid search, and the RAGAS evaluation framework.",
+  "difficulty": "intermediate",
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What is the primary disadvantage of fixed-character chunking compared to sentence-boundary chunking?",
+      "options": [
+        "It produces chunks that are too large for most embedding models",
+        "It may split sentences mid-way, reducing embedding quality for sentence-transformer models",
+        "It requires a GPU to process efficiently",
+        "It does not support metadata injection"
+      ],
+      "correct": 1,
+      "explanation": "Fixed-character chunking cuts text at arbitrary character positions, often mid-sentence. Embedding models like sentence-transformers are trained on complete sentences and generalise poorly to fragments. Sentence-boundary chunking preserves semantic completeness, leading to better embedding alignment and higher retrieval recall."
+    },
+    {
+      "id": "q2",
+      "question": "Which HNSW parameter controls the number of edges each node has in the graph, directly affecting both memory usage and retrieval recall?",
+      "options": [
+        "ef_construct",
+        "ef",
+        "m",
+        "nprobe"
+      ],
+      "correct": 2,
+      "explanation": "The 'm' parameter in HNSW sets the maximum number of bidirectional edges each node maintains. Higher m means more connections, which improves recall (more paths to navigate to the correct answer) but increases memory usage proportionally. nprobe is an IVF parameter, not HNSW. ef and ef_construct control search width, not graph density."
+    },
+    {
+      "id": "q3",
+      "question": "Why does Reciprocal Rank Fusion (RRF) work well for combining dense and sparse retrieval scores?",
+      "options": [
+        "It normalises both score lists to the same scale before summing",
+        "It uses only rank positions, making it robust to incompatible score scales between retrievers",
+        "It applies a learned weight to each retriever based on query type",
+        "It re-encodes documents using both retrievers and averages the embeddings"
+      ],
+      "correct": 1,
+      "explanation": "Dense retrieval produces cosine similarity scores (0–1) while BM25 produces term-frequency-based scores with no fixed range. RRF replaces both score lists with rank positions and computes 1/(k + rank) for each result, then sums across retrievers. This rank-based fusion completely sidesteps the score normalisation problem."
+    },
+    {
+      "id": "q4",
+      "question": "In the RAGAS framework, which metric specifically measures whether the generated answer is supported by the retrieved context (i.e., the hallucination rate)?",
+      "options": [
+        "context_recall",
+        "answer_relevancy",
+        "faithfulness",
+        "context_precision"
+      ],
+      "correct": 2,
+      "explanation": "RAGAS faithfulness measures the fraction of claims in the generated answer that can be attributed to the retrieved context. A score of 1.0 means every claim is grounded in the retrieved documents. context_recall measures whether the retrieved chunks contain the information needed to answer the question."
+    },
+    {
+      "id": "q5",
+      "question": "When should a cross-encoder re-ranker be applied in a RAG pipeline?",
+      "options": [
+        "To the entire corpus at indexing time, replacing bi-encoder embeddings",
+        "To a small candidate set (20–50 results) retrieved by a faster first-stage retriever",
+        "Only when the query contains fewer than 5 tokens",
+        "After the LLM generates its response, to re-order citations"
+      ],
+      "correct": 1,
+      "explanation": "Cross-encoders jointly encode the query and each candidate passage together, making them far more accurate than bi-encoder cosine similarity but also far slower — O(candidates) full model forward passes per query. Running them on the full corpus (millions of chunks) is impractical. The standard pattern is: bi-encoder retrieves 20–50 candidates in milliseconds, then cross-encoder re-ranks that small set."
+    },
+    {
+      "id": "q6",
+      "question": "A semantic cache in a production RAG system returns a cached answer when the cosine similarity between a new query and a cached query exceeds a threshold. What is the main risk of setting this threshold too low (e.g., 0.70)?",
+      "options": [
+        "The cache will never return a hit, making it useless",
+        "Cache lookups will become too slow due to excessive comparisons",
+        "Semantically different questions may receive the same cached answer, returning incorrect responses",
+        "The embedding model will overfit to the cached queries over time"
+      ],
+      "correct": 2,
+      "explanation": "A threshold of 0.70 is too permissive — queries that share topic vocabulary but ask different specific questions will be considered 'similar enough.' For example, 'What is the Gadaa cycle duration?' and 'Who participates in the Gadaa cycle?' might score 0.72 similarity but have completely different correct answers. The threshold should typically be 0.92–0.97 for semantic caching to be safe."
+    }
+  ]
+}
