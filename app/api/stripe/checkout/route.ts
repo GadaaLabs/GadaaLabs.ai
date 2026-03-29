@@ -1,24 +1,28 @@
 import Stripe from "stripe";
 import { headers } from "next/headers";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2025-02-24.acacia",
-});
+function getStripe() {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error("STRIPE_SECRET_KEY is not set");
+  return new Stripe(key, { apiVersion: "2026-03-25.dahlia" });
+}
 
-// Map tier slugs to Stripe Price IDs (set these in Vercel env vars)
-const PRICE_IDS: Record<string, string | undefined> = {
-  supporter:   process.env.STRIPE_PRICE_SUPPORTER,    // $5/month
-  contributor: process.env.STRIPE_PRICE_CONTRIBUTOR,  // $15/month
-  patron:      process.env.STRIPE_PRICE_PATRON,       // $50/month
-};
+function getPriceIds() {
+  return {
+    supporter:   process.env.STRIPE_PRICE_SUPPORTER,
+    contributor: process.env.STRIPE_PRICE_CONTRIBUTOR,
+    patron:      process.env.STRIPE_PRICE_PATRON,
+  } as Record<string, string | undefined>;
+}
 
-// One-time price IDs
-const ONE_TIME_PRICE_IDS: Record<number, string | undefined> = {
-  10:  process.env.STRIPE_PRICE_ONETIME_10,
-  25:  process.env.STRIPE_PRICE_ONETIME_25,
-  50:  process.env.STRIPE_PRICE_ONETIME_50,
-  100: process.env.STRIPE_PRICE_ONETIME_100,
-};
+function getOneTimePriceIds() {
+  return {
+    10:  process.env.STRIPE_PRICE_ONETIME_10,
+    25:  process.env.STRIPE_PRICE_ONETIME_25,
+    50:  process.env.STRIPE_PRICE_ONETIME_50,
+    100: process.env.STRIPE_PRICE_ONETIME_100,
+  } as Record<number, string | undefined>;
+}
 
 export async function POST(req: Request) {
   const headersList = await headers();
@@ -31,6 +35,9 @@ export async function POST(req: Request) {
   };
 
   try {
+    const stripe = getStripe();
+    const PRICE_IDS = getPriceIds();
+    const ONE_TIME_PRICE_IDS = getOneTimePriceIds();
     let priceId: string | undefined;
 
     if (mode === "subscription" && tier) {

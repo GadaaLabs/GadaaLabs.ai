@@ -8,6 +8,7 @@ export interface LessonMeta {
   slug: string;
   title: string;
   duration: number;
+  description?: string;
 }
 
 export interface CourseFrontmatter {
