@@ -1,38 +1,52 @@
 ---
-title: "Data Analysis with Python"
-description: "Learn to load, clean, transform, and visualise data using the core Python data stack — NumPy, Pandas, Matplotlib, and Seaborn."
+title: "Data Analysis with Python — Expert Practitioner Track"
+description: "A practitioner-level course covering everything a world-class data analyst does: project scoping, data quality, cleaning, wrangling, EDA, feature engineering, statistical analysis, advanced visualisation, insight generation, and professional reporting."
 author: "GadaaLabs"
-tags: ["python", "pandas", "numpy", "data analysis", "matplotlib", "seaborn"]
-difficulty: "beginner"
+tags: ["python", "pandas", "numpy", "data analysis", "EDA", "statistics", "visualization", "feature engineering"]
+difficulty: "intermediate"
 lessons:
-  - slug: "01-python-for-data"
-    title: "Python for Data Work — the Essential Toolkit"
-    duration: 12
-  - slug: "02-numpy-fundamentals"
-    title: "NumPy Fundamentals"
-    duration: 15
-  - slug: "03-pandas-dataframes"
-    title: "Pandas DataFrames"
-    duration: 15
-  - slug: "04-cleaning-data"
-    title: "Cleaning Messy Data"
-    duration: 14
-  - slug: "05-aggregation-groupby"
-    title: "Aggregation & GroupBy"
-    duration: 12
-  - slug: "06-merging-joining"
-    title: "Merging, Joining & Reshaping"
-    duration: 13
-  - slug: "07-matplotlib-seaborn"
-    title: "Visualisation with Matplotlib & Seaborn"
-    duration: 16
-  - slug: "08-eda-workflow"
-    title: "End-to-End EDA Workflow"
-    duration: 18
+  - slug: "01-analyst-mindset"
+    title: "The Expert Analyst Mindset — Framing Problems Before Touching Data"
+    duration: 20
+  - slug: "02-data-ingestion-profiling"
+    title: "Data Ingestion, Profiling & First Contact"
+    duration: 22
+  - slug: "03-data-quality-assessment"
+    title: "Data Quality Assessment — Auditing Before You Clean"
+    duration: 24
+  - slug: "04-advanced-cleaning-wrangling"
+    title: "Advanced Data Cleaning & Wrangling"
+    duration: 28
+  - slug: "05-transformation-reshaping"
+    title: "Transformation, Reshaping & Complex Aggregations"
+    duration: 25
+  - slug: "06-eda-univariate-bivariate"
+    title: "Exploratory Data Analysis — Univariate & Bivariate"
+    duration: 26
+  - slug: "07-multivariate-eda"
+    title: "Multivariate EDA, Correlation & Hypothesis Generation"
+    duration: 24
+  - slug: "08-feature-engineering"
+    title: "Feature Engineering — Creating Signals from Raw Data"
+    duration: 26
+  - slug: "09-statistical-analysis"
+    title: "Statistical Analysis, Hypothesis Testing & A/B Testing"
+    duration: 28
+  - slug: "10-advanced-visualization"
+    title: "Advanced Visualisation & Dashboard Thinking"
+    duration: 25
+  - slug: "11-insight-storytelling"
+    title: "From Data to Insights — Analytical Storytelling"
+    duration: 22
+  - slug: "12-professional-reporting"
+    title: "Professional Reports, Notebooks & Stakeholder Presentations"
+    duration: 24
 ---
 
-Data analysis is the backbone of every data science project. Before you can build models or generate dashboards, you need to understand your data — where it comes from, what shape it takes, where it breaks, and what stories it tells. This course teaches you to do exactly that using Python's industry-standard data stack.
+This is not an introduction to pandas. It is not a tutorial on how to load a CSV file or draw a bar chart. This course is the definitive practitioner track for analysts and data professionals who want to work the way the best in the field actually work — rigorously, systematically, and with a clear chain of logic from a stakeholder question all the way to a delivered recommendation. Every lesson reflects real patterns from production analytical work, not toy examples dressed up to look educational.
 
-You will move from environment setup and Python fundamentals all the way to conducting a full exploratory data analysis on a real dataset. Each lesson builds on the last: NumPy gives you the numerical foundation, Pandas gives you the table-oriented interface, and Matplotlib and Seaborn turn numbers into insight.
+The course follows the complete analytical project lifecycle. You begin before any code is written: learning how to interrogate a vague business problem, frame a precise analytical question, and set up the constraints and hypotheses that will govern every decision downstream. You then move through industrial-strength data ingestion and profiling, systematic quality auditing, advanced cleaning strategies, and the complex transformations — reshaping, windowing, time-series joins — that separate professional work from beginner notebooks. Exploratory data analysis is treated not as casual browsing but as a structured scientific process with a protocol, a hypothesis log, and documented findings at every stage.
 
-No prior data science experience is required, but you should be comfortable writing basic Python (loops, functions, conditionals). By the end, you will be able to take a raw CSV file and produce a coherent, well-visualised analysis report entirely in Python.
+The second half of the course shifts into the higher-order skills that distinguish a data analyst from a data professional. You will engineer features with intent, applying domain knowledge to create signals that carry meaning. You will apply the right statistical test to the right problem — not just t-tests by default, but the full toolkit of parametric and non-parametric methods, A/B testing frameworks, multiple-comparison corrections, and effect size reasoning. Visualisation is covered as a communication discipline, not a styling exercise: you will learn chart selection theory, annotation strategy, and how to build reusable plotting modules that enforce consistency across a team. The final lessons treat insight generation and professional reporting as first-class analytical skills, covering the Pyramid Principle, the SCR narrative framework, executive summary writing, and notebook-to-deliverable workflows.
+
+Throughout every lesson, the fictional GadaaLabs e-commerce dataset — orders, customers, products, events — provides a consistent real-world context. Code is production-quality: type-hinted helper functions, reusable pipelines, dataclasses for structured outputs, and patterns you can drop directly into your own work. By the end of this track, you will have a complete analytical toolkit and, more importantly, the professional judgment to know when and how to use every part of it.

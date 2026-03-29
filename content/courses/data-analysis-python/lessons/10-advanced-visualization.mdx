@@ -1,0 +1,853 @@
+---
+title: "Advanced Visualisation & Dashboard Thinking"
+description: "Build charts that drive decisions: chart selection theory, matplotlib mastery, seaborn themes, interactive Plotly charts, annotation strategy, color theory, reusable plot modules, and exporting for stakeholders."
+duration: 25
+order: 10
+---
+
+## Visualisation Is Communication, Not Decoration
+
+A chart that requires explanation has failed. The best charts in professional analytical work are self-explanatory: they have a clear title that states the finding (not just the metric), annotations that point to the "so what," and a design that reduces visual noise to the minimum needed to convey the message. This lesson covers visualisation as a communication discipline — not a styling exercise.
+
+---
+
+## Chart Selection Framework
+
+Before writing any plotting code, decide what type of question your chart is answering.
+
+```python
+import pandas as pd
+
+CHART_SELECTION_GUIDE = pd.DataFrame([
+    {"question_type": "Distribution of one variable",
+     "data_type": "Numeric", "chart_type": "Histogram + KDE", "library": "Matplotlib/Seaborn"},
+    {"question_type": "Distribution of one variable",
+     "data_type": "Categorical", "chart_type": "Bar chart (sorted)", "library": "Matplotlib/Seaborn"},
+    {"question_type": "Compare distributions across groups",
+     "data_type": "Numeric × Categorical", "chart_type": "Box plot / Violin plot", "library": "Seaborn"},
+    {"question_type": "Relationship between two numeric variables",
+     "data_type": "Numeric × Numeric", "chart_type": "Scatter plot / Hexbin", "library": "Matplotlib"},
+    {"question_type": "Change over time",
+     "data_type": "Time × Numeric", "chart_type": "Line chart with MA", "library": "Matplotlib/Plotly"},
+    {"question_type": "Part-to-whole composition",
+     "data_type": "Categorical proportions", "chart_type": "Stacked bar / Treemap", "library": "Plotly"},
+    {"question_type": "Correlation between many variables",
+     "data_type": "Numeric matrix", "chart_type": "Heatmap", "library": "Seaborn"},
+    {"question_type": "Geographic distribution",
+     "data_type": "Country / region", "chart_type": "Choropleth map", "library": "Plotly"},
+    {"question_type": "Ranking",
+     "data_type": "Categorical × Numeric", "chart_type": "Horizontal bar (sorted)", "library": "Matplotlib"},
+    {"question_type": "Deviation from baseline",
+     "data_type": "Numeric vs reference", "chart_type": "Diverging bar / Waterfall", "library": "Matplotlib"},
+    {"question_type": "Two metrics simultaneously",
+     "data_type": "Dual-axis", "chart_type": "Line + Bar combo / Twin axes", "library": "Matplotlib"},
+    {"question_type": "Hierarchical composition",
+     "data_type": "Nested categories", "chart_type": "Sunburst / Treemap", "library": "Plotly"},
+    {"question_type": "Proportional comparison across many groups",
+     "data_type": "Categorical × Categorical", "chart_type": "Grouped bar / Heatmap", "library": "Seaborn"},
+    {"question_type": "High-dimensional overview",
+     "data_type": "Many numeric variables", "chart_type": "Pairplot / PCA scatter", "library": "Seaborn"},
+])
+
+print(CHART_SELECTION_GUIDE.to_string(index=False))
+```
+
+---
+
+## Setup
+
+```python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import seaborn as sns
+import warnings
+warnings.filterwarnings("ignore")
+
+np.random.seed(42)
+n = 2000
+
+orders = pd.DataFrame({
+    "order_id": range(1, n + 1),
+    "customer_id": np.random.randint(1, 501, n),
+    "category": np.random.choice(["Electronics", "Clothing", "Books", "Home", "Sports"],
+                                  p=[0.30, 0.25, 0.20, 0.15, 0.10], size=n),
+    "order_date": pd.date_range("2023-01-01", periods=n, freq="4h"),
+    "revenue": np.random.exponential(scale=75, size=n).round(2).clip(0.01),
+    "quantity": np.random.randint(1, 8, n),
+    "segment": np.random.choice(["SMB", "Enterprise", "Consumer"], p=[0.30, 0.20, 0.50], size=n),
+    "channel": np.random.choice(["organic", "paid", "email", "direct"], size=n),
+    "status": np.random.choice(["completed", "cancelled", "refunded"],
+                                p=[0.75, 0.15, 0.10], size=n),
+    "country": np.random.choice(["US", "DE", "UK", "FR", "CA"],
+                                 p=[0.40, 0.20, 0.20, 0.10, 0.10], size=n),
+})
+
+# Add trend: slight revenue growth over time
+orders["revenue"] += (orders.index / n * 15)
+orders["revenue"] = orders["revenue"].round(2)
+```
+
+---
+
+## Matplotlib Mastery: Figure/Axes Architecture
+
+```python
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import matplotlib.patches as mpatches
+import numpy as np
+
+
+def professional_figure_setup(
+    nrows: int = 1,
+    ncols: int = 1,
+    figsize: tuple = (12, 6),
+    title: str = "",
+    subtitle: str = "",
+) -> tuple[plt.Figure, np.ndarray]:
+    """
+    Create a figure with professional styling applied.
+    Returns (fig, axes) where axes is always 2D array.
+    """
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
+
+    # Flatten to 2D for consistent access
+    if nrows == 1 and ncols == 1:
+        axes = np.array([[axes]])
+    elif nrows == 1:
+        axes = axes[np.newaxis, :]
+    elif ncols == 1:
+        axes = axes[:, np.newaxis]
+
+    # Apply spine cleanup to all axes
+    for ax_row in axes:
+        for ax in ax_row:
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["left"].set_alpha(0.3)
+            ax.spines["bottom"].set_alpha(0.3)
+            ax.tick_params(labelsize=9, length=3)
+            ax.grid(axis="y", alpha=0.3, linewidth=0.5, linestyle="--")
+
+    if title:
+        fig.suptitle(title, fontsize=14, fontweight="bold", y=1.01)
+    if subtitle:
+        fig.text(0.5, 1.0, subtitle, ha="center", va="bottom", fontsize=10, color="#666666")
+
+    return fig, axes
+
+
+# Example: Revenue trend with reference line annotation
+fig, axes = professional_figure_setup(1, 1, figsize=(14, 6),
+                                       title="Weekly Revenue Trend — GadaaLabs 2023",
+                                       subtitle="Organic growth trend confirmed despite Q3 dip")
+
+ax = axes[0, 0]
+
+weekly = orders.set_index("order_date")["revenue"].resample("W").sum()
+ma4 = weekly.rolling(4).mean()
+
+# Plot raw + smoothed
+ax.fill_between(weekly.index, weekly.values, alpha=0.15, color="#4C72B0", label="_nolegend_")
+ax.plot(weekly.index, weekly.values, color="#4C72B0", linewidth=1, alpha=0.7, label="Weekly revenue")
+ax.plot(ma4.index, ma4.values, color="#C44E52", linewidth=2.5, label="4-week moving average")
+
+# Reference line: mean revenue
+mean_rev = weekly.mean()
+ax.axhline(mean_rev, color="#55A868", linestyle="--", linewidth=1.5, alpha=0.8)
+ax.text(weekly.index[-1], mean_rev * 1.02, f"Mean: ${mean_rev:,.0f}",
+        ha="right", va="bottom", fontsize=9, color="#55A868")
+
+# Shaded region: Q3 dip annotation
+q3_start = pd.Timestamp("2023-07-01")
+q3_end = pd.Timestamp("2023-09-30")
+ax.axvspan(q3_start, q3_end, alpha=0.08, color="orange")
+ax.text(q3_start + pd.Timedelta(days=30), weekly.max() * 0.95,
+        "Q3 dip", ha="center", fontsize=9, style="italic", color="darkorange")
+
+# Format y-axis as currency
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+ax.set_xlabel("Week")
+ax.set_ylabel("Revenue")
+ax.legend(fontsize=9)
+
+plt.tight_layout()
+plt.savefig("outputs/viz_revenue_trend.png", dpi=150, bbox_inches="tight")
+plt.show()
+```
+
+### Complex Layout with GridSpec
+
+```python
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import numpy as np
+
+
+def build_summary_dashboard(df: pd.DataFrame) -> None:
+    """
+    Multi-panel summary dashboard using GridSpec for flexible layout.
+    """
+    fig = plt.figure(figsize=(16, 12))
+    gs = gridspec.GridSpec(
+        3, 3,
+        figure=fig,
+        hspace=0.4,
+        wspace=0.35,
+    )
+
+    # Top row: wide chart (span all 3 columns)
+    ax_trend = fig.add_subplot(gs[0, :])
+
+    # Middle row: three equal panels
+    ax_seg = fig.add_subplot(gs[1, 0])
+    ax_cat = fig.add_subplot(gs[1, 1])
+    ax_chan = fig.add_subplot(gs[1, 2])
+
+    # Bottom row: two panels (1 wide, 1 narrow)
+    ax_scatter = fig.add_subplot(gs[2, :2])
+    ax_status = fig.add_subplot(gs[2, 2])
+
+    # Style all axes
+    for ax in [ax_trend, ax_seg, ax_cat, ax_chan, ax_scatter, ax_status]:
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+    # 1. Revenue trend
+    weekly = df.set_index("order_date")["revenue"].resample("W").sum()
+    ax_trend.plot(weekly.index, weekly.values, color="#4C72B0", linewidth=2)
+    ax_trend.fill_between(weekly.index, weekly.values, alpha=0.15, color="#4C72B0")
+    ax_trend.set_title("Weekly Revenue", fontweight="bold")
+    ax_trend.yaxis.set_major_formatter(lambda x, _: f"${x/1e3:.0f}k")
+
+    # 2. Revenue by segment (horizontal bar)
+    seg_rev = df.groupby("segment")["revenue"].sum().sort_values()
+    seg_rev.plot.barh(ax=ax_seg, color="#4C72B0", alpha=0.8)
+    ax_seg.set_title("Revenue by Segment", fontweight="bold")
+
+    # 3. Revenue by category
+    cat_rev = df.groupby("category")["revenue"].sum().sort_values(ascending=False)
+    cat_rev.plot.bar(ax=ax_cat, color="#55A868", alpha=0.8)
+    ax_cat.set_title("Revenue by Category", fontweight="bold")
+    ax_cat.tick_params(axis="x", rotation=45)
+
+    # 4. Channel mix (pie)
+    chan_rev = df.groupby("channel")["revenue"].sum()
+    ax_chan.pie(chan_rev.values, labels=chan_rev.index, autopct="%1.0f%%",
+                startangle=90, colors=plt.cm.tab10.colors)
+    ax_chan.set_title("Channel Mix", fontweight="bold")
+
+    # 5. Revenue vs quantity scatter
+    sample = df.sample(500, random_state=42)
+    scatter_colors = {"SMB": "#4C72B0", "Enterprise": "#C44E52", "Consumer": "#55A868"}
+    for seg, color in scatter_colors.items():
+        mask = sample["segment"] == seg
+        ax_scatter.scatter(sample.loc[mask, "quantity"], sample.loc[mask, "revenue"],
+                           alpha=0.4, s=20, color=color, label=seg)
+    ax_scatter.set_xlabel("Quantity")
+    ax_scatter.set_ylabel("Revenue")
+    ax_scatter.set_title("Revenue vs Quantity by Segment", fontweight="bold")
+    ax_scatter.legend(fontsize=8)
+
+    # 6. Order status (stacked bar)
+    status_seg = pd.crosstab(df["segment"], df["status"], normalize="index")
+    status_seg.plot.bar(stacked=True, ax=ax_status, colormap="RdYlGn", alpha=0.85)
+    ax_status.set_title("Order Status Mix", fontweight="bold")
+    ax_status.tick_params(axis="x", rotation=45)
+    ax_status.legend(fontsize=7, loc="upper right")
+
+    fig.suptitle("GadaaLabs Revenue Dashboard — 2023", fontsize=16, fontweight="bold", y=1.01)
+
+    plt.savefig("outputs/viz_dashboard.png", dpi=150, bbox_inches="tight")
+    plt.show()
+
+
+build_summary_dashboard(orders)
+```
+
+---
+
+## Seaborn: Themes, Palettes, FacetGrid
+
+```python
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+
+def seaborn_style_guide() -> None:
+    """Demonstrate seaborn theme options and colour palettes."""
+    # Available themes: darkgrid, whitegrid, dark, white, ticks
+    # white and ticks are most professional for reports
+    sns.set_theme(style="ticks", font_scale=1.1)
+
+    # Cubehelix: sequential, perceptually uniform, good for continuous data
+    seq_palette = sns.cubehelix_palette(as_cmap=True)
+
+    # Diverging: highlight both extremes (e.g., above/below zero)
+    div_palette = sns.diverging_palette(220, 20, as_cmap=True)
+
+    # Qualitative: for categorical data with no ordering
+    qual_palette = sns.color_palette("tab10", n_colors=8)
+
+    # Colorblind-safe: always use for published work
+    cb_palette = sns.color_palette("colorblind", n_colors=6)
+
+    print("Palette guide:")
+    print("  Sequential (ranked values): cubehelix, Blues, YlOrRd")
+    print("  Diverging (above/below center): diverging_palette, RdBu_r")
+    print("  Qualitative (categories): tab10, colorblind, Set2")
+
+
+seaborn_style_guide()
+
+# Professional seaborn chart with FacetGrid
+sns.set_theme(style="ticks", font_scale=1.0)
+
+g = sns.FacetGrid(
+    orders.sample(1500, random_state=42),
+    col="segment",
+    col_order=["Consumer", "SMB", "Enterprise"],
+    height=4,
+    aspect=1.2,
+    sharey=False,
+)
+
+g.map_dataframe(
+    sns.histplot,
+    x="revenue",
+    bins=30,
+    kde=True,
+    color="#4C72B0",
+    alpha=0.7,
+)
+
+g.set_axis_labels("Revenue ($)", "Count")
+g.set_titles(col_template="{col_name} Segment")
+g.fig.suptitle("Revenue Distribution by Customer Segment", y=1.03, fontsize=13, fontweight="bold")
+
+# Add median line to each panel
+for ax, seg in zip(g.axes.flat, ["Consumer", "SMB", "Enterprise"]):
+    median = orders[orders["segment"] == seg]["revenue"].median()
+    ax.axvline(median, color="#C44E52", linestyle="--", linewidth=1.5)
+    ax.text(median * 1.05, ax.get_ylim()[1] * 0.9, f"Median\n${median:.0f}",
+            fontsize=8, color="#C44E52")
+
+plt.savefig("outputs/viz_faceted_hist.png", dpi=150, bbox_inches="tight")
+plt.show()
+```
+
+---
+
+## Plotly Express: Interactive Charts
+
+```python
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import pandas as pd
+import numpy as np
+
+
+def create_interactive_revenue_dashboard(df: pd.DataFrame) -> go.Figure:
+    """
+    Build a multi-panel interactive Plotly dashboard.
+    Returns a Figure that can be saved as HTML for stakeholder sharing.
+    """
+    # Prepare data
+    weekly = df.set_index("order_date")["revenue"].resample("W").sum().reset_index()
+    weekly.columns = ["week", "revenue"]
+
+    seg_rev = df.groupby("segment")["revenue"].sum().reset_index()
+    cat_rev = df.groupby("category")["revenue"].sum().reset_index().sort_values("revenue", ascending=True)
+
+    channel_status = df.groupby(["channel", "status"]).size().reset_index(name="count")
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=[
+            "Weekly Revenue Trend",
+            "Revenue by Segment",
+            "Revenue by Category",
+            "Order Status by Channel",
+        ],
+        specs=[
+            [{"type": "scatter"}, {"type": "bar"}],
+            [{"type": "bar"}, {"type": "bar"}],
+        ],
+        vertical_spacing=0.15,
+        horizontal_spacing=0.12,
+    )
+
+    # Panel 1: Weekly trend (line)
+    fig.add_trace(
+        go.Scatter(
+            x=weekly["week"], y=weekly["revenue"],
+            mode="lines", name="Weekly Revenue",
+            line=dict(color="#4C72B0", width=2),
+            fill="tozeroy", fillcolor="rgba(76, 114, 176, 0.15)",
+            hovertemplate="Week: %{x}<br>Revenue: $%{y:,.0f}<extra></extra>",
+        ),
+        row=1, col=1,
+    )
+
+    # 4-week MA overlay
+    weekly["ma4"] = weekly["revenue"].rolling(4).mean()
+    fig.add_trace(
+        go.Scatter(
+            x=weekly["week"], y=weekly["ma4"],
+            mode="lines", name="4-Week MA",
+            line=dict(color="#C44E52", width=2.5, dash="dot"),
+            hovertemplate="Week: %{x}<br>MA: $%{y:,.0f}<extra></extra>",
+        ),
+        row=1, col=1,
+    )
+
+    # Panel 2: Revenue by segment
+    fig.add_trace(
+        go.Bar(
+            x=seg_rev["segment"], y=seg_rev["revenue"],
+            name="Segment Revenue",
+            marker_color=["#4C72B0", "#55A868", "#C44E52"],
+            hovertemplate="%{x}<br>$%{y:,.0f}<extra></extra>",
+        ),
+        row=1, col=2,
+    )
+
+    # Panel 3: Revenue by category (horizontal)
+    fig.add_trace(
+        go.Bar(
+            y=cat_rev["category"], x=cat_rev["revenue"],
+            orientation="h",
+            name="Category Revenue",
+            marker_color="#DD8452",
+            hovertemplate="%{y}<br>$%{x:,.0f}<extra></extra>",
+        ),
+        row=2, col=1,
+    )
+
+    # Panel 4: Stacked bar — order status by channel
+    for status, color in [("completed", "#55A868"), ("cancelled", "#C44E52"), ("refunded", "#DD8452")]:
+        status_data = channel_status[channel_status["status"] == status]
+        fig.add_trace(
+            go.Bar(
+                name=status.capitalize(),
+                x=status_data["channel"],
+                y=status_data["count"],
+                marker_color=color,
+                hovertemplate=f"{status}: %{{y:,}}<extra></extra>",
+            ),
+            row=2, col=2,
+        )
+
+    fig.update_layout(
+        title=dict(text="GadaaLabs Revenue Dashboard — Interactive", font_size=16),
+        height=700,
+        barmode="stack",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(family="Arial", size=11),
+    )
+
+    # Style axes
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(showgrid=True, gridcolor="#eeeeee", gridwidth=0.5)
+
+    return fig
+
+
+dashboard_fig = create_interactive_revenue_dashboard(orders)
+# Save as interactive HTML
+dashboard_fig.write_html("outputs/interactive_dashboard.html")
+print("Interactive dashboard saved to outputs/interactive_dashboard.html")
+```
+
+### Plotly Specific Chart Types
+
+```python
+import plotly.express as px
+
+
+def create_plotly_specialty_charts(df: pd.DataFrame) -> None:
+    """Show treemap and sunburst for hierarchical composition."""
+
+    # Treemap: part-to-whole by category × segment
+    cat_seg = df.groupby(["category", "segment"])["revenue"].sum().reset_index()
+
+    treemap = px.treemap(
+        cat_seg,
+        path=[px.Constant("All"), "category", "segment"],
+        values="revenue",
+        color="revenue",
+        color_continuous_scale="Blues",
+        title="Revenue by Category and Segment (Treemap)",
+    )
+    treemap.update_traces(
+        hovertemplate="%{label}<br>Revenue: $%{value:,.0f}<extra></extra>"
+    )
+    treemap.write_html("outputs/viz_treemap.html")
+
+    # Sunburst: same data, radial layout
+    sunburst = px.sunburst(
+        cat_seg,
+        path=["category", "segment"],
+        values="revenue",
+        color="revenue",
+        color_continuous_scale="Viridis",
+        title="Revenue by Category and Segment (Sunburst)",
+    )
+    sunburst.write_html("outputs/viz_sunburst.html")
+
+    print("Treemap and sunburst saved as HTML files.")
+
+
+create_plotly_specialty_charts(orders)
+```
+
+---
+
+## Annotation: Making the "So What" Visible
+
+The most underused visualisation technique is annotation. Annotations convert descriptive charts into prescriptive ones.
+
+```python
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import numpy as np
+import pandas as pd
+
+
+def annotated_ab_result_chart(
+    control_rate: float,
+    treatment_rate: float,
+    control_ci: tuple[float, float],
+    treatment_ci: tuple[float, float],
+    test_name: str = "A/B Test",
+) -> None:
+    """
+    Professional chart for A/B test results with confidence intervals and annotation.
+    This is the chart that goes in the stakeholder memo.
+    """
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    # Error bars = confidence intervals
+    variants = ["Control", "Treatment"]
+    rates = [control_rate, treatment_rate]
+    errors_low = [control_rate - control_ci[0], treatment_rate - treatment_ci[0]]
+    errors_high = [control_ci[1] - control_rate, treatment_ci[1] - treatment_rate]
+
+    colors = ["#4C72B0", "#55A868"]
+    bars = ax.bar(variants, rates, color=colors, alpha=0.8, width=0.5)
+    ax.errorbar(variants, rates,
+                yerr=[errors_low, errors_high],
+                fmt="none", color="black", capsize=8, linewidth=2)
+
+    # Annotate bars with exact rates
+    for bar, rate in zip(bars, rates):
+        ax.text(bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max(errors_high) * 0.1,
+                f"{rate*100:.2f}%",
+                ha="center", va="bottom", fontsize=12, fontweight="bold")
+
+    # Lift annotation
+    lift = (treatment_rate - control_rate) / control_rate * 100
+    ax.annotate(
+        f"+{lift:.1f}% relative lift",
+        xy=(1, treatment_rate), xytext=(0.5, max(rates) * 1.15),
+        arrowprops=dict(arrowstyle="->", color="black", lw=1.5),
+        fontsize=11, fontweight="bold", color="#C44E52",
+        ha="center",
+    )
+
+    ax.set_ylabel("Conversion Rate")
+    ax.set_title(f"{test_name}\n95% Confidence Intervals shown", fontsize=13, fontweight="bold")
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x*100:.1f}%"))
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.set_ylim(0, max(rates) * 1.3)
+
+    plt.tight_layout()
+    plt.savefig("outputs/viz_ab_result.png", dpi=150, bbox_inches="tight")
+    plt.show()
+
+
+annotated_ab_result_chart(
+    control_rate=0.042, treatment_rate=0.047,
+    control_ci=(0.038, 0.046), treatment_ci=(0.043, 0.051),
+    test_name="New Checkout Flow — Conversion Rate Test",
+)
+```
+
+---
+
+## Colour Theory for Data
+
+```python
+COLOUR_GUIDE = """
+COLOUR PRINCIPLES FOR DATA VISUALISATION
+=========================================
+
+1. Sequential palettes (ordered data)
+   Use: Blues, YlOrRd, Viridis, Plasma
+   When: showing magnitude gradient (e.g., revenue intensity on a map,
+   correlation heatmap where all values are positive)
+
+2. Diverging palettes (data with meaningful midpoint)
+   Use: RdBu_r, RdYlGn, seaborn.diverging_palette()
+   When: showing above/below zero (e.g., YoY growth rates,
+   correlation heatmap with positive and negative values)
+
+3. Qualitative palettes (unordered categories)
+   Use: tab10, Set2, Paired, colorblind
+   When: distinguishing segments, channels, product categories
+
+4. Colorblind-safe rules:
+   - Never use red + green as the only distinguishing colours
+   - Use seaborn's 'colorblind' palette by default
+   - Test with a simulator: Coblis or Sim Daltonism
+
+5. Tufte's data-ink ratio:
+   - Maximise the proportion of ink devoted to data
+   - Remove: chartjunk (3D effects, decorative gradients, shadows)
+   - Remove: unnecessary grid lines, tick marks, borders
+   - Remove: redundant legends (label directly if possible)
+
+6. Accessibility:
+   - Minimum font size: 9pt for annotations, 10pt for axis labels
+   - Ensure sufficient contrast (WCAG 2.1 AA: 4.5:1 contrast ratio)
+   - Avoid relying on colour alone to convey information — use shape, pattern, or annotation
+
+RECOMMENDED DEFAULT PALETTE (from this course)
+-----------------------------------------------
+Primary:   #4C72B0 (muted blue)
+Secondary: #C44E52 (muted red)
+Positive:  #55A868 (muted green)
+Neutral:   #DD8452 (muted orange)
+Dark:      #333333
+Light:     #999999
+"""
+print(COLOUR_GUIDE)
+```
+
+---
+
+## Building a Reusable Plot Style Module
+
+```python
+# plot_style.py — Include this in every analysis project
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import seaborn as sns
+from typing import Any
+
+
+# ============================================================
+# DESIGN TOKENS — change these once to restyle everything
+# ============================================================
+COLOURS = {
+    "primary": "#4C72B0",
+    "secondary": "#C44E52",
+    "positive": "#55A868",
+    "warning": "#DD8452",
+    "neutral": "#8172B3",
+    "dark": "#333333",
+    "light": "#999999",
+    "grid": "#eeeeee",
+    "background": "#ffffff",
+}
+
+SEGMENT_COLOURS = {
+    "Enterprise": "#C44E52",
+    "SMB": "#4C72B0",
+    "Consumer": "#55A868",
+}
+
+CATEGORY_COLOURS = {
+    "Electronics": "#4C72B0",
+    "Clothing": "#55A868",
+    "Books": "#DD8452",
+    "Home": "#8172B3",
+    "Sports": "#C44E52",
+}
+
+
+def apply_gadaalabs_style() -> None:
+    """Apply the GadaaLabs house style to all subsequent matplotlib charts."""
+    plt.rcParams.update({
+        # Figure
+        "figure.dpi": 120,
+        "figure.facecolor": COLOURS["background"],
+        "figure.edgecolor": COLOURS["background"],
+
+        # Axes
+        "axes.facecolor": COLOURS["background"],
+        "axes.edgecolor": COLOURS["light"],
+        "axes.linewidth": 0.8,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.grid": True,
+        "axes.axisbelow": True,
+
+        # Grid
+        "grid.color": COLOURS["grid"],
+        "grid.linewidth": 0.5,
+        "grid.linestyle": "--",
+
+        # Typography
+        "font.family": "sans-serif",
+        "font.size": 10,
+        "axes.titlesize": 12,
+        "axes.titleweight": "bold",
+        "axes.labelsize": 10,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
+
+        # Legend
+        "legend.frameon": False,
+        "legend.fontsize": 9,
+
+        # Lines
+        "lines.linewidth": 2,
+
+        # Colour cycle (used for multi-series charts)
+        "axes.prop_cycle": plt.cycler("color", [
+            COLOURS["primary"],
+            COLOURS["secondary"],
+            COLOURS["positive"],
+            COLOURS["warning"],
+            COLOURS["neutral"],
+        ]),
+    })
+
+    # Seaborn theme
+    sns.set_theme(style="ticks", rc={
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+    })
+
+
+def format_currency_axis(ax: plt.Axes, axis: str = "y", suffix: str = "") -> None:
+    """Apply dollar currency formatting to an axis."""
+    formatter = mticker.FuncFormatter(lambda x, _: f"${x:,.0f}{suffix}")
+    if axis == "y":
+        ax.yaxis.set_major_formatter(formatter)
+    else:
+        ax.xaxis.set_major_formatter(formatter)
+
+
+def format_percent_axis(ax: plt.Axes, axis: str = "y", decimals: int = 1) -> None:
+    """Apply percentage formatting to an axis."""
+    formatter = mticker.FuncFormatter(lambda x, _: f"{x*100:.{decimals}f}%")
+    if axis == "y":
+        ax.yaxis.set_major_formatter(formatter)
+    else:
+        ax.xaxis.set_major_formatter(formatter)
+
+
+def add_value_labels(
+    ax: plt.Axes,
+    fmt: str = "{:.1f}",
+    offset: float = 0.01,
+    fontsize: int = 9,
+    color: str = COLOURS["dark"],
+) -> None:
+    """Add value labels on top of bar chart bars."""
+    for patch in ax.patches:
+        height = patch.get_height()
+        if height == 0:
+            continue
+        ax.text(
+            patch.get_x() + patch.get_width() / 2,
+            height + offset,
+            fmt.format(height),
+            ha="center", va="bottom",
+            fontsize=fontsize, color=color,
+        )
+
+
+def save_figure(fig: plt.Figure, filename: str, formats: list[str] | None = None) -> None:
+    """
+    Save a figure in multiple formats.
+    Defaults to high-DPI PNG + PDF.
+    """
+    formats = formats or ["png", "pdf"]
+    for fmt in formats:
+        path = f"outputs/{filename}.{fmt}"
+        fig.savefig(
+            path,
+            dpi=200 if fmt == "png" else None,
+            bbox_inches="tight",
+            facecolor="white",
+        )
+        print(f"Saved: {path}")
+
+
+# Apply style globally
+apply_gadaalabs_style()
+
+# Example usage
+fig, ax = plt.subplots(figsize=(10, 5))
+
+seg_rev = orders.groupby("segment")["revenue"].sum().sort_values(ascending=False)
+bars = ax.bar(seg_rev.index, seg_rev.values, color=[SEGMENT_COLOURS.get(s, COLOURS["primary"]) for s in seg_rev.index])
+add_value_labels(ax, fmt="${:,.0f}")
+format_currency_axis(ax)
+
+ax.set_title("Revenue by Customer Segment")
+ax.set_ylabel("Total Revenue")
+
+save_figure(fig, "viz_segment_bar")
+plt.show()
+```
+
+---
+
+## Exporting for Different Audiences
+
+```python
+import plotly.io as pio
+import pandas as pd
+
+
+def export_all_formats(
+    matplotlib_fig: plt.Figure,
+    plotly_fig,
+    base_filename: str,
+) -> None:
+    """
+    Export a report in all standard formats.
+    """
+    # PNG: for slide decks, emails
+    matplotlib_fig.savefig(f"outputs/{base_filename}.png", dpi=200, bbox_inches="tight")
+
+    # PDF: for printed reports
+    matplotlib_fig.savefig(f"outputs/{base_filename}.pdf", bbox_inches="tight")
+
+    # SVG: for web/design teams who need to edit vectors
+    matplotlib_fig.savefig(f"outputs/{base_filename}.svg", bbox_inches="tight")
+
+    # Interactive HTML: for stakeholders who want to explore
+    if plotly_fig is not None:
+        plotly_fig.write_html(
+            f"outputs/{base_filename}_interactive.html",
+            include_plotlyjs="cdn",  # Smaller file — loads plotly from CDN
+            full_html=True,
+        )
+
+    print(f"Exported: {base_filename} in PNG, PDF, SVG, HTML")
+```
+
+---
+
+## Key Takeaways
+
+- Chart selection should be driven by the analytical question type, not by what looks impressive. Use the selection framework as a checklist before opening your plotting library.
+- The matplotlib figure/axes architecture is the foundation for all complex layouts. `GridSpec` enables non-uniform panel layouts that no higher-level library can match for precision.
+- Annotations — reference lines, shaded regions, callout text, error bars — are what convert a descriptive chart into a prescriptive one. The "so what" should be visible in the chart itself, not explained in a footnote.
+- Plotly for interactive deliverables: use `write_html()` with `include_plotlyjs='cdn'` to produce a self-contained shareable file. Always build a static matplotlib backup for PDF reports.
+- Colorblind-safe palettes (`colorblind` in seaborn, `tab10` in matplotlib) should be your default. Never use red + green as the only distinguishing colours.
+- The reusable `plot_style.py` module with design tokens, a `apply_gadaalabs_style()` function, and helper formatters is the professional pattern for maintaining visual consistency across an analysis project and a team.
+- Export in multiple formats for different audiences: PNG for slide decks, PDF for printed reports, SVG for design teams, interactive HTML for stakeholders who want to explore the data.
+- Tufte's data-ink ratio principle: maximise the proportion of ink devoted to conveying data. Remove chart junk (3D effects, decorative gradients, unnecessary grid lines, redundant legends) systematically.

@@ -1,0 +1,827 @@
+---
+title: "Feature Engineering — Creating Signals from Raw Data"
+description: "Transform raw columns into analytically powerful features: datetime decomposition, interaction terms, aggregation features, categorical encoding strategies, lag features, text signals, and a documented feature catalog."
+duration: 26
+order: 8
+---
+
+## Why Feature Engineering Matters
+
+Raw data columns are rarely the optimal representation for analysis or modelling. A timestamp is more useful as "is_weekend" or "days_since_last_purchase." Two revenue columns become a ratio that captures margin efficiency. A text field becomes a keyword presence flag. Feature engineering is the systematic process of creating new signals from existing raw fields using domain knowledge and analytical reasoning.
+
+The quality of features determines the quality of analysis. Weak features make EDA misleading and models useless. Strong features, grounded in domain understanding, surface the true drivers of the outcome you care about.
+
+---
+
+## Setup: The GadaaLabs Dataset
+
+```python
+import pandas as pd
+import numpy as np
+from dataclasses import dataclass, field
+from typing import Any
+
+np.random.seed(42)
+n = 3000
+
+orders = pd.DataFrame({
+    "order_id": range(1, n + 1),
+    "customer_id": np.random.randint(1, 601, n),
+    "product_id": np.random.choice(["SKU-001", "SKU-002", "SKU-003", "SKU-004"], n),
+    "category": np.random.choice(["Electronics", "Clothing", "Books", "Home"], n),
+    "order_date": pd.date_range("2022-01-01", periods=n, freq="4h"),
+    "revenue": np.random.exponential(scale=75, size=n).round(2).clip(0.01),
+    "quantity": np.random.randint(1, 8, n),
+    "cost": np.random.exponential(scale=45, size=n).round(2).clip(0.01),
+    "status": np.random.choice(["completed", "cancelled", "refunded"],
+                                p=[0.75, 0.15, 0.10], size=n),
+    "segment": np.random.choice(["SMB", "Enterprise", "Consumer"], p=[0.30, 0.20, 0.50], size=n),
+    "channel": np.random.choice(["organic", "paid", "email", "direct"], size=n),
+    "discount_pct": np.random.choice([0, 5, 10, 15, 20], p=[0.5, 0.2, 0.15, 0.1, 0.05], size=n),
+    "country": np.random.choice(["US", "DE", "UK", "FR", "CA"], p=[0.40, 0.20, 0.20, 0.10, 0.10], size=n),
+    "customer_notes": np.random.choice([
+        "urgent delivery required",
+        "gift wrap please",
+        "",
+        "returning customer - apply discount",
+        "first time order",
+        "VIP account",
+        "bulk purchase inquiry",
+    ], size=n),
+})
+
+customers = pd.DataFrame({
+    "customer_id": range(1, 601),
+    "signup_date": pd.date_range("2019-01-01", periods=600, freq="12h"),
+    "country": np.random.choice(["US", "DE", "UK", "FR", "CA"], 600),
+    "industry": np.random.choice(["Tech", "Finance", "Retail", "Healthcare", "Other"], 600),
+    "annual_contract_value": np.random.exponential(30_000, 600).round(2),
+    "is_enterprise": np.random.choice([0, 1], p=[0.8, 0.2], size=600),
+})
+
+print("Orders shape:", orders.shape)
+print("Customers shape:", customers.shape)
+```
+
+---
+
+## Datetime Features
+
+Timestamps are one of the richest raw fields. A single `order_date` can yield a dozen analytically meaningful binary and continuous features.
+
+```python
+import pandas as pd
+import numpy as np
+
+
+def extract_datetime_features(
+    df: pd.DataFrame,
+    date_col: str,
+    reference_date: pd.Timestamp | None = None,
+    include_cyclical: bool = True,
+) -> pd.DataFrame:
+    """
+    Extract a comprehensive set of datetime features from a timestamp column.
+
+    Args:
+        df: Input DataFrame.
+        date_col: Column name of the datetime column.
+        reference_date: Anchor date for computing "days_since" features.
+                        Defaults to the maximum date in the column.
+        include_cyclical: Whether to encode cyclical features (hour, day_of_week)
+                          as sin/cos pairs (preserves circular continuity).
+
+    Returns:
+        DataFrame with new feature columns appended.
+    """
+    df = df.copy()
+    dt = pd.to_datetime(df[date_col])
+    ref = reference_date or dt.max()
+
+    # Calendar features
+    df[f"{date_col}_year"] = dt.dt.year
+    df[f"{date_col}_quarter"] = dt.dt.quarter
+    df[f"{date_col}_month"] = dt.dt.month
+    df[f"{date_col}_week_of_year"] = dt.dt.isocalendar().week.astype(int)
+    df[f"{date_col}_day_of_month"] = dt.dt.day
+    df[f"{date_col}_day_of_week"] = dt.dt.dayofweek   # 0=Monday, 6=Sunday
+    df[f"{date_col}_hour"] = dt.dt.hour
+
+    # Binary flags
+    df[f"{date_col}_is_weekend"] = (dt.dt.dayofweek >= 5).astype(int)
+    df[f"{date_col}_is_month_start"] = dt.dt.is_month_start.astype(int)
+    df[f"{date_col}_is_month_end"] = dt.dt.is_month_end.astype(int)
+    df[f"{date_col}_is_quarter_start"] = dt.dt.is_quarter_start.astype(int)
+    df[f"{date_col}_is_quarter_end"] = dt.dt.is_quarter_end.astype(int)
+
+    # Business hour flag (09:00–17:00 local)
+    df[f"{date_col}_is_business_hours"] = ((dt.dt.hour >= 9) & (dt.dt.hour < 17) & (dt.dt.dayofweek < 5)).astype(int)
+
+    # Days since reference (recency measure)
+    df[f"{date_col}_days_since_ref"] = (ref - dt).dt.days
+
+    # Days since year start (position in year)
+    df[f"{date_col}_day_of_year"] = dt.dt.dayofyear
+
+    if include_cyclical:
+        # Cyclical encoding: convert periodic features to sin/cos
+        # This ensures that hour 23 is close to hour 0, December is close to January, etc.
+        df[f"{date_col}_hour_sin"] = np.sin(2 * np.pi * dt.dt.hour / 24)
+        df[f"{date_col}_hour_cos"] = np.cos(2 * np.pi * dt.dt.hour / 24)
+        df[f"{date_col}_dow_sin"] = np.sin(2 * np.pi * dt.dt.dayofweek / 7)
+        df[f"{date_col}_dow_cos"] = np.cos(2 * np.pi * dt.dt.dayofweek / 7)
+        df[f"{date_col}_month_sin"] = np.sin(2 * np.pi * dt.dt.month / 12)
+        df[f"{date_col}_month_cos"] = np.cos(2 * np.pi * dt.dt.month / 12)
+
+    return df
+
+
+orders_enriched = extract_datetime_features(orders, "order_date")
+
+new_cols = [c for c in orders_enriched.columns if "order_date_" in c]
+print(f"New datetime features ({len(new_cols)}):")
+print(orders_enriched[new_cols[:10]].head(3).to_string())
+```
+
+### Time Between Events
+
+```python
+def compute_time_between_events(
+    df: pd.DataFrame,
+    customer_col: str,
+    date_col: str,
+) -> pd.DataFrame:
+    """
+    For each order, compute the number of days since the same customer's
+    previous order. First orders get NaN (or a large sentinel value).
+    """
+    df = df.copy().sort_values([customer_col, date_col])
+
+    df["prev_order_date"] = df.groupby(customer_col)[date_col].shift(1)
+    df["days_since_last_order"] = (
+        pd.to_datetime(df[date_col]) - pd.to_datetime(df["prev_order_date"])
+    ).dt.days
+
+    # Sentinel for first-ever order: use overall median inter-order time
+    median_gap = df["days_since_last_order"].median()
+    df["days_since_last_order"] = df["days_since_last_order"].fillna(median_gap)
+
+    df = df.drop(columns=["prev_order_date"])
+    return df
+
+
+orders_enriched = compute_time_between_events(orders_enriched, "customer_id", "order_date")
+
+print("\ndays_since_last_order statistics:")
+print(orders_enriched["days_since_last_order"].describe().round(1))
+```
+
+---
+
+## Interaction Features
+
+Interaction features capture multiplicative or ratio relationships that neither variable alone expresses.
+
+```python
+import pandas as pd
+import numpy as np
+
+
+def create_interaction_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Create domain-motivated interaction features for the orders dataset.
+    Each feature is motivated by a specific analytical question.
+    """
+    df = df.copy()
+
+    # Margin: how much profit margin does each order generate?
+    # Direction hypothesis: higher margin orders are from loyal customers or premium products
+    df["gross_margin"] = (df["revenue"] - df["cost"]).round(2)
+    df["gross_margin_pct"] = (df["gross_margin"] / df["revenue"]).round(4)
+
+    # Revenue per unit: proxy for product tier / pricing level
+    df["revenue_per_unit"] = (df["revenue"] / df["quantity"]).round(2)
+    df["cost_per_unit"] = (df["cost"] / df["quantity"]).round(2)
+
+    # Discount impact: effective discount amount in currency
+    df["discount_amount"] = (df["revenue"] * df["discount_pct"] / 100).round(2)
+    df["net_revenue"] = (df["revenue"] - df["discount_amount"]).round(2)
+
+    # Value segment flag: high-value order
+    revenue_p75 = df["revenue"].quantile(0.75)
+    df["is_high_value_order"] = (df["revenue"] > revenue_p75).astype(int)
+
+    # Was a discount applied?
+    df["has_discount"] = (df["discount_pct"] > 0).astype(int)
+
+    # Paid channel with discount (efficiency question: are we over-subsidising paid acquisition?)
+    df["paid_with_discount"] = (
+        (df["channel"] == "paid") & (df["discount_pct"] > 0)
+    ).astype(int)
+
+    return df
+
+
+orders_enriched = create_interaction_features(orders_enriched)
+print("New interaction features created.")
+print(orders_enriched[["gross_margin", "gross_margin_pct", "revenue_per_unit",
+                        "discount_amount", "is_high_value_order"]].describe().round(2))
+```
+
+---
+
+## Aggregation Features
+
+Per-customer or per-product historical aggregations are among the most predictive features in any repeat-purchase context.
+
+```python
+import pandas as pd
+import numpy as np
+
+
+def create_customer_aggregation_features(
+    orders_df: pd.DataFrame,
+    customer_col: str = "customer_id",
+    date_col: str = "order_date",
+    revenue_col: str = "revenue",
+    status_col: str = "status",
+) -> pd.DataFrame:
+    """
+    Compute per-customer historical aggregation features and merge back.
+    These features characterise each customer based on their full order history.
+
+    Note: In a real production setting, these features should be computed
+    on a historical window that does not include the current order
+    to prevent data leakage.
+    """
+    completed = orders_df[orders_df[status_col] == "completed"].copy()
+
+    customer_stats = completed.groupby(customer_col).agg(
+        cust_total_orders=(customer_col, "count"),
+        cust_total_revenue=(revenue_col, "sum"),
+        cust_avg_order_value=(revenue_col, "mean"),
+        cust_median_order_value=(revenue_col, "median"),
+        cust_revenue_std=(revenue_col, "std"),
+        cust_max_order_value=(revenue_col, "max"),
+        cust_first_order_date=(date_col, "min"),
+        cust_last_order_date=(date_col, "max"),
+        cust_n_categories=("category", "nunique"),
+    ).round(2)
+
+    # Derived customer-level features
+    customer_stats["cust_days_active"] = (
+        pd.to_datetime(customer_stats["cust_last_order_date"]) -
+        pd.to_datetime(customer_stats["cust_first_order_date"])
+    ).dt.days
+
+    customer_stats["cust_order_frequency"] = (
+        customer_stats["cust_total_orders"] /
+        customer_stats["cust_days_active"].clip(lower=1)
+    ).round(6)  # Orders per day
+
+    customer_stats["cust_revenue_cv"] = (
+        customer_stats["cust_revenue_std"] /
+        customer_stats["cust_avg_order_value"]
+    ).round(4)  # Coefficient of variation — how consistent is this customer?
+
+    # LTV proxy: total revenue to date
+    customer_stats["cust_ltv_proxy"] = customer_stats["cust_total_revenue"]
+
+    # Is repeat buyer?
+    customer_stats["cust_is_repeat"] = (customer_stats["cust_total_orders"] > 1).astype(int)
+
+    # Merge back to orders
+    result = orders_df.merge(
+        customer_stats.reset_index(),
+        on=customer_col,
+        how="left",
+    )
+
+    print(f"Customer aggregation features created for {customer_stats.shape[0]:,} customers.")
+    print(f"Merged to {len(result):,} orders.")
+    return result
+
+
+orders_enriched = create_customer_aggregation_features(orders_enriched)
+
+print("\nCustomer feature sample:")
+print(orders_enriched[[
+    "customer_id", "cust_total_orders", "cust_total_revenue",
+    "cust_avg_order_value", "cust_is_repeat", "cust_order_frequency"
+]].drop_duplicates("customer_id").head(8).to_string())
+```
+
+---
+
+## Categorical Encoding
+
+The encoding strategy for categorical variables affects both analysis and model performance.
+
+```python
+import pandas as pd
+import numpy as np
+
+
+def encode_categoricals(
+    df: pd.DataFrame,
+    label_encode_cols: list[str] | None = None,
+    onehot_encode_cols: list[str] | None = None,
+    frequency_encode_cols: list[str] | None = None,
+    target_encode_cols: list[str] | None = None,
+    target_col: str | None = None,
+) -> pd.DataFrame:
+    """
+    Apply appropriate encoding strategy per column.
+
+    Encoding strategies:
+    - Label encoding: ordinal categoricals (small → medium → large)
+                      and tree-based models
+    - One-hot encoding: nominal categoricals, low cardinality (< ~15 levels),
+                        linear models and distance-based models
+    - Frequency encoding: medium-cardinality nominal (country, city)
+                          when one-hot would explode dimensionality
+    - Target encoding: high-cardinality, when a supervised target is available.
+                       WARNING: high leakage risk — requires cross-validation fold
+                       approach in practice (not shown here for simplicity).
+    """
+    df = df.copy()
+
+    # Label encoding (ordinal)
+    if label_encode_cols:
+        for col in label_encode_cols:
+            mapping = {v: i for i, v in enumerate(sorted(df[col].dropna().unique()))}
+            df[f"{col}_label"] = df[col].map(mapping)
+
+    # One-hot encoding
+    if onehot_encode_cols:
+        df = pd.get_dummies(df, columns=onehot_encode_cols, drop_first=False, dtype=int)
+
+    # Frequency encoding: replace each category with its frequency in the dataset
+    if frequency_encode_cols:
+        for col in frequency_encode_cols:
+            freq_map = df[col].value_counts(normalize=True)
+            df[f"{col}_freq"] = df[col].map(freq_map).round(6)
+
+    # Target encoding (mean of target per category)
+    # WARNING: compute on training data only to avoid leakage
+    if target_encode_cols and target_col:
+        for col in target_encode_cols:
+            target_mean = df.groupby(col)[target_col].mean()
+            global_mean = df[target_col].mean()
+            # Smoothed target encoding: blend category mean with global mean
+            # to handle small group sizes
+            counts = df[col].value_counts()
+            k = 20  # Smoothing factor
+            smoothed = (target_mean * counts + global_mean * k) / (counts + k)
+            df[f"{col}_target_enc"] = df[col].map(smoothed).round(4)
+            print(f"Target encoded: {col} → {col}_target_enc (smoothed, k={k})")
+
+    return df
+
+
+# Encode the orders dataset
+orders_encoded = encode_categoricals(
+    orders_enriched,
+    onehot_encode_cols=["segment", "channel"],
+    frequency_encode_cols=["country", "category"],
+    target_encode_cols=["category"],
+    target_col="revenue",
+)
+
+ohe_cols = [c for c in orders_encoded.columns if c.startswith("segment_") or c.startswith("channel_")]
+freq_cols = [c for c in orders_encoded.columns if c.endswith("_freq")]
+te_cols = [c for c in orders_encoded.columns if c.endswith("_target_enc")]
+
+print(f"\nOne-hot encoded columns: {ohe_cols}")
+print(f"Frequency encoded columns: {freq_cols}")
+print(f"Target encoded columns: {te_cols}")
+```
+
+---
+
+## Lag and Lead Features for Time Series
+
+```python
+import pandas as pd
+import numpy as np
+
+
+def create_lag_features(
+    df: pd.DataFrame,
+    group_col: str,
+    date_col: str,
+    value_col: str,
+    lags: list[int],
+    leads: list[int] | None = None,
+) -> pd.DataFrame:
+    """
+    Create lag (past) and lead (future) features for a time-ordered value column,
+    computed within groups (e.g., per customer or per product).
+
+    Lag features: value at t-k (used for: "what was last week's revenue?")
+    Lead features: value at t+k (used for: "what happens next period?" — requires careful
+                   handling to avoid leakage in predictive contexts)
+    """
+    df = df.copy().sort_values([group_col, date_col])
+
+    for lag in lags:
+        df[f"{value_col}_lag_{lag}"] = df.groupby(group_col)[value_col].shift(lag)
+
+    if leads:
+        for lead in leads:
+            df[f"{value_col}_lead_{lead}"] = df.groupby(group_col)[value_col].shift(-lead)
+
+    return df
+
+
+# Daily revenue time series — compute lags per category
+daily_cat_revenue = (
+    orders.set_index("order_date")
+    .groupby([pd.Grouper(freq="D"), "category"])["revenue"]
+    .sum()
+    .reset_index()
+    .rename(columns={"order_date": "date"})
+    .sort_values(["category", "date"])
+)
+
+daily_lag = create_lag_features(
+    daily_cat_revenue,
+    group_col="category",
+    date_col="date",
+    value_col="revenue",
+    lags=[1, 7, 14, 28],      # Previous 1, 7, 14, 28 days
+    leads=[7],                 # 7-day forward (for forecasting target, not analysis)
+)
+
+print("Lag features (Electronics, last 5 rows):")
+elec = daily_lag[daily_lag["category"] == "Electronics"].tail(5)
+print(elec[["date", "revenue", "revenue_lag_1", "revenue_lag_7", "revenue_lag_28"]].to_string())
+```
+
+---
+
+## Text Features
+
+Even basic text columns carry analytical signal when mined with simple string operations.
+
+```python
+import pandas as pd
+import re
+
+
+def extract_text_features(
+    df: pd.DataFrame,
+    text_col: str,
+    keywords: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Extract simple text-based features from a string column.
+    """
+    df = df.copy()
+    clean_text = df[text_col].fillna("").str.lower().str.strip()
+
+    # Length features
+    df[f"{text_col}_char_count"] = clean_text.str.len()
+    df[f"{text_col}_word_count"] = clean_text.str.split().str.len().fillna(0).astype(int)
+    df[f"{text_col}_is_empty"] = (clean_text == "").astype(int)
+
+    # Keyword flags (domain-specific signals)
+    if keywords:
+        for kw in keywords:
+            safe_kw = re.escape(kw)
+            col_name = f"{text_col}_has_{kw.replace(' ', '_')}"
+            df[col_name] = clean_text.str.contains(safe_kw, regex=True, na=False).astype(int)
+
+    # Sentiment proxy: count positive/negative words
+    positive_words = ["good", "great", "excellent", "vip", "loyalty", "returning", "gift"]
+    negative_words = ["urgent", "problem", "issue", "complaint", "return", "refund", "cancel"]
+
+    df[f"{text_col}_positive_signal"] = clean_text.apply(
+        lambda t: sum(1 for w in positive_words if w in t)
+    )
+    df[f"{text_col}_negative_signal"] = clean_text.apply(
+        lambda t: sum(1 for w in negative_words if w in t)
+    )
+
+    return df
+
+
+orders_enriched = extract_text_features(
+    orders,
+    text_col="customer_notes",
+    keywords=["urgent", "vip", "bulk", "first time", "gift", "discount"],
+)
+
+text_features = [c for c in orders_enriched.columns if "customer_notes_" in c]
+print("Text features created:")
+print(orders_enriched[text_features].describe().round(2))
+
+print("\nVIP orders with notes:")
+vip_orders = orders_enriched[orders_enriched["customer_notes_has_VIP"] == 1]
+print(f"VIP-flagged orders: {len(vip_orders):,} ({len(vip_orders)/len(orders_enriched)*100:.1f}%)")
+```
+
+---
+
+## Feature Selection Basics
+
+After engineering features, determine which ones carry the most signal.
+
+```python
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import LabelEncoder
+import matplotlib.pyplot as plt
+
+
+def quick_feature_importance(
+    df: pd.DataFrame,
+    feature_cols: list[str],
+    target_col: str,
+    n_estimators: int = 100,
+    sample_n: int = 2000,
+) -> pd.DataFrame:
+    """
+    Use a quick RandomForest to estimate feature importance.
+    This is an EDA tool for prioritisation — not a final model.
+
+    Limitations:
+    - RandomForest importance is biased toward high-cardinality features.
+    - Does not account for feature interactions.
+    - Use as a relative signal, not an absolute ranking.
+    """
+    sub = df[feature_cols + [target_col]].dropna()
+
+    if len(sub) > sample_n:
+        sub = sub.sample(sample_n, random_state=42)
+
+    X = sub[feature_cols].copy()
+    y = sub[target_col]
+
+    # Encode any remaining categoricals
+    for col in X.select_dtypes(include="object").columns:
+        le = LabelEncoder()
+        X[col] = le.fit_transform(X[col].astype(str))
+
+    rf = RandomForestRegressor(n_estimators=n_estimators, random_state=42, n_jobs=-1, max_depth=6)
+    rf.fit(X, y)
+
+    importance_df = pd.DataFrame({
+        "feature": feature_cols,
+        "importance": rf.feature_importances_,
+    }).sort_values("importance", ascending=False)
+
+    importance_df["importance_pct"] = (importance_df["importance"] / importance_df["importance"].sum() * 100).round(2)
+    importance_df["cumulative_pct"] = importance_df["importance_pct"].cumsum().round(2)
+
+    return importance_df
+
+
+feature_cols = [
+    "quantity", "discount_pct", "days_since_last_order",
+    "cust_total_orders", "cust_avg_order_value", "cust_is_repeat",
+    "order_date_is_weekend", "order_date_month", "order_date_day_of_week",
+]
+
+# Only use columns that exist in orders_enriched
+available_features = [c for c in feature_cols if c in orders_enriched.columns]
+
+if available_features:
+    importance = quick_feature_importance(orders_enriched, available_features, "revenue")
+
+    print("Feature Importance (RandomForest, quick EDA estimate):")
+    print(importance.to_string())
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(10, 6))
+    importance.head(15).set_index("feature")["importance_pct"].plot.barh(ax=ax, color="#4C72B0")
+    ax.set_xlabel("Importance (%)")
+    ax.set_title("Feature Importance for Revenue Prediction (EDA Estimate)")
+    ax.invert_yaxis()
+    plt.tight_layout()
+    plt.savefig("outputs/feature_importance.png", dpi=120, bbox_inches="tight")
+    plt.show()
+```
+
+---
+
+## The Feature Catalog
+
+Every feature you engineer should be documented. The feature catalog is the written record that answers: "what is this feature, where does it come from, and what do we expect it to do?"
+
+```python
+from dataclasses import dataclass, field
+from typing import Literal
+
+
+@dataclass
+class FeatureEntry:
+    name: str
+    source_columns: list[str]
+    formula: str
+    rationale: str
+    expected_direction: str              # e.g., "Higher → higher churn probability"
+    data_type: str
+    category: Literal["datetime", "interaction", "aggregation", "encoding", "text", "lag", "binary"]
+    leakage_risk: Literal["none", "low", "medium", "high"]
+    leakage_notes: str = ""
+    created_in_lesson: str = "08"
+
+
+FEATURE_CATALOG: list[FeatureEntry] = [
+    FeatureEntry(
+        name="order_date_is_weekend",
+        source_columns=["order_date"],
+        formula="(order_date.dt.dayofweek >= 5).astype(int)",
+        rationale="Weekend orders may have different revenue profiles and fulfillment characteristics.",
+        expected_direction="Weekend orders may have lower AOV (consumer vs business purchasing patterns)",
+        data_type="binary int (0/1)",
+        category="datetime",
+        leakage_risk="none",
+    ),
+    FeatureEntry(
+        name="gross_margin_pct",
+        source_columns=["revenue", "cost"],
+        formula="(revenue - cost) / revenue",
+        rationale="Margin percentage is a direct profitability signal, independent of order size.",
+        expected_direction="Higher margin → higher profitability; Enterprise segment likely higher margin",
+        data_type="float",
+        category="interaction",
+        leakage_risk="none",
+    ),
+    FeatureEntry(
+        name="cust_avg_order_value",
+        source_columns=["customer_id", "revenue", "status"],
+        formula="mean(revenue) per customer_id where status='completed'",
+        rationale="Customer-level average spend is a strong proxy for customer tier and loyalty.",
+        expected_direction="Higher → more valuable customer; strong predictor of CLV",
+        data_type="float",
+        category="aggregation",
+        leakage_risk="medium",
+        leakage_notes="In predictive models, must be computed on data strictly before the prediction date. "
+                      "For descriptive analysis, full history is acceptable.",
+    ),
+    FeatureEntry(
+        name="days_since_last_order",
+        source_columns=["customer_id", "order_date"],
+        formula="(order_date - lag(order_date, 1) per customer).dt.days",
+        rationale="Inter-purchase gap is a key churn signal. Longer gaps suggest disengagement.",
+        expected_direction="Higher (longer gap) → higher churn probability",
+        data_type="int",
+        category="lag",
+        leakage_risk="none",
+    ),
+    FeatureEntry(
+        name="country_freq",
+        source_columns=["country"],
+        formula="country.map(country.value_counts(normalize=True))",
+        rationale="Frequency encoding replaces rare country levels with a smooth numeric representation.",
+        expected_direction="US has highest frequency (~0.40); rare countries have very low frequency",
+        data_type="float",
+        category="encoding",
+        leakage_risk="low",
+        leakage_notes="Computed on full dataset; recompute on training split in supervised settings.",
+    ),
+    FeatureEntry(
+        name="customer_notes_has_vip",
+        source_columns=["customer_notes"],
+        formula="customer_notes.str.lower().str.contains('vip').astype(int)",
+        rationale="VIP keyword in notes is a manually-tagged high-value customer signal.",
+        expected_direction="VIP flag → higher revenue, higher service priority",
+        data_type="binary int (0/1)",
+        category="text",
+        leakage_risk="none",
+    ),
+]
+
+
+def catalog_to_dataframe(catalog: list[FeatureEntry]) -> pd.DataFrame:
+    return pd.DataFrame([{
+        "feature": e.name,
+        "category": e.category,
+        "data_type": e.data_type,
+        "source_columns": ", ".join(e.source_columns),
+        "formula": e.formula,
+        "rationale": e.rationale,
+        "expected_direction": e.expected_direction,
+        "leakage_risk": e.leakage_risk,
+        "leakage_notes": e.leakage_notes,
+    } for e in catalog])
+
+
+catalog_df = catalog_to_dataframe(FEATURE_CATALOG)
+print("Feature Catalog:")
+print(catalog_df[["feature", "category", "leakage_risk", "rationale"]].to_string())
+
+# Save as CSV reference document
+catalog_df.to_csv("outputs/feature_catalog.csv", index=False)
+print("\nSaved to outputs/feature_catalog.csv")
+```
+
+---
+
+## Validating New Features
+
+Before using a newly engineered feature in analysis, validate it.
+
+```python
+import pandas as pd
+import numpy as np
+
+
+def validate_feature(
+    df: pd.DataFrame,
+    feature_col: str,
+    expect_no_nulls: bool = False,
+    expect_non_negative: bool = False,
+    expect_range: tuple[float, float] | None = None,
+    expect_cardinality_above: int | None = None,
+    check_leakage_with: str | None = None,
+) -> dict:
+    """
+    Validate a newly engineered feature before including it in analysis.
+
+    Returns a dict of check results. Raises AssertionError on critical failures.
+    """
+    series = df[feature_col]
+    n = len(series)
+    results = {}
+
+    # Null check
+    n_null = series.isnull().sum()
+    results["null_count"] = int(n_null)
+    results["null_pct"] = round(n_null / n * 100, 2)
+    if expect_no_nulls and n_null > 0:
+        raise AssertionError(f"Feature '{feature_col}' has {n_null} nulls but expect_no_nulls=True.")
+
+    # Non-negative check
+    if expect_non_negative and pd.api.types.is_numeric_dtype(series):
+        n_negative = int((series < 0).sum())
+        results["n_negative"] = n_negative
+        if n_negative > 0:
+            raise AssertionError(f"Feature '{feature_col}' has {n_negative} negative values.")
+
+    # Range check
+    if expect_range and pd.api.types.is_numeric_dtype(series):
+        lo, hi = expect_range
+        out_of_range = int(((series < lo) | (series > hi)).sum())
+        results["out_of_range"] = out_of_range
+        if out_of_range > 0:
+            print(f"  WARNING: {feature_col} has {out_of_range} values outside [{lo}, {hi}]")
+
+    # Cardinality
+    n_unique = series.nunique(dropna=True)
+    results["n_unique"] = int(n_unique)
+    if expect_cardinality_above and n_unique <= expect_cardinality_above:
+        print(f"  WARNING: {feature_col} has low cardinality ({n_unique} unique values).")
+
+    # Distribution summary
+    if pd.api.types.is_numeric_dtype(series):
+        results["mean"] = round(float(series.mean()), 4)
+        results["std"] = round(float(series.std()), 4)
+        results["min"] = round(float(series.min()), 4)
+        results["max"] = round(float(series.max()), 4)
+        results["skewness"] = round(float(series.skew()), 4)
+
+    # Leakage check: suspiciously high correlation with another column
+    if check_leakage_with and pd.api.types.is_numeric_dtype(series):
+        from scipy import stats
+        other = df[check_leakage_with].dropna()
+        this = series[other.index].dropna()
+        common_idx = this.index.intersection(other.index)
+        if len(common_idx) > 10:
+            r, _ = stats.pearsonr(this[common_idx], other[common_idx])
+            results["leakage_correlation_with_target"] = round(r, 4)
+            if abs(r) > 0.95:
+                print(f"  LEAKAGE RISK: {feature_col} is >0.95 correlated with {check_leakage_with}!")
+
+    print(f"Feature validation: {feature_col} — PASSED")
+    return results
+
+
+# Validate the gross_margin_pct feature
+if "gross_margin_pct" in orders_enriched.columns:
+    validation = validate_feature(
+        orders_enriched,
+        "gross_margin_pct",
+        expect_non_negative=False,   # Margins can be negative (cost > revenue in some orders)
+        expect_range=(-5.0, 1.0),    # Margin should be between -500% and 100%
+        check_leakage_with="revenue",
+    )
+    for k, v in validation.items():
+        print(f"  {k}: {v}")
+```
+
+---
+
+## Key Takeaways
+
+- Datetime decomposition turns a single timestamp into a dozen analytically useful features. Always extract `is_weekend`, `hour`, `month`, `quarter`, and `days_since_last_event` as a minimum.
+- Interaction features (ratios, products, differences) capture relationships that neither source column expresses alone. Start with domain-motivated interactions: margin percentage, revenue per unit, discount amount.
+- Customer-level aggregation features (average order value, total orders, recency) are among the most powerful signals in any customer analysis. In predictive contexts, compute them strictly on pre-prediction-date data to avoid leakage.
+- Categorical encoding strategy depends on cardinality and the downstream use: one-hot for low cardinality and linear models; frequency encoding for medium cardinality; target encoding (with smoothing and CV folds) for high cardinality in supervised contexts.
+- Lag and lead features bring temporal memory into the feature space. For time series analysis, lagged values of the target variable are often the strongest predictors.
+- Text columns carry signal even without NLP: length, word count, keyword presence, and simple sentiment word counts provide useful binary and numeric features with minimal code.
+- Feature importance from a quick RandomForest is an EDA prioritisation tool, not a final answer. Use it to focus attention, then validate the top features with statistical tests (Lesson 09).
+- The feature catalog — name, formula, rationale, expected direction, leakage risk — is the documentation artefact that makes feature engineering reproducible, auditable, and communicable to other analysts.

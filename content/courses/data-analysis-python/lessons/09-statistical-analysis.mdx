@@ -1,0 +1,855 @@
+---
+title: "Statistical Analysis, Hypothesis Testing & A/B Testing"
+description: "Apply rigorous statistical thinking: distributions, confidence intervals, the full hypothesis testing toolkit, A/B experiment design, effect size, multiple testing correction, Simpson's paradox, and bootstrapping."
+duration: 28
+order: 9
+---
+
+## Why Statistical Rigour Matters
+
+Data analysts work with samples, not populations. Every metric you compute has uncertainty. Every comparison you make could be the result of random variation rather than a true difference. Statistical analysis is the discipline of quantifying that uncertainty and drawing conclusions that are defensible against the charge of seeing patterns in noise.
+
+This lesson is not a probability theory course. It is a practitioner's guide to applying the right statistical tool to the right question, interpreting results correctly, and avoiding the most common mistakes that undermine analytical credibility.
+
+---
+
+## Descriptive vs Inferential Statistics
+
+Descriptive statistics summarise what is in your sample. Inferential statistics generalise from your sample to a broader population or use probability to decide whether an observed difference is real.
+
+The distinction matters because the appropriate tool depends on which question you are answering:
+
+- "What is the average order value in our 2023 data?" → Descriptive. Just compute it.
+- "Is the average order value of Enterprise customers *significantly higher* than SMB customers?" → Inferential. You need a hypothesis test.
+
+```python
+import pandas as pd
+import numpy as np
+from scipy import stats
+import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings("ignore")
+
+np.random.seed(42)
+n = 2000
+
+orders = pd.DataFrame({
+    "order_id": range(1, n + 1),
+    "customer_id": np.random.randint(1, 501, n),
+    "revenue": np.random.exponential(scale=75, size=n).round(2).clip(0.01),
+    "segment": np.random.choice(["SMB", "Enterprise", "Consumer"], p=[0.30, 0.20, 0.50], size=n),
+    "channel": np.random.choice(["control", "treatment"], p=[0.50, 0.50], size=n),
+    "status": np.random.choice(["completed", "cancelled"], p=[0.80, 0.20], size=n),
+    "is_repeat": np.random.choice([0, 1], p=[0.40, 0.60], size=n),
+    "category": np.random.choice(["Electronics", "Clothing", "Books", "Home"], n),
+    "age_band": np.random.choice(["18-24", "25-34", "35-44", "45-54", "55+"], n),
+})
+
+# Add a true effect: Enterprise has higher revenue
+orders.loc[orders["segment"] == "Enterprise", "revenue"] *= 1.4
+orders["revenue"] = orders["revenue"].round(2)
+
+print("Orders dataset loaded.")
+print(orders.groupby("segment")["revenue"].describe().round(2))
+```
+
+---
+
+## Distributions That Matter
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
+
+
+def plot_distribution_examples() -> None:
+    """
+    Visualise key distributions with their real-world data equivalents.
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+    fig.suptitle("Key Distributions for Data Analysts", fontsize=14, fontweight="bold")
+    x = np.linspace(0, 15, 300)
+
+    # Normal
+    ax = axes[0, 0]
+    for mu, sigma, label in [(5, 1, "σ=1"), (5, 2, "σ=2"), (7, 1, "μ=7,σ=1")]:
+        ax.plot(np.linspace(-2, 15, 300), stats.norm.pdf(np.linspace(-2, 15, 300), mu, sigma), label=label)
+    ax.set_title("Normal Distribution\nExample: measurement errors, test scores")
+    ax.legend(fontsize=8)
+
+    # Log-normal (right-skewed)
+    ax = axes[0, 1]
+    for mu, sigma, label in [(0, 0.5, "σ=0.5"), (0, 1.0, "σ=1.0"), (1, 0.5, "μ=1")]:
+        ax.plot(x, stats.lognorm.pdf(x, s=sigma, scale=np.exp(mu)), label=label)
+    ax.set_title("Log-Normal Distribution\nExample: revenue, salary, company size")
+    ax.legend(fontsize=8)
+
+    # Exponential
+    ax = axes[0, 2]
+    for lam, label in [(0.5, "λ=0.5"), (1, "λ=1"), (2, "λ=2")]:
+        ax.plot(x, stats.expon.pdf(x, scale=1 / lam), label=label)
+    ax.set_title("Exponential Distribution\nExample: time between events, customer inter-order gaps")
+    ax.legend(fontsize=8)
+
+    # Poisson
+    ax = axes[1, 0]
+    k = np.arange(0, 20)
+    for lam, label in [(2, "λ=2"), (5, "λ=5"), (10, "λ=10")]:
+        ax.bar(k - 0.3, stats.poisson.pmf(k, lam), width=0.3, label=label, alpha=0.7)
+    ax.set_title("Poisson Distribution\nExample: events per time unit, support tickets/day")
+    ax.legend(fontsize=8)
+
+    # Binomial
+    ax = axes[1, 1]
+    k = np.arange(0, 30)
+    for n_trials, p, label in [(30, 0.3, "n=30,p=0.3"), (30, 0.5, "p=0.5"), (30, 0.7, "p=0.7")]:
+        ax.bar(k, stats.binom.pmf(k, n_trials, p), width=0.8, label=label, alpha=0.7)
+    ax.set_title("Binomial Distribution\nExample: conversion rate (n trials, p success probability)")
+    ax.legend(fontsize=8)
+
+    # Pareto
+    ax = axes[1, 2]
+    x_pareto = np.linspace(1, 8, 300)
+    for alpha, label in [(1, "α=1"), (2, "α=2"), (3, "α=3")]:
+        ax.plot(x_pareto, stats.pareto.pdf(x_pareto, alpha), label=label)
+    ax.set_title("Pareto Distribution\nExample: wealth distribution, website traffic (80/20 rule)")
+    ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    plt.savefig("outputs/distributions.png", dpi=120, bbox_inches="tight")
+    plt.show()
+
+
+plot_distribution_examples()
+```
+
+---
+
+## Confidence Intervals
+
+A confidence interval expresses the range within which the true population parameter is likely to fall, given the observed sample. A 95% CI does not mean "there is a 95% probability the true value is in this range" — it means "if we repeated this sampling process 100 times, approximately 95 of the resulting CIs would contain the true value."
+
+```python
+import numpy as np
+from scipy import stats
+
+
+def confidence_interval_mean(
+    data: np.ndarray | list,
+    confidence: float = 0.95,
+) -> tuple[float, float, float]:
+    """
+    Compute confidence interval for the mean using t-distribution.
+    Uses t-distribution (not z) because population variance is unknown.
+
+    Returns: (mean, lower_ci, upper_ci)
+    """
+    data = np.array(data)
+    n = len(data)
+    mean = np.mean(data)
+    se = stats.sem(data)  # Standard error of the mean
+    t_critical = stats.t.ppf((1 + confidence) / 2, df=n - 1)
+    margin = t_critical * se
+    return mean, mean - margin, mean + margin
+
+
+def confidence_interval_proportion(
+    n_successes: int,
+    n_trials: int,
+    confidence: float = 0.95,
+) -> tuple[float, float, float]:
+    """
+    Wilson confidence interval for a proportion.
+    More accurate than normal approximation for small samples or extreme proportions.
+
+    Returns: (proportion, lower_ci, upper_ci)
+    """
+    p = n_successes / n_trials
+    z = stats.norm.ppf((1 + confidence) / 2)
+    denominator = 1 + z**2 / n_trials
+    centre = (p + z**2 / (2 * n_trials)) / denominator
+    margin = (z * np.sqrt(p * (1 - p) / n_trials + z**2 / (4 * n_trials**2))) / denominator
+    return p, centre - margin, centre + margin
+
+
+# Revenue CI by segment
+print("95% Confidence Intervals for Mean Revenue by Segment:")
+for seg in ["SMB", "Enterprise", "Consumer"]:
+    seg_data = orders[orders["segment"] == seg]["revenue"].values
+    mean, lo, hi = confidence_interval_mean(seg_data, confidence=0.95)
+    print(f"  {seg:<12} mean={mean:.2f}  95% CI: [{lo:.2f}, {hi:.2f}]  n={len(seg_data):,}")
+
+print()
+
+# Conversion rate CI
+completed_orders = orders[orders["status"] == "completed"]
+n_completed = len(completed_orders)
+n_total = len(orders)
+conv_rate, conv_lo, conv_hi = confidence_interval_proportion(n_completed, n_total)
+print(f"Completion rate: {conv_rate:.3f} (95% CI: [{conv_lo:.3f}, {conv_hi:.3f}])")
+```
+
+---
+
+## Hypothesis Testing Framework
+
+Before running any test, state the hypotheses explicitly:
+
+H₀ (null hypothesis): The default assumption — no difference, no effect.
+H₁ (alternative hypothesis): What you are trying to detect.
+α (significance level): Probability of falsely rejecting H₀ when it is true (typically 0.05).
+p-value: Probability of observing a result at least as extreme as yours if H₀ were true.
+
+Decision rule: If p &lt; α, reject H₀. If p ≥ α, fail to reject H₀ (not the same as proving H₀ is true).
+
+---
+
+## Choosing the Right Test
+
+```python
+def recommend_test(
+    n_groups: int,
+    variable_type: str,           # "numeric" or "categorical"
+    is_paired: bool = False,
+    assume_normality: bool = False,
+    sample_size: int = 100,
+) -> str:
+    """
+    Recommend the appropriate statistical test based on study design.
+    """
+    if variable_type == "categorical":
+        return "Chi-square test of independence (for 2+ groups and categorical outcomes)"
+
+    if n_groups == 1:
+        if assume_normality:
+            return "One-sample t-test"
+        return "Wilcoxon signed-rank test (non-parametric)"
+
+    if n_groups == 2:
+        if is_paired:
+            if assume_normality:
+                return "Paired t-test"
+            return "Wilcoxon signed-rank test (paired, non-parametric)"
+        else:
+            if assume_normality and sample_size > 30:
+                return "Two-sample independent t-test (Welch's)"
+            return "Mann-Whitney U test (non-parametric)"
+
+    if n_groups >= 3:
+        if assume_normality and sample_size > 30:
+            return "One-way ANOVA (then Tukey post-hoc for pairwise comparisons)"
+        return "Kruskal-Wallis test (non-parametric ANOVA, then Dunn post-hoc)"
+
+    return "Consult a statistician."
+
+
+print("Test Recommendations:")
+print(f"  2 groups, numeric, non-normal: {recommend_test(2, 'numeric', assume_normality=False)}")
+print(f"  3+ groups, numeric, normal: {recommend_test(3, 'numeric', assume_normality=True, sample_size=200)}")
+print(f"  Categorical vs categorical: {recommend_test(2, 'categorical')}")
+print(f"  Paired comparison, small sample: {recommend_test(2, 'numeric', is_paired=True, assume_normality=False, sample_size=20)}")
+```
+
+---
+
+## The Complete Hypothesis Testing Toolkit
+
+### Two-Sample Tests: t-test and Mann-Whitney U
+
+```python
+import pandas as pd
+import numpy as np
+from scipy import stats
+
+
+def two_sample_test(
+    group_a: np.ndarray,
+    group_b: np.ndarray,
+    group_a_name: str = "Group A",
+    group_b_name: str = "Group B",
+    alpha: float = 0.05,
+) -> dict:
+    """
+    Run both Welch's t-test and Mann-Whitney U, report effect size, and give a conclusion.
+    """
+    # Shapiro-Wilk normality check (sample)
+    sample_a = group_a[:min(4999, len(group_a))]
+    sample_b = group_b[:min(4999, len(group_b))]
+    _, p_norm_a = stats.shapiro(sample_a)
+    _, p_norm_b = stats.shapiro(sample_b)
+    both_normal = (p_norm_a > 0.05) and (p_norm_b > 0.05)
+
+    # Welch's t-test (does not assume equal variances)
+    t_stat, p_ttest = stats.ttest_ind(group_a, group_b, equal_var=False)
+
+    # Mann-Whitney U (non-parametric — tests for stochastic dominance, not mean equality)
+    u_stat, p_mwu = stats.mannwhitneyu(group_a, group_b, alternative="two-sided")
+
+    # Cohen's d (effect size for t-test)
+    pooled_std = np.sqrt((group_a.std()**2 + group_b.std()**2) / 2)
+    cohens_d = (group_a.mean() - group_b.mean()) / pooled_std if pooled_std > 0 else 0
+    effect_size_label = (
+        "negligible" if abs(cohens_d) < 0.2 else
+        "small" if abs(cohens_d) < 0.5 else
+        "medium" if abs(cohens_d) < 0.8 else
+        "large"
+    )
+
+    # Common language effect size (probability that a random A > random B)
+    cles = u_stat / (len(group_a) * len(group_b))
+
+    # Recommended test based on normality
+    recommended_p = p_ttest if both_normal else p_mwu
+    recommended_test = "t-test" if both_normal else "Mann-Whitney U"
+
+    conclusion = (
+        f"REJECT H₀: Significant difference detected (p={recommended_p:.6f} < {alpha})."
+        if recommended_p < alpha else
+        f"FAIL TO REJECT H₀: No significant difference detected (p={recommended_p:.6f} ≥ {alpha})."
+    )
+
+    return {
+        "group_a_name": group_a_name,
+        "group_b_name": group_b_name,
+        "n_a": len(group_a),
+        "n_b": len(group_b),
+        "mean_a": round(group_a.mean(), 4),
+        "mean_b": round(group_b.mean(), 4),
+        "median_a": round(np.median(group_a), 4),
+        "median_b": round(np.median(group_b), 4),
+        "p_ttest": round(p_ttest, 6),
+        "p_mannwhitney": round(p_mwu, 6),
+        "cohens_d": round(cohens_d, 4),
+        "effect_size_label": effect_size_label,
+        "cles": round(cles, 4),
+        "both_normal": both_normal,
+        "recommended_test": recommended_test,
+        "conclusion": conclusion,
+    }
+
+
+# Test: Is Enterprise revenue significantly different from SMB?
+enterprise_rev = orders[orders["segment"] == "Enterprise"]["revenue"].values
+smb_rev = orders[orders["segment"] == "SMB"]["revenue"].values
+
+result = two_sample_test(enterprise_rev, smb_rev, "Enterprise", "SMB")
+
+print("=== Two-Sample Test: Enterprise vs SMB Revenue ===")
+for k, v in result.items():
+    print(f"  {k}: {v}")
+```
+
+### Chi-Square Test of Independence
+
+```python
+def chi_square_test(
+    df: pd.DataFrame,
+    col1: str,
+    col2: str,
+    alpha: float = 0.05,
+) -> dict:
+    """
+    Test whether two categorical variables are independent.
+    H₀: The variables are independent (no association).
+    H₁: The variables are associated.
+    """
+    crosstab = pd.crosstab(df[col1], df[col2])
+    chi2, p_value, dof, expected = stats.chi2_contingency(crosstab)
+
+    # Cramér's V (effect size for chi-square)
+    n = crosstab.sum().sum()
+    min_dim = min(crosstab.shape) - 1
+    cramers_v = np.sqrt(chi2 / (n * min_dim)) if min_dim > 0 else 0
+
+    # Check minimum expected cell count assumption (should be >= 5)
+    cells_below_5 = (expected < 5).sum()
+
+    effect_label = (
+        "negligible" if cramers_v < 0.1 else
+        "small" if cramers_v < 0.3 else
+        "medium" if cramers_v < 0.5 else
+        "large"
+    )
+
+    return {
+        "variable_1": col1,
+        "variable_2": col2,
+        "chi2_statistic": round(chi2, 4),
+        "degrees_of_freedom": dof,
+        "p_value": round(p_value, 6),
+        "cramers_v": round(cramers_v, 4),
+        "effect_size_label": effect_label,
+        "cells_below_expected_5": int(cells_below_5),
+        "assumption_met": cells_below_5 == 0,
+        "conclusion": (
+            f"REJECT H₀: {col1} and {col2} are NOT independent (p={p_value:.6f})"
+            if p_value < alpha else
+            f"FAIL TO REJECT H₀: No significant association found (p={p_value:.6f})"
+        ),
+    }
+
+
+chi2_result = chi_square_test(orders, "segment", "channel")
+print("\n=== Chi-Square Test: Segment vs Channel ===")
+for k, v in chi2_result.items():
+    print(f"  {k}: {v}")
+```
+
+### One-Way ANOVA and Kruskal-Wallis
+
+```python
+def multi_group_test(
+    df: pd.DataFrame,
+    group_col: str,
+    value_col: str,
+    alpha: float = 0.05,
+) -> dict:
+    """
+    Test for differences across 3+ groups.
+    Runs both ANOVA and Kruskal-Wallis; recommends based on normality.
+    """
+    groups = [df[df[group_col] == g][value_col].dropna().values
+              for g in df[group_col].unique()]
+
+    # ANOVA
+    f_stat, p_anova = stats.f_oneway(*groups)
+
+    # Kruskal-Wallis (non-parametric)
+    h_stat, p_kruskal = stats.kruskal(*groups)
+
+    # Eta-squared (effect size for ANOVA)
+    grand_mean = df[value_col].mean()
+    ss_between = sum(len(g) * (np.mean(g) - grand_mean) ** 2 for g in groups)
+    ss_total = sum((v - grand_mean) ** 2 for g in groups for v in g)
+    eta_squared = ss_between / ss_total if ss_total > 0 else 0
+
+    return {
+        "group_col": group_col,
+        "value_col": value_col,
+        "n_groups": len(groups),
+        "f_statistic": round(f_stat, 4),
+        "p_anova": round(p_anova, 6),
+        "h_statistic": round(h_stat, 4),
+        "p_kruskal": round(p_kruskal, 6),
+        "eta_squared": round(eta_squared, 4),
+        "effect_size_label": "small" if eta_squared < 0.06 else "medium" if eta_squared < 0.14 else "large",
+        "conclusion_anova": f"REJECT H₀" if p_anova < alpha else "FAIL TO REJECT H₀",
+        "conclusion_kruskal": f"REJECT H₀" if p_kruskal < alpha else "FAIL TO REJECT H₀",
+    }
+
+
+multi_result = multi_group_test(orders, "segment", "revenue")
+print("\n=== Multi-Group Test: Revenue across Segments ===")
+for k, v in multi_result.items():
+    print(f"  {k}: {v}")
+```
+
+---
+
+## A/B Testing: Full Experiment Workflow
+
+```python
+import numpy as np
+from scipy import stats
+
+
+def calculate_sample_size(
+    baseline_rate: float,
+    minimum_detectable_effect: float,
+    alpha: float = 0.05,
+    power: float = 0.80,
+    two_tailed: bool = True,
+) -> int:
+    """
+    Calculate the required sample size per variant for a proportion A/B test.
+
+    Args:
+        baseline_rate: Current conversion rate (e.g., 0.05 for 5%)
+        minimum_detectable_effect: Smallest relative improvement worth detecting (e.g., 0.10 for 10%)
+        alpha: Type I error rate (false positive)
+        power: 1 - Type II error rate (probability of detecting a real effect)
+        two_tailed: Whether to use a two-tailed test
+
+    Returns:
+        Required sample size per variant.
+    """
+    treatment_rate = baseline_rate * (1 + minimum_detectable_effect)
+
+    # Z-scores for alpha and beta
+    z_alpha = stats.norm.ppf(1 - alpha / (2 if two_tailed else 1))
+    z_beta = stats.norm.ppf(power)
+
+    # Pooled standard error
+    p_bar = (baseline_rate + treatment_rate) / 2
+    se = np.sqrt(2 * p_bar * (1 - p_bar))
+
+    n = ((z_alpha + z_beta) * se / abs(treatment_rate - baseline_rate)) ** 2
+    return int(np.ceil(n))
+
+
+def run_ab_test(
+    control: np.ndarray,
+    treatment: np.ndarray,
+    metric_type: str = "continuous",  # "continuous" or "proportion"
+    alpha: float = 0.05,
+    name: str = "Unnamed Test",
+) -> dict:
+    """
+    Run a complete A/B test analysis.
+
+    Args:
+        control: Observed values for control variant.
+        treatment: Observed values for treatment variant.
+        metric_type: "continuous" for revenue/time; "proportion" for conversion rate.
+        alpha: Significance level.
+        name: Test name for reporting.
+
+    Returns:
+        Complete test results dict.
+    """
+    n_ctrl = len(control)
+    n_trt = len(treatment)
+
+    if metric_type == "proportion":
+        # z-test for proportions
+        p_ctrl = control.mean()
+        p_trt = treatment.mean()
+        p_pool = (control.sum() + treatment.sum()) / (n_ctrl + n_trt)
+        se_pool = np.sqrt(p_pool * (1 - p_pool) * (1 / n_ctrl + 1 / n_trt))
+        z_stat = (p_trt - p_ctrl) / se_pool if se_pool > 0 else 0
+        p_value = 2 * stats.norm.sf(abs(z_stat))  # Two-tailed
+        effect = p_trt - p_ctrl
+        relative_lift = (p_trt - p_ctrl) / p_ctrl if p_ctrl > 0 else 0
+
+        ctrl_ci = confidence_interval_proportion(int(control.sum()), n_ctrl)
+        trt_ci = confidence_interval_proportion(int(treatment.sum()), n_trt)
+
+        return {
+            "test_name": name,
+            "metric_type": metric_type,
+            "n_control": n_ctrl,
+            "n_treatment": n_trt,
+            "control_rate": round(p_ctrl, 4),
+            "treatment_rate": round(p_trt, 4),
+            "absolute_lift": round(effect, 4),
+            "relative_lift_pct": round(relative_lift * 100, 2),
+            "control_ci_95": (round(ctrl_ci[1], 4), round(ctrl_ci[2], 4)),
+            "treatment_ci_95": (round(trt_ci[1], 4), round(trt_ci[2], 4)),
+            "z_statistic": round(z_stat, 4),
+            "p_value": round(p_value, 6),
+            "significant": p_value < alpha,
+            "conclusion": f"{'SIGNIFICANT' if p_value < alpha else 'NOT SIGNIFICANT'}: p={p_value:.4f}",
+        }
+
+    else:
+        # Two-sample t-test (Welch's) for continuous metric
+        result = two_sample_test(treatment, control, "Treatment", "Control", alpha)
+        relative_lift = (result["mean_a"] - result["mean_b"]) / result["mean_b"] if result["mean_b"] != 0 else 0
+        result["relative_lift_pct"] = round(relative_lift * 100, 2)
+        result["test_name"] = name
+        return result
+
+
+# Simulate an A/B test: treatment (new checkout flow) vs control
+np.random.seed(123)
+n_ab = 5000
+
+# Conversion rate test (proportion)
+control_conv = np.random.binomial(1, 0.042, n_ab)   # 4.2% baseline
+treatment_conv = np.random.binomial(1, 0.047, n_ab)  # 4.7% treatment (true 12% relative lift)
+
+# Pre-experiment: sample size check
+required_n = calculate_sample_size(
+    baseline_rate=0.042,
+    minimum_detectable_effect=0.10,
+    alpha=0.05,
+    power=0.80,
+)
+print(f"Required sample size per variant: {required_n:,}")
+print(f"Current sample size: {n_ab:,} per variant")
+print(f"Adequately powered: {n_ab >= required_n}\n")
+
+ab_result = run_ab_test(control_conv, treatment_conv, metric_type="proportion", name="New Checkout Flow — Conversion")
+print("=== A/B Test Results ===")
+for k, v in ab_result.items():
+    print(f"  {k}: {v}")
+
+# Revenue test (continuous)
+control_rev = np.random.exponential(70, n_ab)
+treatment_rev = np.random.exponential(73, n_ab)  # Small true effect
+
+ab_rev = run_ab_test(control_rev, treatment_rev, metric_type="continuous", name="New Checkout Flow — Revenue")
+print("\n=== A/B Test: Revenue ===")
+print(f"  Relative lift: {ab_rev['relative_lift_pct']}%")
+print(f"  {ab_rev['conclusion']}")
+```
+
+### Avoiding Early Stopping
+
+```python
+def check_early_stopping_risk(
+    current_p: float,
+    n_looks: int,
+    planned_n: int,
+    current_n: int,
+) -> dict:
+    """
+    Assess the inflation of false positive rate from peeking at results early.
+
+    Each time you look at A/B test results and make a decision,
+    the probability of false positive compounds. Always run to planned sample size.
+    """
+    # Approximate familywise error rate for n_looks checks
+    # Using Bonferroni as a conservative estimate
+    alpha_per_look = 0.05 / n_looks
+    bonferroni_threshold = alpha_per_look
+
+    pct_enrolled = current_n / planned_n * 100
+    is_underpowered = pct_enrolled < 80  # Less than 80% of planned sample
+
+    return {
+        "current_p_value": round(current_p, 6),
+        "n_looks_so_far": n_looks,
+        "bonferroni_adjusted_alpha": round(bonferroni_threshold, 6),
+        "passes_adjusted_threshold": current_p < bonferroni_threshold,
+        "pct_enrolled": round(pct_enrolled, 1),
+        "is_underpowered": is_underpowered,
+        "recommendation": (
+            "DO NOT STOP EARLY — test is underpowered (<80% enrolled)."
+            if is_underpowered else
+            "Test has reached planned size. Safe to evaluate final results."
+        ),
+    }
+
+
+early_stop = check_early_stopping_risk(
+    current_p=0.042,
+    n_looks=3,
+    planned_n=5000,
+    current_n=2300,
+)
+
+print("\n=== Early Stopping Risk Assessment ===")
+for k, v in early_stop.items():
+    print(f"  {k}: {v}")
+```
+
+---
+
+## Multiple Testing Correction
+
+When you test multiple hypotheses on the same data, the probability that at least one test produces a false positive increases dramatically. At α=0.05 with 20 tests, you expect 1 false positive by chance alone.
+
+```python
+import numpy as np
+from scipy import stats
+
+
+def apply_multiple_testing_correction(
+    p_values: list[float],
+    method: str = "bonferroni",
+    alpha: float = 0.05,
+) -> pd.DataFrame:
+    """
+    Apply multiple testing correction to a list of p-values.
+
+    Methods:
+    - Bonferroni: Divide alpha by number of tests. Conservative but simple.
+    - Benjamini-Hochberg (BH): Controls False Discovery Rate (FDR).
+                               More powerful than Bonferroni for many tests.
+    """
+    n = len(p_values)
+    p_arr = np.array(p_values)
+
+    if method == "bonferroni":
+        adjusted = p_arr * n
+        adjusted = np.minimum(adjusted, 1.0)
+        significant = adjusted < alpha
+
+    elif method == "bh":
+        # Benjamini-Hochberg FDR correction
+        sorted_idx = np.argsort(p_arr)
+        sorted_p = p_arr[sorted_idx]
+        ranks = np.arange(1, n + 1)
+        bh_threshold = ranks / n * alpha
+        # Find largest k where p(k) <= threshold(k)
+        below = sorted_p <= bh_threshold
+        if below.any():
+            max_k = np.max(np.where(below))
+            significant_sorted = np.arange(n) <= max_k
+        else:
+            significant_sorted = np.zeros(n, dtype=bool)
+        # Map back to original order
+        significant = np.zeros(n, dtype=bool)
+        significant[sorted_idx] = significant_sorted
+        # BH adjusted p-values
+        adjusted = np.zeros(n)
+        adjusted[sorted_idx] = np.minimum.accumulate(
+            (sorted_p * n / ranks)[::-1]
+        )[::-1]
+        adjusted = np.minimum(adjusted, 1.0)
+
+    else:
+        raise ValueError(f"Unknown method: {method}. Use 'bonferroni' or 'bh'.")
+
+    return pd.DataFrame({
+        "p_value": p_values,
+        f"adjusted_p_{method}": adjusted.round(6),
+        f"significant_{method}": significant,
+    })
+
+
+# Example: testing 10 features against a target
+np.random.seed(42)
+raw_p_values = np.random.uniform(0, 0.15, 10).tolist()
+raw_p_values[2] = 0.001   # One truly significant result
+raw_p_values[7] = 0.008   # Another
+
+bonf_result = apply_multiple_testing_correction(raw_p_values, method="bonferroni")
+bh_result = apply_multiple_testing_correction(raw_p_values, method="bh")
+
+comparison = pd.DataFrame({
+    "raw_p": raw_p_values,
+    "significant_raw": [p < 0.05 for p in raw_p_values],
+    "adjusted_bonferroni": bonf_result["adjusted_p_bonferroni"],
+    "significant_bonferroni": bonf_result["significant_bonferroni"],
+    "adjusted_bh": bh_result["adjusted_p_bh"],
+    "significant_bh": bh_result["significant_bh"],
+})
+
+print("Multiple Testing Correction Comparison:")
+print(comparison.to_string())
+print(f"\nRaw significant tests: {comparison['significant_raw'].sum()}")
+print(f"Bonferroni significant: {comparison['significant_bonferroni'].sum()}")
+print(f"BH FDR significant:     {comparison['significant_bh'].sum()}")
+```
+
+---
+
+## Simpson's Paradox
+
+Simpson's paradox occurs when a trend appears in aggregated data but reverses (or disappears) when the data is segmented. It is one of the most dangerous misinterpretations in descriptive analysis.
+
+```python
+import pandas as pd
+import numpy as np
+
+
+def demonstrate_simpsons_paradox() -> None:
+    """
+    Demonstrate Simpson's paradox: a company appears to have higher overall
+    conversion with the new campaign, but the new campaign actually underperforms
+    in every individual segment.
+    """
+    # Construct synthetic data
+    # Old campaign: concentrated in high-converting segments
+    # New campaign: concentrated in low-converting segments
+    data = pd.DataFrame({
+        "segment": ["High-value", "High-value", "Low-value", "Low-value"],
+        "campaign": ["old", "new", "old", "new"],
+        "n_shown": [100, 900, 900, 100],     # Old focused on high-value; new diluted into low-value
+        "n_converted": [60, 504, 90, 9],      # Conversions
+    })
+
+    data["conversion_rate"] = data["n_converted"] / data["n_shown"]
+
+    print("Segment-level conversion rates:")
+    print(data.pivot_table(values="conversion_rate", index="segment", columns="campaign").round(3))
+
+    # Old campaign is BETTER in BOTH segments:
+    # High-value: old=0.60 vs new=0.56
+    # Low-value:  old=0.10 vs new=0.09
+
+    # But aggregated overall:
+    overall = data.groupby("campaign")[["n_converted", "n_shown"]].sum()
+    overall["overall_rate"] = overall["n_converted"] / overall["n_shown"]
+
+    print("\nOverall (aggregate) conversion rates:")
+    print(overall[["overall_rate"]].round(3))
+    # New campaign looks BETTER overall (0.513 vs 0.130)
+    # because it was disproportionately shown to the high-converting segment.
+
+    print("\nCONCLUSION:")
+    print("The new campaign appears better overall because of the confounding")
+    print("distribution of segments — not because it actually converts better.")
+    print("Always control for confounders before drawing comparative conclusions.")
+
+
+demonstrate_simpsons_paradox()
+```
+
+---
+
+## Bootstrapping
+
+When parametric assumptions don't hold and sample sizes are small, bootstrapping provides distribution-free confidence intervals.
+
+```python
+import numpy as np
+
+
+def bootstrap_ci(
+    data: np.ndarray,
+    statistic_fn,
+    n_bootstrap: int = 10_000,
+    confidence: float = 0.95,
+    random_state: int = 42,
+) -> tuple[float, float, float]:
+    """
+    Compute a bootstrap confidence interval for any statistic.
+
+    Args:
+        data: 1D array of observations.
+        statistic_fn: Function that takes an array and returns a scalar.
+                      E.g., np.mean, np.median, np.std, or custom functions.
+        n_bootstrap: Number of bootstrap resamples.
+        confidence: Confidence level (e.g., 0.95 for 95% CI).
+        random_state: For reproducibility.
+
+    Returns:
+        (statistic_observed, lower_ci, upper_ci)
+    """
+    rng = np.random.default_rng(random_state)
+    observed = statistic_fn(data)
+
+    bootstrap_stats = np.array([
+        statistic_fn(rng.choice(data, size=len(data), replace=True))
+        for _ in range(n_bootstrap)
+    ])
+
+    alpha = 1 - confidence
+    lower = np.percentile(bootstrap_stats, 100 * alpha / 2)
+    upper = np.percentile(bootstrap_stats, 100 * (1 - alpha / 2))
+
+    return observed, lower, upper
+
+
+# Bootstrap CI for median revenue (which has no simple closed-form CI)
+enterprise_data = orders[orders["segment"] == "Enterprise"]["revenue"].values
+smb_data = orders[orders["segment"] == "SMB"]["revenue"].values
+
+ent_median, ent_lo, ent_hi = bootstrap_ci(enterprise_data, np.median)
+smb_median, smb_lo, smb_hi = bootstrap_ci(smb_data, np.median)
+
+print("Bootstrap 95% CI for Median Revenue:")
+print(f"  Enterprise: median={ent_median:.2f}  CI=[{ent_lo:.2f}, {ent_hi:.2f}]")
+print(f"  SMB:        median={smb_median:.2f}  CI=[{smb_lo:.2f}, {smb_hi:.2f}]")
+
+# Bootstrap CI for 90th percentile
+ent_p90, ent_p90_lo, ent_p90_hi = bootstrap_ci(enterprise_data, lambda x: np.percentile(x, 90))
+print(f"\n  Enterprise P90: {ent_p90:.2f}  CI=[{ent_p90_lo:.2f}, {ent_p90_hi:.2f}]")
+```
+
+---
+
+## Key Takeaways
+
+- Descriptive statistics describe your sample; inferential statistics generalise to a population. Know which question you are answering before choosing your tool.
+- State H₀ and H₁ explicitly before running any test. Never formulate a hypothesis after seeing the data (HARKing — Hypothesizing After Results are Known) and report it as confirmatory.
+- The right test depends on the number of groups, the variable type, whether samples are paired, and whether normality holds. Use the decision matrix and default to non-parametric tests when normality is questionable.
+- Statistical significance (p &lt; α) is not practical significance. Always compute and report effect size — Cohen's d for t-tests, Cramér's V for chi-square, eta-squared for ANOVA. A tiny effect can be statistically significant with a large sample.
+- A/B testing requires pre-computing sample size based on baseline rate, minimum detectable effect, and desired power. Running a test without sample size planning and stopping when you see p &lt; 0.05 is p-hacking.
+- The multiple testing problem is real: with 20 tests at α=0.05, you expect 1 false positive by chance. Apply Bonferroni (conservative) or Benjamini-Hochberg FDR (more powerful) correction whenever you run more than one test on the same dataset.
+- Simpson's paradox — where aggregated trends reverse when segmented — is one of the most consequential misinterpretations in business analysis. Always check for confounding before making comparative claims.
+- Bootstrapping provides distribution-free confidence intervals for any statistic, making it the go-to method for non-normal data, small samples, and statistics like median or percentiles that lack closed-form CIs.

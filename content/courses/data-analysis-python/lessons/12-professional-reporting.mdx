@@ -1,0 +1,871 @@
+---
+title: "Professional Reports, Notebooks & Stakeholder Presentations"
+description: "Deliver analysis like a professional: Jupyter best practices, nbconvert to HTML and PDF, Plotly HTML reports, project directory structure, version control, and a 20-item pre-delivery checklist."
+duration: 24
+order: 12
+---
+
+## The Last Mile of Analysis
+
+The analysis is complete. The insights are documented. Now you have to deliver them. The last mile — turning a working notebook into a professional deliverable — is where many analysts lose credibility: unclear cell structure, raw code cells visible to executives, charts without titles, numbers without units, and a project folder named "analysis_final_v3_REAL_USE_THIS.ipynb."
+
+This lesson covers the professional standards that turn your analytical work into a product you would be proud to put your name on.
+
+---
+
+## Jupyter Notebook Best Practices
+
+A professional analysis notebook is not a scratch pad with some output. It is a self-contained document that tells a complete story to a reader who was not in the room when you ran it.
+
+```python
+# ============================================================
+# STANDARD NOTEBOOK STRUCTURE
+# Every analysis notebook should follow this template.
+# ============================================================
+
+# ---- CELL 1: Title block (Markdown) ----
+"""
+# Q3 Revenue Decline — Root Cause Analysis
+
+**Project:** GadaaLabs Revenue Intelligence
+**Analyst:** [Your Name]
+**Date:** 2023-11-08
+**Version:** v1.0 — Initial analysis
+**Status:** Final
+
+## Objective
+Identify the segment(s) driving Q3 2023 revenue decline and quantify
+recovery opportunity.
+
+## Deliverables
+1. This notebook (full methodology + code)
+2. `reports/q3_revenue_memo.md` (executive findings memo)
+3. `outputs/interactive_dashboard.html` (stakeholder interactive charts)
+
+## Table of Contents
+1. [Setup & Data Loading](#1-setup)
+2. [Data Quality Assessment](#2-quality)
+3. [Revenue Trend Analysis](#3-trend)
+4. [Segment Decomposition](#4-segments)
+5. [Price Change Impact Analysis](#5-price-impact)
+6. [Statistical Tests](#6-stats)
+7. [Key Findings & Recommendations](#7-findings)
+8. [Appendix](#8-appendix)
+"""
+
+# ---- CELL 2: Setup (always the same structure) ----
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+from datetime import datetime, date
+
+# ---- Project paths ----
+ROOT = Path(".")
+DATA_DIR = ROOT / "data"
+OUTPUT_DIR = ROOT / "outputs"
+REPORT_DIR = ROOT / "reports"
+SRC_DIR = ROOT / "src"
+
+for d in [OUTPUT_DIR, REPORT_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
+
+# ---- Analysis parameters (centralised — change once, applies everywhere) ----
+ANALYSIS_START = pd.Timestamp("2022-01-01")
+ANALYSIS_END = pd.Timestamp("2023-09-30")
+PRICE_CHANGE_DATE = pd.Timestamp("2023-07-01")
+CHURN_WINDOW_DAYS = 90
+SIGNIFICANCE_LEVEL = 0.05
+NOTEBOOK_RUN_AT = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+# ---- Display settings ----
+pd.set_option("display.max_columns", 50)
+pd.set_option("display.max_rows", 100)
+pd.set_option("display.float_format", "{:,.2f}".format)
+pd.set_option("display.width", 120)
+
+print(f"Notebook initialised at: {NOTEBOOK_RUN_AT}")
+print(f"Analysis period: {ANALYSIS_START.date()} to {ANALYSIS_END.date()}")
+```
+
+### Numbered Section Cells
+
+```python
+# ---- SECTION MARKER PATTERN ----
+# Use a consistent pattern so automated TOC generation works
+# and code folding makes sections collapsible.
+
+# =============================================================================
+# SECTION 3: Revenue Trend Analysis
+# =============================================================================
+# This section computes monthly revenue YoY and identifies the inflection point.
+# Output: `outputs/revenue_trend.png`, finding F001 logged.
+# =============================================================================
+
+# All code for this section follows here...
+```
+
+### The Findings Cell
+
+```python
+# ---- FINDINGS LOG (update throughout analysis) ----
+# Keep this cell near the top; run it last to aggregate all findings.
+
+from dataclasses import dataclass, field
+from typing import Literal
+
+@dataclass
+class Finding:
+    id: str
+    section: str
+    description: str
+    so_what: str
+    confidence: Literal["high", "medium", "low"]
+    chart_path: str | None = None
+
+findings: list[Finding] = []
+
+def log_finding(
+    id: str, section: str, description: str,
+    so_what: str, confidence: str = "medium", chart_path: str | None = None,
+) -> None:
+    findings.append(Finding(id=id, section=section, description=description,
+                            so_what=so_what, confidence=confidence, chart_path=chart_path))  # type: ignore
+    print(f"[FINDING {id}] {description[:80]}...")
+
+# Usage throughout notebook:
+# log_finding(
+#     id="F001", section="3. Revenue Trend",
+#     description="Q3 revenue declined 18% YoY ($4.2M → $3.4M).",
+#     so_what="Decline is material — not within seasonal tolerance.",
+#     confidence="high", chart_path="outputs/revenue_trend.png"
+# )
+```
+
+---
+
+## Hiding Code Cells with nbconvert
+
+When delivering to non-technical stakeholders, hide implementation cells and show only narrative and output.
+
+```python
+# ---- TAG-BASED CELL HIDING ----
+# In JupyterLab: View → Cell Toolbar → Tags
+# Add tag "hide-input" to cells you want to hide in the HTML export.
+# Add tag "hide-output" to hide output but keep code.
+# Add tag "remove-cell" to hide entire cell from output.
+
+# The nbconvert command to export with tag filtering:
+NBCONVERT_CMD = """
+# Export to HTML hiding all code cells tagged "hide-input"
+jupyter nbconvert \\
+    --to html \\
+    --TagRemovePreprocessor.enabled=True \\
+    --TagRemovePreprocessor.remove_input_tags='{"hide-input"}' \\
+    --TagRemovePreprocessor.remove_all_outputs_tags='{"hide-output"}' \\
+    --TagRemovePreprocessor.remove_cell_tags='{"remove-cell"}' \\
+    --output reports/analysis_report.html \\
+    analysis_final.ipynb
+
+# Export to PDF (requires nbconvert + latex or pyppeteer)
+jupyter nbconvert \\
+    --to pdf \\
+    --TagRemovePreprocessor.enabled=True \\
+    --TagRemovePreprocessor.remove_input_tags='{"hide-input"}' \\
+    --output reports/analysis_report.pdf \\
+    analysis_final.ipynb
+"""
+print(NBCONVERT_CMD)
+```
+
+### Programmatic nbconvert with Python
+
+```python
+import subprocess
+from pathlib import Path
+
+
+def export_notebook(
+    notebook_path: str,
+    output_format: str = "html",
+    hide_code: bool = True,
+    output_dir: str = "reports",
+) -> Path:
+    """
+    Export a Jupyter notebook to HTML or PDF, optionally hiding code cells.
+
+    Args:
+        notebook_path: Path to the .ipynb file.
+        output_format: "html" or "pdf"
+        hide_code: If True, remove cells tagged "hide-input".
+        output_dir: Directory for the output file.
+
+    Returns:
+        Path to the generated file.
+    """
+    nb_path = Path(notebook_path)
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        "jupyter", "nbconvert",
+        "--to", output_format,
+        "--output-dir", str(out_dir),
+    ]
+
+    if hide_code:
+        cmd.extend([
+            "--TagRemovePreprocessor.enabled=True",
+            "--TagRemovePreprocessor.remove_input_tags={'hide-input'}",
+            "--TagRemovePreprocessor.remove_cell_tags={'remove-cell'}",
+        ])
+
+    cmd.append(str(nb_path))
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"nbconvert error: {result.stderr}")
+        raise RuntimeError(f"nbconvert failed: {result.returncode}")
+
+    output_name = nb_path.stem + f".{output_format}"
+    output_path = out_dir / output_name
+    print(f"Exported: {output_path}")
+    return output_path
+
+
+# Usage (commented out — requires jupyter and the notebook to exist):
+# export_notebook("analysis_final.ipynb", output_format="html", hide_code=True)
+# export_notebook("analysis_final.ipynb", output_format="pdf", hide_code=True)
+```
+
+---
+
+## The Complete Project Directory Structure
+
+```python
+PROJECT_STRUCTURE = """
+analysis_project/
+│
+├── data/
+│   ├── raw/                        # Immutable source data — never edit
+│   │   ├── orders.csv
+│   │   ├── customers.csv
+│   │   └── events.parquet
+│   └── processed/                  # Cleaned, analysis-ready data
+│       ├── orders_clean.parquet
+│       └── customers_clean.parquet
+│
+├── notebooks/
+│   ├── 01_data_quality.ipynb       # Quality audit
+│   ├── 02_eda.ipynb                # Exploratory analysis
+│   ├── 03_statistical_tests.ipynb  # Hypothesis tests
+│   └── analysis_final.ipynb        # Polished final notebook (deliverable)
+│
+├── src/
+│   ├── __init__.py
+│   ├── cleaning.py                 # Reusable cleaning functions
+│   ├── features.py                 # Feature engineering functions
+│   ├── stats.py                    # Statistical test wrappers
+│   └── plot_style.py               # House style and chart helpers
+│
+├── outputs/
+│   ├── figures/                    # Static chart exports
+│   ├── profiling/                  # Data profiling reports
+│   └── feature_catalog.csv         # Feature documentation
+│
+├── reports/
+│   ├── analysis_report.html        # Full notebook export (with code)
+│   ├── analysis_executive.html     # Code-hidden stakeholder version
+│   ├── analysis_memo.md            # Written findings memo
+│   └── interactive_dashboard.html  # Plotly interactive dashboard
+│
+├── .gitignore
+├── requirements.txt
+└── README.md
+"""
+print(PROJECT_STRUCTURE)
+```
+
+---
+
+## Plotly HTML Report: Multi-Chart Shareable File
+
+```python
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import plotly.io as pio
+import pandas as pd
+import numpy as np
+
+
+def build_executive_html_report(
+    df: pd.DataFrame,
+    output_path: str = "reports/executive_dashboard.html",
+) -> str:
+    """
+    Build a self-contained interactive HTML report combining:
+    - Summary KPI cards (text annotations)
+    - Revenue trend chart
+    - Segment comparison
+    - Key insights table
+
+    This is a single HTML file — share by email, embed in Confluence, etc.
+    """
+    # KPIs
+    total_revenue = df["revenue"].sum()
+    n_orders = len(df)
+    avg_order_value = df["revenue"].mean()
+    completion_rate = (df["status"] == "completed").mean()
+
+    # Weekly trend
+    weekly = df.set_index("order_date")["revenue"].resample("W").sum().reset_index()
+
+    # Segment revenue
+    seg_rev = df.groupby("segment")["revenue"].agg(["sum", "mean", "count"]).reset_index()
+
+    fig = make_subplots(
+        rows=3, cols=2,
+        subplot_titles=[
+            "Revenue Trend (Weekly)",
+            "Revenue by Segment",
+            "Category Mix",
+            "Channel Performance",
+            "Order Status Distribution",
+            "AOV by Segment",
+        ],
+        specs=[
+            [{"type": "scatter", "colspan": 2}, None],
+            [{"type": "bar"}, {"type": "pie"}],
+            [{"type": "bar"}, {"type": "box"}],
+        ],
+        vertical_spacing=0.12,
+        horizontal_spacing=0.08,
+    )
+
+    # Row 1: Revenue trend
+    fig.add_trace(
+        go.Scatter(
+            x=weekly["order_date"], y=weekly["revenue"],
+            fill="tozeroy", name="Weekly Revenue",
+            line=dict(color="#4C72B0", width=2),
+            fillcolor="rgba(76,114,176,0.15)",
+            hovertemplate="Week: %{x}<br>Revenue: $%{y:,.0f}<extra></extra>",
+        ),
+        row=1, col=1,
+    )
+
+    # 4-week MA
+    weekly["ma4"] = weekly["revenue"].rolling(4).mean()
+    fig.add_trace(
+        go.Scatter(
+            x=weekly["order_date"], y=weekly["ma4"],
+            mode="lines", name="4W MA",
+            line=dict(color="#C44E52", width=2.5, dash="dot"),
+        ),
+        row=1, col=1,
+    )
+
+    # Row 2: Segment revenue bar
+    fig.add_trace(
+        go.Bar(
+            x=seg_rev["segment"], y=seg_rev["sum"],
+            name="Total Revenue",
+            marker_color=["#4C72B0", "#C44E52", "#55A868"],
+            hovertemplate="%{x}: $%{y:,.0f}<extra></extra>",
+        ),
+        row=2, col=1,
+    )
+
+    # Row 2: Category pie
+    cat_rev = df.groupby("category")["revenue"].sum().reset_index()
+    fig.add_trace(
+        go.Pie(
+            labels=cat_rev["category"],
+            values=cat_rev["revenue"],
+            name="Category Mix",
+            hole=0.4,
+        ),
+        row=2, col=2,
+    )
+
+    # Row 3: Channel bar
+    chan_rev = df.groupby("channel")["revenue"].sum().sort_values(ascending=False).reset_index()
+    fig.add_trace(
+        go.Bar(
+            x=chan_rev["channel"], y=chan_rev["revenue"],
+            name="Channel Revenue",
+            marker_color="#DD8452",
+        ),
+        row=3, col=1,
+    )
+
+    # Row 3: AOV box by segment
+    for seg, color in [("Consumer", "#55A868"), ("SMB", "#4C72B0"), ("Enterprise", "#C44E52")]:
+        seg_data = df[df["segment"] == seg]["revenue"].clip(upper=df["revenue"].quantile(0.99))
+        fig.add_trace(
+            go.Box(
+                y=seg_data, name=seg, boxpoints="outliers",
+                marker_color=color, line_color=color,
+            ),
+            row=3, col=2,
+        )
+
+    # Layout
+    fig.update_layout(
+        title=dict(
+            text="GadaaLabs Revenue Intelligence Dashboard<br>"
+                 f"<sup>Total Revenue: ${total_revenue:,.0f} | "
+                 f"Orders: {n_orders:,} | AOV: ${avg_order_value:.0f} | "
+                 f"Completion Rate: {completion_rate:.1%}</sup>",
+            font_size=16,
+        ),
+        height=900,
+        showlegend=False,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(family="Arial", size=11),
+    )
+
+    fig.update_yaxes(showgrid=True, gridcolor="#eeeeee")
+    fig.update_xaxes(showgrid=False)
+
+    # Save as self-contained HTML
+    fig.write_html(
+        output_path,
+        include_plotlyjs="cdn",     # Use CDN — smaller file
+        full_html=True,
+        config={
+            "displayModeBar": True,
+            "toImageButtonOptions": {"format": "png", "scale": 2},
+        },
+    )
+    print(f"Executive dashboard saved: {output_path}")
+    return output_path
+
+
+# Simulate data and build the report
+np.random.seed(42)
+n = 2000
+demo_orders = pd.DataFrame({
+    "order_date": pd.date_range("2023-01-01", periods=n, freq="4h"),
+    "revenue": np.random.exponential(75, n).clip(0.01).round(2),
+    "segment": np.random.choice(["SMB", "Enterprise", "Consumer"], p=[0.3, 0.2, 0.5], size=n),
+    "category": np.random.choice(["Electronics", "Clothing", "Books", "Home"], n),
+    "channel": np.random.choice(["organic", "paid", "email", "direct"], n),
+    "status": np.random.choice(["completed", "cancelled", "refunded"], p=[0.75, 0.15, 0.10], size=n),
+})
+
+# build_executive_html_report(demo_orders)
+```
+
+---
+
+## Version Controlling Analysis
+
+```python
+GITIGNORE_TEMPLATE = """
+# .gitignore for an analysis project
+
+# Data — raw data should be version controlled via DVC, not git
+data/raw/
+data/processed/
+
+# Large files
+*.parquet
+*.csv.gz
+*.feather
+
+# Outputs — regenerable from code
+outputs/figures/
+outputs/profiling/
+
+# Reports (HTML/PDF) — regenerable
+reports/*.html
+reports/*.pdf
+
+# Environment
+.env
+.env.local
+secrets.yaml
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+"""
+
+print("Standard .gitignore for analysis projects:")
+print(GITIGNORE_TEMPLATE)
+
+
+JUPYTEXT_NOTE = """
+NOTEBOOK VERSION CONTROL BEST PRACTICES
+========================================
+
+Option 1: nb-clean (strip outputs before committing)
+    Install: pip install nb-clean
+    Setup:   nb-clean add-filter --remove-empty-cells
+    Effect:  Automatically strips outputs from notebooks before git add.
+    Pros: Simple. Cons: Collaborators must re-run to see outputs.
+
+Option 2: Jupytext (sync notebook to .py script)
+    Install: pip install jupytext
+    Setup:   Add to notebook metadata: {"jupytext": {"formats": "ipynb,py:percent"}}
+    Effect:  Creates a .py file that is diffable and reviewable in git.
+    Run:     jupytext --sync analysis_final.ipynb
+    Pros: Diffs are readable. Git history is useful. Cons: Two files to maintain.
+
+Option 3: Review notebooks with nbdime (diff tool)
+    Install: pip install nbdime
+    Setup:   nbdime config-git --enable
+    Effect:  git diff shows notebook diffs as structured text, not JSON noise.
+
+Recommendation:
+    Use Jupytext for primary analysis notebooks (clean diffs in PRs).
+    Use nb-clean for exploratory notebooks where outputs don't matter.
+"""
+print(JUPYTEXT_NOTE)
+```
+
+---
+
+## The Complete Analysis Notebook Template
+
+```python
+ANALYSIS_NOTEBOOK_TEMPLATE = '''
+# ============================================================
+# CELL 1 [TITLE — Markdown, tag: remove-cell for client version]
+# ============================================================
+"""
+# {Project Title}
+
+**Analyst:** {Name}  |  **Date:** {YYYY-MM-DD}  |  **Version:** v1.0
+
+## Objective
+{One sentence objective}
+
+## Key Question
+{The precise analytical question being answered}
+
+## Table of Contents
+1. Setup
+2. Data Loading & Quality
+3. Exploratory Analysis
+4. Main Analysis
+5. Statistical Tests
+6. Key Findings
+7. Appendix
+"""
+
+# ============================================================
+# CELL 2 [SETUP — tag: hide-input for client version]
+# ============================================================
+import warnings
+warnings.filterwarnings("ignore")
+import pandas as pd, numpy as np
+import matplotlib.pyplot as plt, seaborn as sns
+from pathlib import Path
+from datetime import datetime
+
+DATA_DIR = Path("data")
+OUTPUT_DIR = Path("outputs"); OUTPUT_DIR.mkdir(exist_ok=True)
+REPORT_DIR = Path("reports"); REPORT_DIR.mkdir(exist_ok=True)
+
+ANALYSIS_START = pd.Timestamp("{start_date}")
+ANALYSIS_END   = pd.Timestamp("{end_date}")
+
+pd.set_option("display.max_columns", 50)
+pd.set_option("display.float_format", "{:,.2f}".format)
+print(f"Run: {datetime.now():%Y-%m-%d %H:%M:%S}")
+
+# ============================================================
+# CELL 3 [DATA LOADING — tag: hide-input]
+# ============================================================
+# df = pd.read_csv(DATA_DIR / "orders.csv", parse_dates=["order_date"])
+# print(f"Loaded: {len(df):,} rows × {df.shape[1]} columns")
+
+# ============================================================
+# CELL 4 [EXECUTIVE SUMMARY — Markdown, always visible]
+# ============================================================
+"""
+## Executive Summary
+
+{3–5 sentence summary of the most important finding and recommendation.
+Written LAST but placed FIRST. Uses Pyramid Principle.}
+"""
+
+# ============================================================
+# CELL 5-N [ANALYSIS SECTIONS]
+# Each section has:
+#   - A Markdown header with the section number and title
+#   - Code cells tagged hide-input if code is not the story
+#   - At least one chart cell
+#   - A Markdown cell with the section finding
+# ============================================================
+
+# ============================================================
+# CELL N [FINDINGS SUMMARY — always visible]
+# ============================================================
+"""
+## Key Findings
+
+| ID | Finding | So What | Confidence |
+|----|---------|---------|-----------|
+| F001 | {finding} | {so_what} | High |
+| F002 | {finding} | {so_what} | Medium |
+
+## Recommendations
+
+1. **{Action}** — {Expected outcome, owner, deadline}
+2. **{Action}** — {Expected outcome, owner, deadline}
+"""
+
+# ============================================================
+# CELL N+1 [APPENDIX — tag: hide-input for client version]
+# ============================================================
+"""
+## Appendix
+
+- A: Data quality report
+- B: Statistical test outputs
+- C: Feature engineering decisions
+- D: Assumptions and limitations
+"""
+'''
+print(ANALYSIS_NOTEBOOK_TEMPLATE[:3000])
+print("\n... [template continues] ...")
+```
+
+---
+
+## Pre-Delivery Checklist
+
+```python
+PRE_DELIVERY_CHECKLIST = """
+PRE-DELIVERY CHECKLIST (20 items)
+===================================
+Complete this before sharing any analysis deliverable with stakeholders.
+
+DATA & METHODOLOGY
+[ ] 1.  All null values are either imputed or explained; none silently dropped.
+[ ] 2.  Duplicate rows have been checked and handled.
+[ ] 3.  Outliers have been identified and treated or flagged with explanation.
+[ ] 4.  Date ranges are correct and match the stated analysis period.
+[ ] 5.  All joins have been validated (no silent row drop from failed keys).
+[ ] 6.  Statistical tests are appropriate for the data type and distribution.
+[ ] 7.  Effect size is reported alongside every p-value.
+[ ] 8.  Multiple testing correction applied where > 1 hypothesis was tested.
+[ ] 9.  Assumptions are documented and their impact on conclusions is noted.
+[ ] 10. All code has been re-run from top to bottom in a clean kernel.
+
+CHARTS & PRESENTATION
+[ ] 11. All charts have a descriptive title (not just the metric name).
+[ ] 12. All axes are labelled with units ($ , %, count, days, etc.).
+[ ] 13. Legends are present where multiple series are shown.
+[ ] 14. Color palette is colorblind-safe and consistent.
+[ ] 15. Numbers in charts are formatted correctly (currency, percentage, etc.).
+
+INSIGHTS & COMMUNICATION
+[ ] 16. Every major finding passes the "So What?" test.
+[ ] 17. Recommendations are specific: named action, owner, and expected outcome.
+[ ] 18. Executive summary is 3–5 sentences and can stand alone.
+[ ] 19. Confidence level is stated for each key finding.
+[ ] 20. Limitations section acknowledges what the analysis cannot answer.
+
+DELIVERY
+[ ] Export verified: HTML/PDF renders correctly (checked on a different machine).
+[ ] Interactive dashboard: all hover tooltips work, no console errors.
+[ ] File naming: date_project_version convention (e.g., 20231108_q3_analysis_v1.html).
+"""
+print(PRE_DELIVERY_CHECKLIST)
+
+
+def run_checklist_interactively() -> None:
+    """
+    Interactive pre-delivery checklist runner.
+    In a real setting, integrate this into a CI/CD notebook check.
+    """
+    checklist_items = [
+        "All nulls imputed or explained",
+        "Duplicate rows handled",
+        "Outliers treated or flagged",
+        "Date ranges validated",
+        "All joins validated",
+        "Statistical tests appropriate",
+        "Effect size reported",
+        "Multiple testing correction applied if needed",
+        "Assumptions documented",
+        "Code re-run clean from top to bottom",
+        "All charts have descriptive titles",
+        "All axes labelled with units",
+        "Legends present where needed",
+        "Colorblind-safe palette used",
+        "Numbers formatted correctly",
+        "Every finding passes So What test",
+        "Recommendations are specific (action, owner, deadline)",
+        "Executive summary is 3-5 sentences",
+        "Confidence stated for each finding",
+        "Limitations section present",
+    ]
+
+    results = []
+    for i, item in enumerate(checklist_items, 1):
+        # In production, this would prompt the analyst
+        # Here we simulate all passing
+        results.append({"item": f"{i:02d}. {item}", "status": "PASS"})
+
+    df = pd.DataFrame(results)
+    n_pass = (df["status"] == "PASS").sum()
+    n_fail = (df["status"] == "FAIL").sum()
+
+    print(f"\nChecklist Results: {n_pass}/20 PASSED, {n_fail} FAILED")
+    if n_fail > 0:
+        print("\nFailed items:")
+        print(df[df["status"] == "FAIL"].to_string())
+    else:
+        print("All checks passed. Ready to deliver.")
+
+    return df
+
+
+checklist_df = run_checklist_interactively()
+```
+
+---
+
+## Stakeholder Communication Guide
+
+```python
+STAKEHOLDER_GUIDE = """
+CHOOSING DEPTH BY AUDIENCE
+============================
+
+1. EXECUTIVE (CEO, CFO, VP)
+   Format: 1-page memo OR 5-slide deck OR top of notebook (summary cell)
+   Content: Conclusion first. 3 key insights max. Quantified impact.
+            One clear recommendation per insight. No methodology.
+   Language: Business outcomes, not statistical terms.
+             Say "34% more churn" not "Mann-Whitney U p=0.0002".
+   Charts: 1–2 charts max. Self-explanatory. No code.
+   Time to consume: < 5 minutes.
+
+2. PRODUCT/REVENUE MANAGER
+   Format: Findings memo + interactive dashboard
+   Content: Insights with evidence, methodology summary, limitations,
+            appendix with full statistical results.
+   Language: Mix of business and analytical. Can mention p-values
+             if framed as "the result is statistically significant".
+   Charts: 5–8 charts. Interactive preferred for exploration.
+   Time to consume: 15–30 minutes.
+
+3. FELLOW ANALYST / ENGINEER
+   Format: Full notebook
+   Content: Everything. Methodology, code, raw statistical output,
+            data quality notes, edge cases, failed hypotheses.
+   Language: Technical. Specific test names, assumptions, limitations.
+   Charts: As many as needed.
+   Time to consume: 30–90 minutes.
+
+4. BI ANALYST / DATA ENGINEER
+   Format: SQL queries, data model documentation, cleaning decisions
+   Content: Focus on reproducibility and upstream data dependencies.
+            Document every transformation in the cleaning log.
+            Share the `schema_contract.py` and `cleaning_pipeline.py`.
+   Language: Technical. Data modelling terms.
+   Time to consume: Variable — they are building on your work.
+
+RULE: Always deliver in the simplest format the audience can consume.
+If an executive asks for "the analysis", give them the 1-pager first.
+Offer the full notebook as "available if you want to dig deeper."
+"""
+print(STAKEHOLDER_GUIDE)
+```
+
+---
+
+## Code Quality in Analysis
+
+```python
+# The difference between a notebook and production code is:
+# - Functions over repetition
+# - Docstrings on every helper function
+# - Type hints in function signatures
+# - Constants at the top of the file (not buried in cell 47)
+# - No magic numbers inline
+
+# BAD: inline magic number
+# df = df[df["revenue"] > 0.01]
+
+# GOOD: named constant
+REVENUE_MINIMUM = 0.01  # Defined at notebook top
+# df = df[df["revenue"] > REVENUE_MINIMUM]
+
+
+# BAD: duplicated aggregation logic
+# smb_avg = orders[orders["segment"] == "SMB"]["revenue"].mean()
+# ent_avg = orders[orders["segment"] == "Enterprise"]["revenue"].mean()
+# con_avg = orders[orders["segment"] == "Consumer"]["revenue"].mean()
+
+# GOOD: function + apply
+def segment_revenue_summary(df: pd.DataFrame, segment_col: str = "segment") -> pd.DataFrame:
+    """
+    Compute revenue summary statistics by segment.
+
+    Args:
+        df: Orders DataFrame with at least 'revenue' and segment_col columns.
+        segment_col: Column name for the segment grouping variable.
+
+    Returns:
+        DataFrame with mean, median, p90, and count by segment.
+    """
+    return (
+        df.groupby(segment_col)["revenue"]
+        .agg(
+            mean_revenue="mean",
+            median_revenue="median",
+            p90_revenue=lambda x: x.quantile(0.90),
+            n_orders="count",
+        )
+        .round(2)
+        .sort_values("median_revenue", ascending=False)
+    )
+
+
+import pandas as pd
+import numpy as np
+np.random.seed(0)
+sample_orders = pd.DataFrame({
+    "segment": np.random.choice(["SMB", "Enterprise", "Consumer"], 500),
+    "revenue": np.random.exponential(75, 500).round(2),
+})
+print(segment_revenue_summary(sample_orders))
+```
+
+---
+
+## Key Takeaways
+
+- A professional Jupyter notebook has a consistent structure: title cell, setup cell, section-numbered cells, findings summary cell, appendix. Every section follows the same pattern regardless of project.
+- Tag cells with `hide-input` and `remove-cell` in JupyterLab. Use `nbconvert` with `TagRemovePreprocessor` to generate a code-free stakeholder version from the same source notebook.
+- Project directory structure is not aesthetic — it determines reproducibility. Raw data is immutable, processed data is derived, outputs are regenerable, reports are deliverables. Separate each layer.
+- Use Jupytext for clean git diffs of notebooks. Use nb-clean as a pre-commit hook to strip outputs from exploratory work. Never commit raw large binary files to git.
+- The Plotly HTML report — a single self-contained file combining multiple interactive charts — is the most shareable analytical artefact for non-technical stakeholders. Use `include_plotlyjs='cdn'` to keep file sizes manageable.
+- The 20-item pre-delivery checklist is not optional. Running it takes five minutes and prevents the kind of errors that destroy analytical credibility: unlabelled axes, p-values without effect sizes, missing limitations, null values silently dropped.
+- Match depth to audience: executives get the 1-page memo; managers get the interactive dashboard plus findings memo; analysts and engineers get the full notebook. Never make a CEO read through 300 lines of pandas code.
+- Code quality in analysis notebooks matters: use functions over copy-paste, type hints on all helpers, named constants instead of inline magic numbers, and docstrings that explain the why, not just the what. Your notebook will be read by future you, and future you has no memory of why you wrote that particular filter.

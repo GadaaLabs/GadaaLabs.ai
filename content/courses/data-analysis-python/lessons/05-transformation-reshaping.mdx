@@ -1,0 +1,663 @@
+---
+title: "Transformation, Reshaping & Complex Aggregations"
+description: "Master GroupBy, window functions, pivoting, wide-to-long conversion, MultiIndex, time series resampling, complex merges, and performance-conscious transformation patterns."
+duration: 25
+order: 5
+---
+
+## Transformations That Unlock Analysis
+
+Cleaning produces a trustworthy dataset. Transformation produces an analytically useful one. The gap between "clean data" and "analysis-ready data" is almost always bridged by the operations in this lesson: reshaping, aggregating, windowing, and combining. These are also where analysts most often introduce bugs — silent join explosions, group miscalculations, time zone errors in resampling. This lesson covers the patterns that work and the failure modes to avoid.
+
+---
+
+## GroupBy Mastery
+
+### Named Aggregations (the Modern Pattern)
+
+```python
+import pandas as pd
+import numpy as np
+
+np.random.seed(42)
+n = 2000
+
+orders = pd.DataFrame({
+    "order_id": range(1, n + 1),
+    "customer_id": np.random.randint(1, 401, n),
+    "product_id": np.random.choice(["SKU-001", "SKU-002", "SKU-003", "SKU-004"], n),
+    "category": np.random.choice(["Electronics", "Clothing", "Books", "Home"], n),
+    "order_date": pd.date_range("2023-01-01", periods=n, freq="3h"),
+    "revenue": np.random.exponential(scale=80, size=n).round(2),
+    "quantity": np.random.randint(1, 6, n),
+    "segment": np.random.choice(["SMB", "Enterprise", "Consumer"], p=[0.3, 0.2, 0.5], size=n),
+    "status": np.random.choice(["completed", "cancelled", "refunded"], p=[0.75, 0.15, 0.10], size=n),
+})
+
+# Named aggregations — explicit, readable, no ambiguity about column names
+category_summary = orders.groupby("category").agg(
+    n_orders=("order_id", "count"),
+    total_revenue=("revenue", "sum"),
+    avg_revenue=("revenue", "mean"),
+    median_revenue=("revenue", "median"),
+    revenue_std=("revenue", "std"),
+    total_quantity=("quantity", "sum"),
+    n_customers=("customer_id", "nunique"),
+    cancellation_rate=("status", lambda x: (x == "cancelled").mean()),
+).round(2)
+
+category_summary["revenue_per_customer"] = (
+    category_summary["total_revenue"] / category_summary["n_customers"]
+).round(2)
+
+print("Category Summary:")
+print(category_summary.to_string())
+```
+
+### `transform()` vs `agg()` — The Critical Distinction
+
+`agg()` reduces a group to a single value. `transform()` returns a same-length series, preserving the original index. Expert analysts use `transform()` for within-group normalisation and feature engineering.
+
+```python
+# agg(): returns one row per group
+group_means = orders.groupby("segment")["revenue"].agg("mean")
+print("agg() result shape:", group_means.shape)  # (3,)
+
+# transform(): returns same length as original — one value per original row
+orders["segment_mean_revenue"] = orders.groupby("segment")["revenue"].transform("mean")
+print("transform() result shape:", orders["segment_mean_revenue"].shape)  # (2000,)
+
+# Use case: compute how each order compares to its segment's average
+orders["revenue_vs_segment_avg"] = orders["revenue"] - orders["segment_mean_revenue"]
+orders["revenue_pct_of_segment_avg"] = (orders["revenue"] / orders["segment_mean_revenue"] * 100).round(1)
+
+# Use case: rank each order within its product category by revenue
+orders["revenue_rank_in_category"] = (
+    orders.groupby("category")["revenue"].rank(ascending=False, method="dense").astype(int)
+)
+
+print(orders[["order_id", "category", "revenue", "revenue_rank_in_category"]].head(10))
+```
+
+### `apply()` with Custom Functions
+
+```python
+from typing import Any
+
+
+def cohort_stats(group: pd.DataFrame) -> pd.Series:
+    """
+    Custom aggregation: compute rich stats for a customer-segment group.
+    Returns a Series — pandas assembles these into a DataFrame.
+    """
+    completed = group[group["status"] == "completed"]
+    return pd.Series({
+        "n_orders": len(group),
+        "n_completed": len(completed),
+        "completion_rate": len(completed) / len(group) if len(group) > 0 else 0,
+        "total_revenue": completed["revenue"].sum(),
+        "avg_order_value": completed["revenue"].mean() if len(completed) > 0 else 0,
+        "revenue_p90": completed["revenue"].quantile(0.90) if len(completed) > 0 else 0,
+        "n_unique_products": group["product_id"].nunique(),
+        "days_active": (group["order_date"].max() - group["order_date"].min()).days,
+    })
+
+
+segment_cohort = orders.groupby("segment").apply(cohort_stats).round(2)
+print("\nSegment Cohort Stats (custom apply):")
+print(segment_cohort.to_string())
+```
+
+---
+
+## Window Functions: Rolling, Expanding, EWM
+
+Window functions compute values over a sliding or growing window — essential for time series analysis and trend detection.
+
+```python
+import pandas as pd
+import numpy as np
+
+# Create a daily time series of revenue
+daily_revenue = (
+    orders.set_index("order_date")
+    .resample("D")["revenue"]
+    .sum()
+    .reset_index()
+    .rename(columns={"revenue": "daily_revenue"})
+)
+
+daily_revenue = daily_revenue.sort_values("order_date").reset_index(drop=True)
+
+# 7-day rolling average (smooth out day-of-week effects)
+daily_revenue["revenue_7d_avg"] = (
+    daily_revenue["daily_revenue"].rolling(window=7, min_periods=1).mean().round(2)
+)
+
+# 7-day rolling standard deviation (volatility signal)
+daily_revenue["revenue_7d_std"] = (
+    daily_revenue["daily_revenue"].rolling(window=7, min_periods=1).std().round(2)
+)
+
+# 30-day rolling sum (monthly run rate)
+daily_revenue["revenue_30d_rolling"] = (
+    daily_revenue["daily_revenue"].rolling(window=30, min_periods=1).sum().round(2)
+)
+
+# Expanding sum — cumulative total since day 1
+daily_revenue["revenue_cumulative"] = daily_revenue["daily_revenue"].expanding().sum().round(2)
+
+# Exponentially weighted moving average — more weight on recent data
+# alpha=0.3 means 30% weight on current, 70% on history
+daily_revenue["revenue_ewm"] = (
+    daily_revenue["daily_revenue"].ewm(alpha=0.3, adjust=False).mean().round(2)
+)
+
+# Week-over-week percentage change
+daily_revenue["revenue_wow_pct"] = (
+    daily_revenue["daily_revenue"].pct_change(periods=7) * 100
+).round(2)
+
+print(daily_revenue.tail(14).to_string())
+```
+
+### Grouped Rolling Windows
+
+```python
+# Rolling 7-day revenue per customer segment
+# (requires sort + groupby + rolling)
+segment_daily = (
+    orders.set_index("order_date")
+    .groupby("segment")
+    .resample("D")["revenue"]
+    .sum()
+    .reset_index()
+    .sort_values(["segment", "order_date"])
+)
+
+segment_daily["revenue_7d_avg"] = (
+    segment_daily.groupby("segment")["revenue"]
+    .transform(lambda x: x.rolling(7, min_periods=1).mean())
+    .round(2)
+)
+
+print("\nSegment daily revenue with 7-day rolling average (sample):")
+print(segment_daily.groupby("segment").tail(3).to_string())
+```
+
+---
+
+## `pivot_table()` vs `crosstab()` — When to Use Each
+
+Both produce cross-tabulations but serve different purposes.
+
+`pivot_table` aggregates a numeric value across two categorical dimensions — it is a flexible, multi-purpose pivot.
+
+`crosstab` counts occurrences (or computes frequencies) of combinations — best for contingency tables and proportional analysis.
+
+```python
+import pandas as pd
+
+# pivot_table: average revenue by category × segment
+revenue_pivot = orders.pivot_table(
+    values="revenue",
+    index="category",
+    columns="segment",
+    aggfunc="mean",
+    fill_value=0,
+    margins=True,           # Add row/column totals
+    margins_name="All",
+).round(2)
+
+print("Average Revenue by Category × Segment:")
+print(revenue_pivot.to_string())
+
+print()
+
+# Multiple aggregation functions in one pivot
+multi_agg_pivot = orders.pivot_table(
+    values="revenue",
+    index="category",
+    columns="segment",
+    aggfunc=["mean", "count", "sum"],
+    fill_value=0,
+).round(2)
+
+print("Multi-metric pivot (mean / count / sum):")
+print(multi_agg_pivot.to_string())
+
+print()
+
+# crosstab: order status frequency by segment
+status_by_segment = pd.crosstab(
+    orders["segment"],
+    orders["status"],
+    normalize="index",   # Row-wise proportions (each row sums to 1)
+    margins=True,
+).round(3)
+
+print("Order Status Distribution by Segment (row %%):")
+print(status_by_segment.to_string())
+```
+
+---
+
+## Wide vs Long Format: Melt, Stack, Unstack
+
+Many analysis patterns require data in long format (one value per row). Many reporting patterns require wide format (one entity per row, multiple attribute columns). Know how to convert both ways.
+
+```python
+import pandas as pd
+import numpy as np
+
+# Wide format: one row per customer, columns for each metric
+wide_customers = pd.DataFrame({
+    "customer_id": range(1, 6),
+    "revenue_q1": [1200, 3400, 800, 2100, 5600],
+    "revenue_q2": [1400, 3100, 950, 2400, 5200],
+    "revenue_q3": [1100, 3700, 700, 2200, 6100],
+    "revenue_q4": [1600, 4000, 850, 2600, 5900],
+})
+
+print("Wide format:")
+print(wide_customers.to_string())
+
+# melt() → long format: one row per (customer, quarter)
+long_customers = wide_customers.melt(
+    id_vars=["customer_id"],
+    value_vars=["revenue_q1", "revenue_q2", "revenue_q3", "revenue_q4"],
+    var_name="quarter",
+    value_name="revenue",
+)
+
+# Clean up the quarter label
+long_customers["quarter"] = long_customers["quarter"].str.replace("revenue_", "").str.upper()
+
+print("\nLong format:")
+print(long_customers.sort_values(["customer_id", "quarter"]).to_string())
+
+# Convert back: unstack or pivot
+wide_again = long_customers.pivot_table(
+    values="revenue",
+    index="customer_id",
+    columns="quarter",
+    aggfunc="sum",
+)
+print("\nBack to wide via pivot_table:")
+print(wide_again.to_string())
+```
+
+### Stack and Unstack with MultiIndex
+
+```python
+import pandas as pd
+
+# MultiIndex DataFrame
+arrays = [
+    ["SMB", "SMB", "Enterprise", "Enterprise"],
+    ["completed", "cancelled", "completed", "cancelled"],
+]
+index = pd.MultiIndex.from_arrays(arrays, names=["segment", "status"])
+
+revenue_multi = pd.Series([450_000, 45_000, 820_000, 30_000], index=index, name="revenue")
+
+print("MultiIndex Series:")
+print(revenue_multi)
+
+# unstack: move the inner index level to columns
+revenue_wide = revenue_multi.unstack(level="status")
+print("\nUnstacked (wide by status):")
+print(revenue_wide)
+
+# stack: move column level back to index
+revenue_long_again = revenue_wide.stack()
+print("\nStacked back to long:")
+print(revenue_long_again)
+
+# Slicing MultiIndex
+print("\nSMB segment only:")
+print(revenue_multi.loc["SMB"])
+
+print("\nCompleted status across all segments:")
+print(revenue_multi.xs("completed", level="status"))
+```
+
+---
+
+## Binning Continuous Variables
+
+```python
+import pandas as pd
+import numpy as np
+
+np.random.seed(0)
+customers = pd.DataFrame({
+    "customer_id": range(1, 501),
+    "annual_revenue": np.random.exponential(50_000, 500).round(2),
+    "age": np.random.randint(18, 75, 500),
+    "total_orders": np.random.randint(1, 50, 500),
+})
+
+# pd.cut: explicit bin edges (based on domain knowledge)
+# Revenue tiers defined by business rules
+customers["revenue_tier"] = pd.cut(
+    customers["annual_revenue"],
+    bins=[0, 10_000, 50_000, 200_000, np.inf],
+    labels=["Micro", "SMB", "Mid-Market", "Enterprise"],
+    right=True,       # Bins are (left, right]
+    include_lowest=True,
+)
+
+# pd.qcut: quantile-based bins (equal-sized groups)
+customers["revenue_quartile"] = pd.qcut(
+    customers["annual_revenue"],
+    q=4,
+    labels=["Q1 (bottom)", "Q2", "Q3", "Q4 (top)"],
+    duplicates="drop",  # Handle tied bin edges
+)
+
+# Age bands
+customers["age_band"] = pd.cut(
+    customers["age"],
+    bins=[17, 24, 34, 44, 54, 100],
+    labels=["18-24", "25-34", "35-44", "45-54", "55+"],
+)
+
+print("Revenue tier distribution:")
+print(customers["revenue_tier"].value_counts().sort_index())
+
+print("\nRevenue quartile distribution:")
+print(customers["revenue_quartile"].value_counts().sort_index())
+
+print("\nRevenue by tier (summary):")
+print(customers.groupby("revenue_tier", observed=True)["annual_revenue"].describe().round(0))
+```
+
+---
+
+## Time Series Resampling
+
+```python
+import pandas as pd
+import numpy as np
+
+# Create hourly transaction data
+np.random.seed(42)
+n_hours = 24 * 90  # 90 days of hourly data
+
+hourly = pd.DataFrame({
+    "timestamp": pd.date_range("2023-01-01", periods=n_hours, freq="h"),
+    "revenue": np.random.exponential(scale=200, size=n_hours).round(2),
+    "n_transactions": np.random.randint(0, 20, n_hours),
+})
+hourly = hourly.set_index("timestamp")
+
+# Downsample to daily: sum revenue, mean n_transactions
+daily = hourly.resample("D").agg({
+    "revenue": "sum",
+    "n_transactions": "sum",
+})
+
+# Downsample to weekly
+weekly = hourly.resample("W").agg({
+    "revenue": "sum",
+    "n_transactions": "sum",
+})
+weekly["avg_daily_revenue"] = (weekly["revenue"] / 7).round(2)
+
+# Downsample to monthly
+monthly = hourly.resample("ME").agg({
+    "revenue": "sum",
+    "n_transactions": "sum",
+})
+
+# Fill gaps: asfreq with forward-fill for sparse time series
+sparse = daily.resample("D").asfreq()          # Ensure every day has a row
+sparse_filled = sparse.resample("D").asfreq().fillna(method="ffill")
+
+print("Daily revenue (first 7 days):")
+print(daily.head(7).to_string())
+
+print("\nWeekly summary (first 4 weeks):")
+print(weekly.head(4).to_string())
+```
+
+---
+
+## Complex Merges
+
+### merge_asof: Time-Based Joins
+
+`merge_asof` joins on the nearest key value rather than exact match — essential for joining events to price tables or market data.
+
+```python
+import pandas as pd
+import numpy as np
+
+# Orders placed at various times
+orders_ts = pd.DataFrame({
+    "order_id": range(1, 11),
+    "order_date": pd.to_datetime([
+        "2023-01-05", "2023-02-10", "2023-03-15",
+        "2023-04-01", "2023-05-20", "2023-06-10",
+        "2023-07-08", "2023-08-15", "2023-09-30", "2023-10-05",
+    ]),
+    "product_id": ["SKU-001"] * 10,
+    "quantity": np.random.randint(1, 5, 10),
+}).sort_values("order_date")
+
+# Price table: price changes at specific dates
+price_history = pd.DataFrame({
+    "effective_date": pd.to_datetime(["2023-01-01", "2023-04-01", "2023-07-01"]),
+    "product_id": ["SKU-001"] * 3,
+    "unit_price": [29.99, 34.99, 39.99],
+}).sort_values("effective_date")
+
+# merge_asof: each order gets the price that was active at order time
+orders_with_price = pd.merge_asof(
+    orders_ts,
+    price_history,
+    left_on="order_date",
+    right_on="effective_date",
+    by="product_id",       # Join within each product_id group
+    direction="backward",  # Use the most recent price <= order date
+)
+
+orders_with_price["revenue"] = (
+    orders_with_price["quantity"] * orders_with_price["unit_price"]
+)
+
+print("Orders with historically-correct prices:")
+print(orders_with_price[["order_id", "order_date", "unit_price", "quantity", "revenue"]].to_string())
+```
+
+### Many-to-Many Joins (and the Explosion Problem)
+
+```python
+import pandas as pd
+
+# Many-to-many: customers can have multiple tags, tags can apply to many customers
+customer_tags = pd.DataFrame({
+    "customer_id": [1, 1, 2, 2, 3],
+    "tag": ["loyal", "high_value", "at_risk", "loyal", "new"],
+})
+
+tag_campaigns = pd.DataFrame({
+    "tag": ["loyal", "high_value", "at_risk"],
+    "campaign_id": ["camp_001", "camp_002", "camp_003"],
+    "discount_pct": [10, 15, 20],
+})
+
+# This produces multiple rows per customer where tags match multiple campaigns
+customer_campaigns = customer_tags.merge(tag_campaigns, on="tag", how="left")
+print("Many-to-many join result:")
+print(customer_campaigns.to_string())
+print(f"\nRows: {len(customer_campaigns)} (more than original {len(customer_tags)} — expected in M:M)")
+
+# Adding an indicator column to detect non-matching rows
+orders_enriched = orders_ts.merge(
+    price_history[["product_id", "unit_price"]].drop_duplicates(),
+    on="product_id",
+    how="left",
+    indicator=True,  # Adds '_merge' column: 'both', 'left_only', 'right_only'
+)
+print("\nMerge indicator:")
+print(orders_enriched["_merge"].value_counts())
+```
+
+---
+
+## Applying Functions: Performance Hierarchy
+
+Pandas function application has a performance hierarchy. Know it.
+
+```python
+import pandas as pd
+import numpy as np
+import time
+
+
+np.random.seed(0)
+n = 100_000
+df = pd.DataFrame({
+    "a": np.random.randn(n),
+    "b": np.random.randn(n),
+    "category": np.random.choice(["X", "Y", "Z"], n),
+})
+
+# ---- FASTEST: Vectorised operations (NumPy-level, no Python loop) ----
+t0 = time.perf_counter()
+df["result_vectorised"] = df["a"] * 2 + df["b"] ** 2
+t_vec = time.perf_counter() - t0
+
+# ---- FAST: .str methods for strings (C-compiled loop) ----
+df_str = pd.DataFrame({"name": ["Alice Smith", "Bob Jones"] * 50_000})
+t0 = time.perf_counter()
+df_str["first_name"] = df_str["name"].str.split(" ").str[0]
+t_str = time.perf_counter() - t0
+
+# ---- MEDIUM: .map() for element-wise lookup/transform ----
+cat_map = {"X": 1, "Y": 2, "Z": 3}
+t0 = time.perf_counter()
+df["category_encoded"] = df["category"].map(cat_map)
+t_map = time.perf_counter() - t0
+
+# ---- SLOW: .apply() with Python function (Python loop) ----
+t0 = time.perf_counter()
+df["result_apply"] = df[["a", "b"]].apply(lambda row: row["a"] * 2 + row["b"] ** 2, axis=1)
+t_apply = time.perf_counter() - t0
+
+# ---- VERY FAST: eval() for complex arithmetic (numexpr under the hood) ----
+t0 = time.perf_counter()
+df.eval("result_eval = a * 2 + b ** 2", inplace=True)
+t_eval = time.perf_counter() - t0
+
+print("Performance comparison (100,000 rows):")
+print(f"  Vectorised:   {t_vec*1000:.2f} ms")
+print(f"  .str method:  {t_str*1000:.2f} ms")
+print(f"  .map():       {t_map*1000:.2f} ms")
+print(f"  .apply():     {t_apply*1000:.2f} ms  ← Avoid in hot paths")
+print(f"  .eval():      {t_eval*1000:.2f} ms")
+
+# Validate all methods give the same result
+assert np.allclose(df["result_vectorised"], df["result_apply"])
+assert np.allclose(df["result_vectorised"], df["result_eval"])
+print("\nAll methods produce identical results.")
+```
+
+### query() for Readable Filtering
+
+```python
+import pandas as pd
+import numpy as np
+
+# query() is more readable than boolean indexing and faster on large DataFrames
+# (uses numexpr when available)
+
+# Traditional boolean indexing
+mask = (
+    (orders["revenue"] > 100) &
+    (orders["status"] == "completed") &
+    (orders["segment"].isin(["SMB", "Enterprise"]))
+)
+filtered_traditional = orders[mask]
+
+# query() equivalent — cleaner syntax, same result
+filtered_query = orders.query(
+    "revenue > 100 and status == 'completed' and segment in ['SMB', 'Enterprise']"
+)
+
+# Avoid chained assignment — always use .copy() or loc
+# BAD (may trigger SettingWithCopyWarning or silent mutation):
+# df[df["status"] == "completed"]["revenue"] = 0
+
+# GOOD:
+orders_copy = orders.copy()
+orders_copy.loc[orders_copy["status"] == "cancelled", "revenue"] = 0
+
+assert len(filtered_traditional) == len(filtered_query)
+print(f"query() and boolean indexing produce same result: {len(filtered_query):,} rows")
+```
+
+---
+
+## Combining Datasets with `pd.concat`
+
+```python
+import pandas as pd
+import numpy as np
+
+# Concat with source tracking
+np.random.seed(0)
+q1_orders = pd.DataFrame({
+    "order_id": range(1, 101),
+    "revenue": np.random.exponential(80, 100),
+    "quarter": "Q1",
+})
+q2_orders = pd.DataFrame({
+    "order_id": range(101, 201),
+    "revenue": np.random.exponential(85, 100),
+    "quarter": "Q2",
+})
+q3_orders = pd.DataFrame({
+    "order_id": range(201, 301),
+    "revenue": np.random.exponential(90, 100),
+    "quarter": "Q3",
+    "new_col": "only_in_q3",  # Mismatched columns — will have NaN in Q1/Q2
+})
+
+# Stack quarters with keys (creates MultiIndex) and verify columns
+all_quarters = pd.concat(
+    [q1_orders, q2_orders, q3_orders],
+    keys=["Q1", "Q2", "Q3"],
+    names=["quarter_key", "row"],
+    ignore_index=False,
+    sort=False,
+)
+
+print("Concatenated shape:", all_quarters.shape)
+print("Mismatched column null check:", all_quarters["new_col"].isnull().sum())
+
+# Reset index if MultiIndex is not needed
+all_quarters_flat = pd.concat(
+    [q1_orders, q2_orders, q3_orders],
+    ignore_index=True,  # Resets index to 0..N
+)
+
+print("\nFlat concat shape:", all_quarters_flat.shape)
+print("Quarter distribution:")
+print(all_quarters_flat["quarter"].value_counts())
+```
+
+---
+
+## Key Takeaways
+
+- Named aggregations (`agg(name=(col, func))`) are the modern pandas pattern — explicit, readable, and free of ambiguous column naming.
+- `transform()` returns a same-length Series and is the correct tool for within-group normalisation, ranking, and feature creation — use `agg()` only when you want a reduced summary.
+- `pivot_table()` aggregates a numeric value across two categorical axes; `crosstab()` counts occurrences. Use `normalize='index'` on crosstab for row-wise proportions.
+- `melt()` converts wide to long (one row per observation); `pivot_table()` or `unstack()` converts long to wide. Long format is required for seaborn plots and most statistical libraries.
+- Window functions — `rolling()`, `expanding()`, `ewm()` — are essential for time series analysis. Always group by the entity (customer, product) before rolling to avoid mixing time series across entities.
+- `merge_asof` solves the time-based join problem (join on nearest key) — invaluable for price history, market data, and event-to-session attribution.
+- The performance hierarchy: vectorised &gt; `.str`/`.dt` &gt; `.map()` &gt; `.eval()` &gt; `.apply()`. Use `.apply()` only when no vectorised alternative exists, and never in a loop.
+- `pd.concat` with `ignore_index=True` is the safe pattern for stacking DataFrames. Always check for column mismatches after concatenation — unintended NaN columns are a common silent bug.

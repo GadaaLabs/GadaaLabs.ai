@@ -1,0 +1,616 @@
+---
+title: "From Data to Insights — Analytical Storytelling"
+description: "Transform findings into actionable intelligence using the Pyramid Principle, SCR framework, insight prioritisation, the So What test, and structured analytical memos — all in Python."
+duration: 22
+order: 11
+---
+
+## The Gap Between Findings and Insights
+
+Most analysts can produce a correct analysis. Far fewer can produce an analysis whose findings actually change what a business does. The gap between "technically correct" and "actionable" is a communication problem, and it is solved by the same rigour that good analysts apply to their code: structured frameworks, explicit reasoning, and ruthless editing.
+
+This lesson covers the analytical communication skills that determine whether your work ends up in a decision or in a drawer.
+
+---
+
+## Findings vs Insights: The Distinction
+
+A finding is an observation from data. An insight is a finding that has been extended with interpretation, implication, and a recommended action.
+
+**Finding:** Revenue declined 18% in Q3 2023.
+
+**Insight:** Revenue declined 18% in Q3 2023, driven entirely by a 34% churn increase in the SMB segment following the July price increase. Enterprise and Consumer segments were unaffected. This indicates price sensitivity is concentrated in SMB accounts, and a targeted retention offer for at-risk SMB customers could recover an estimated $240,000 in at-risk ARR before year-end.
+
+The insight answers three questions the finding does not:
+1. Why? (Price-sensitive SMB cohort)
+2. How big is it really? (Enterprise unaffected — it's not systemic)
+3. What should we do? (Retention offer with an estimated value)
+
+```python
+from dataclasses import dataclass, field
+from typing import Literal
+
+
+@dataclass
+class Insight:
+    """
+    A structured insight that passes the full analytical communication test.
+    """
+    id: str
+    category: Literal["trend", "anomaly", "relationship", "segmentation", "correlation", "causal"]
+    finding: str                    # What the data shows (quantified)
+    context: str                    # Baseline or comparison that makes it meaningful
+    interpretation: str             # Why it is happening (hypothesis)
+    so_what: str                    # Business implication
+    recommended_action: str         # What should change tomorrow
+    estimated_impact: str           # Quantified value of the action if taken
+    confidence: Literal["high", "medium", "low"]
+    supporting_evidence: list[str] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+    limitations: list[str] = field(default_factory=list)
+
+    def passes_so_what_test(self) -> bool:
+        return bool(self.recommended_action.strip()) and bool(self.estimated_impact.strip())
+
+    def render(self) -> str:
+        lines = [
+            f"## Insight {self.id}: {self.category.upper()}",
+            "",
+            f"**Finding:** {self.finding}",
+            f"**Context:** {self.context}",
+            f"**Interpretation:** {self.interpretation}",
+            "",
+            f"**So what?** {self.so_what}",
+            f"**Recommended action:** {self.recommended_action}",
+            f"**Estimated impact:** {self.estimated_impact}",
+            f"**Confidence:** {self.confidence.upper()}",
+        ]
+        if self.assumptions:
+            lines.append("\n**Assumptions:**")
+            lines.extend(f"  - {a}" for a in self.assumptions)
+        if self.limitations:
+            lines.append("\n**Limitations:**")
+            lines.extend(f"  - {l}" for l in self.limitations)
+        return "\n".join(lines)
+
+
+# Example insight from the Q3 revenue analysis
+insight_1 = Insight(
+    id="01",
+    category="trend",
+    finding="Q3 2023 revenue declined 18% YoY (from $4.2M to $3.4M). The decline began in July and accelerated through September.",
+    context="Q1 and Q2 2023 showed 12% YoY growth. The July inflection coincides with the SKU-A and SKU-B price increases implemented 2023-07-01.",
+    interpretation="The July price increase triggered elevated SMB churn. SMB customers have ~3× higher price sensitivity than Enterprise, as evidenced by the 34% spike in SMB cancellations vs 2% in Enterprise during the same period.",
+    so_what="The revenue decline is not broad-based or seasonal. It is concentrated in a recoverable segment — SMB customers who were active before July 2023 and who have not yet churned permanently.",
+    recommended_action=(
+        "Launch a targeted retention campaign for 847 at-risk SMB accounts: "
+        "offer a 12-month price lock at the pre-July rate. Target customers who were active "
+        "in Q2 2023, have not placed an order since July, and have account ARR above $2,000."
+    ),
+    estimated_impact=(
+        "If 30% of targeted accounts re-engage (conservative estimate based on similar campaigns), "
+        "this recovers ~$240K ARR. Full campaign cost is estimated at $15K. ROI = 16:1."
+    ),
+    confidence="high",
+    supporting_evidence=[
+        "Segment-level revenue decomposition (analysis/05_segment_analysis.ipynb)",
+        "Cohort retention chart showing Q3 cohort drop-off (analysis/07_cohort.ipynb)",
+        "Mann-Whitney U test: SMB vs Enterprise cancellation rate post-price-change (p=0.0002)",
+    ],
+    assumptions=[
+        "Guest checkout orders (3% of total) are excluded — assumed uniformly distributed across segments",
+        "Price sensitivity estimate from 2022 price test (different SKUs but similar magnitude)",
+    ],
+    limitations=[
+        "Causality is inferred, not confirmed — no controlled experiment",
+        "Competitive price changes during Q3 not controlled for",
+    ],
+)
+
+print(insight_1.render())
+print(f"\nPasses So What test: {insight_1.passes_so_what_test()}")
+```
+
+---
+
+## The Pyramid Principle
+
+The Pyramid Principle (Barbara Minto, McKinsey) is the single most useful communication framework for analytical work. The core rule: lead with your conclusion, then provide the evidence. Never bury the answer.
+
+Most analysts do the opposite: they present the methodology, then the data, then the findings, then — at the end — the recommendation. By then, the executive has stopped reading.
+
+```python
+def pyramid_principle_example() -> str:
+    """
+    Demonstrate the pyramid principle structure for an analytical memo.
+    """
+    # WRONG: Bottom-up structure (common mistake)
+    wrong_structure = """
+    WRONG STRUCTURE (Bottom-up):
+
+    1. We loaded the orders table and customers table.
+    2. After cleaning (removed 3 duplicate records, imputed 5% null countries)...
+    3. We computed monthly revenue by segment from January 2022 to September 2023.
+    4. The SMB segment showed a decline in July.
+    5. We ran a Mann-Whitney test (p=0.0002).
+    6. Enterprise and Consumer were unaffected.
+    7. Therefore, we recommend a retention campaign targeting at-risk SMB accounts.
+
+    Problem: The reader has to read the entire document to understand the conclusion.
+    The most important information is at the bottom.
+    """
+
+    # CORRECT: Top-down structure (Pyramid Principle)
+    correct_structure = """
+    CORRECT STRUCTURE (Top-down, Pyramid Principle):
+
+    HEADLINE (Conclusion first):
+    "Q3 revenue decline is recoverable: it is driven by price-sensitive SMB churn,
+    not systemic demand weakness. A targeted retention campaign can recover
+    ~$240K ARR at 16:1 ROI."
+
+    KEY MESSAGE 1 (supports conclusion):
+    "The decline is segment-specific, not market-wide."
+      - Evidence: Enterprise +2% YoY in Q3; Consumer flat; SMB -34%
+      - Evidence: Mann-Whitney U p=0.0002 (SMB vs Enterprise cancellation rate)
+
+    KEY MESSAGE 2 (supports conclusion):
+    "The cause is the July price increase, not seasonal or competitive."
+      - Evidence: SMB cancellation spike begins July 2, 3 days after price change
+      - Evidence: No corresponding spike in competitor-sensitive categories
+
+    KEY MESSAGE 3 (supports conclusion):
+    "The affected cohort is recoverable — 847 accounts have not permanently churned."
+      - Evidence: Cohort analysis shows 60-day re-engagement window still open
+      - Evidence: Historical re-engagement rate for similar campaigns: 28-35%
+
+    RECOMMENDATION (action, not summary):
+    Launch retention campaign by Nov 15. Target criteria, budget, and owner defined
+    in Appendix B.
+    """
+
+    return f"{wrong_structure}\n{'='*60}\n{correct_structure}"
+
+
+print(pyramid_principle_example())
+```
+
+---
+
+## The SCR Framework
+
+Situation → Complication → Resolution. This three-part structure works for any analytical narrative, from a single finding to a full board presentation.
+
+```python
+@dataclass
+class SCRNarrative:
+    """
+    Situation-Complication-Resolution analytical narrative.
+
+    Use this to structure any analytical finding for a non-technical audience.
+    """
+    situation: str     # What was the established context? (neutral, shared understanding)
+    complication: str  # What changed, went wrong, or raised the question?
+    resolution: str    # What did the analysis reveal, and what should be done?
+
+    def render(self) -> str:
+        return (
+            f"SITUATION:\n{self.situation}\n\n"
+            f"COMPLICATION:\n{self.complication}\n\n"
+            f"RESOLUTION:\n{self.resolution}"
+        )
+
+
+# Example: SMB churn story
+q3_story = SCRNarrative(
+    situation=(
+        "GadaaLabs has grown revenue 12% YoY in H1 2023. "
+        "The SMB segment, representing 30% of customers and 25% of revenue, "
+        "has been stable for 18 months with a monthly churn rate of approximately 2%."
+    ),
+    complication=(
+        "In July 2023, following a scheduled price increase, SMB monthly churn "
+        "spiked to 8.5% — a 4× increase. By end of Q3, cumulative revenue impact "
+        "was -$800K vs plan. Enterprise and Consumer segments were unaffected."
+    ),
+    resolution=(
+        "Analysis confirmed the price increase as the primary driver. "
+        "847 SMB accounts that were active in Q2 have not yet made a Q3 purchase "
+        "but have not formally cancelled. A targeted price-lock retention offer, "
+        "modelled at $15K cost, is projected to recover $240K ARR at 30% acceptance rate. "
+        "Campaign brief is ready for review; recommend launch by November 15."
+    ),
+)
+
+print(q3_story.render())
+```
+
+---
+
+## Writing Precise Insight Statements
+
+Precision is the most important attribute of analytical writing. Vague statements signal unclear thinking. Every insight statement should contain:
+
+1. The specific metric
+2. The magnitude (number, percentage, absolute value)
+3. The comparison baseline (vs prior period, vs benchmark, vs another group)
+4. The time period
+5. The population (who / what is affected)
+
+```python
+def score_insight_statement(statement: str) -> dict:
+    """
+    Score an insight statement for analytical precision.
+    Checks for the five components of a well-formed insight.
+    """
+    import re
+
+    # Heuristic checks (in practice, this requires domain understanding)
+    has_metric = any(kw in statement.lower() for kw in [
+        "revenue", "rate", "churn", "conversion", "ctr", "aov", "count", "orders", "margin"
+    ])
+    has_magnitude = bool(re.search(r"\d+\.?\d*[%$kKmMbB]|\$\d+|\d+%|\d+ percent", statement))
+    has_comparison = any(kw in statement.lower() for kw in [
+        "vs", "versus", "compared to", "than", "higher", "lower", "more", "less",
+        "increased", "decreased", "grew", "declined", "yoy", "mom", "qoq"
+    ])
+    has_time_period = any(kw in statement.lower() for kw in [
+        "q1", "q2", "q3", "q4", "january", "february", "march", "april",
+        "2023", "2022", "2024", "last month", "last quarter", "ytd",
+        "week", "daily", "monthly", "annual"
+    ])
+    has_population = any(kw in statement.lower() for kw in [
+        "smb", "enterprise", "consumer", "customers", "segment", "cohort",
+        "users", "accounts", "new", "returning", "channel", "country"
+    ])
+
+    score = sum([has_metric, has_magnitude, has_comparison, has_time_period, has_population])
+
+    return {
+        "statement": statement[:80] + "..." if len(statement) > 80 else statement,
+        "has_metric": has_metric,
+        "has_magnitude": has_magnitude,
+        "has_comparison": has_comparison,
+        "has_time_period": has_time_period,
+        "has_population": has_population,
+        "precision_score": f"{score}/5",
+        "grade": "Excellent" if score == 5 else "Good" if score >= 4 else "Needs improvement",
+    }
+
+
+# Test various statement styles
+test_statements = [
+    # Weak
+    "Revenue declined in Q3.",
+    # Better
+    "Revenue was down significantly for SMB customers after the price change.",
+    # Strong
+    "SMB segment revenue declined 34% YoY in Q3 2023 (Jul–Sep), "
+    "compared to +2% YoY for Enterprise in the same period.",
+    # Expert
+    "SMB monthly churn spiked from 2.1% to 8.5% in July 2023 following the price increase, "
+    "representing 847 at-risk accounts and $240K in at-risk ARR — "
+    "4× higher than the Enterprise churn rate in the same period.",
+]
+
+print("Insight Statement Precision Scoring:")
+for stmt in test_statements:
+    result = score_insight_statement(stmt)
+    print(f"\n  [{result['grade']}] Score: {result['precision_score']}")
+    print(f"  Statement: {result['statement']}")
+    print(f"  Has: metric={result['has_metric']}, "
+          f"magnitude={result['has_magnitude']}, "
+          f"comparison={result['has_comparison']}, "
+          f"time={result['has_time_period']}, "
+          f"population={result['has_population']}")
+```
+
+---
+
+## Prioritising Insights: Impact vs Confidence Matrix
+
+Not all insights are equal. Prioritise by two axes: analytical confidence (how certain are you?) and business impact (how large is the effect if true?).
+
+```python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from dataclasses import dataclass
+from typing import Literal
+
+
+@dataclass
+class InsightPriority:
+    id: str
+    description: str
+    confidence_score: float      # 0–10: evidence strength
+    impact_score: float          # 0–10: estimated business impact if acted on
+    effort_score: float          # 0–10: implementation effort (lower = easier)
+    category: str
+
+
+def plot_impact_confidence_matrix(insights: list[InsightPriority]) -> None:
+    """
+    2×2 priority matrix: Impact (x-axis) vs Confidence (y-axis).
+    Quadrants:
+    - High impact, high confidence → ACT NOW
+    - High impact, low confidence → VALIDATE (run experiment)
+    - Low impact, high confidence → NICE TO KNOW
+    - Low impact, low confidence → DEPRIORITISE
+    """
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Quadrant shading
+    ax.axhline(5, color="#dddddd", linewidth=1.5, linestyle="--")
+    ax.axvline(5, color="#dddddd", linewidth=1.5, linestyle="--")
+    ax.fill_between([5, 10], [5, 5], [10, 10], alpha=0.08, color="#55A868")  # Act Now
+    ax.fill_between([5, 10], [0, 0], [5, 5], alpha=0.08, color="#DD8452")    # Validate
+    ax.fill_between([0, 5], [5, 5], [10, 10], alpha=0.08, color="#4C72B0")   # Nice to Know
+    ax.fill_between([0, 5], [0, 0], [5, 5], alpha=0.08, color="#999999")     # Deprioritise
+
+    # Quadrant labels
+    ax.text(7.5, 9.5, "ACT NOW", ha="center", fontsize=10, fontweight="bold", color="#55A868")
+    ax.text(2.5, 9.5, "NICE TO KNOW", ha="center", fontsize=10, fontweight="bold", color="#4C72B0")
+    ax.text(7.5, 0.5, "VALIDATE FIRST", ha="center", fontsize=10, fontweight="bold", color="#DD8452")
+    ax.text(2.5, 0.5, "DEPRIORITISE", ha="center", fontsize=10, fontweight="bold", color="#999999")
+
+    # Plot insights as bubbles (size = effort_score inverted — easier = bigger bubble)
+    for insight in insights:
+        size = (11 - insight.effort_score) * 80  # Bigger = lower effort
+        ax.scatter(insight.impact_score, insight.confidence_score,
+                   s=size, alpha=0.7, color="#4C72B0", zorder=5)
+        ax.annotate(
+            f"#{insight.id}\n{insight.description[:30]}",
+            (insight.impact_score, insight.confidence_score),
+            textcoords="offset points",
+            xytext=(10, 5),
+            fontsize=8,
+            arrowprops=dict(arrowstyle="-", color="gray", lw=0.5),
+        )
+
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 10)
+    ax.set_xlabel("Business Impact", fontsize=12)
+    ax.set_ylabel("Analytical Confidence", fontsize=12)
+    ax.set_title("Insight Priority Matrix\n(bubble size = ease of implementation)", fontsize=13, fontweight="bold")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    plt.tight_layout()
+    plt.savefig("outputs/insight_priority_matrix.png", dpi=150, bbox_inches="tight")
+    plt.show()
+
+
+# Example insights from Q3 analysis
+prioritised_insights = [
+    InsightPriority("01", "SMB retention campaign", confidence_score=8.5, impact_score=9.0, effort_score=4.0, category="retention"),
+    InsightPriority("02", "Enterprise upsell signal", confidence_score=6.0, impact_score=7.0, effort_score=6.0, category="growth"),
+    InsightPriority("03", "Email channel outperforms", confidence_score=9.0, impact_score=4.5, effort_score=3.0, category="channel"),
+    InsightPriority("04", "Weekend revenue gap", confidence_score=7.0, impact_score=3.0, effort_score=7.0, category="operations"),
+    InsightPriority("05", "A/B test checkout variant", confidence_score=4.0, impact_score=8.0, effort_score=5.0, category="product"),
+]
+
+plot_impact_confidence_matrix(prioritised_insights)
+```
+
+---
+
+## Common Analyst Mistakes
+
+```python
+ANALYST_MISTAKES = """
+COMMON ANALYTICAL COMMUNICATION MISTAKES
+=========================================
+
+1. BURYING THE LEDE
+   Presenting methodology and context before the conclusion.
+   Fix: Lead with the finding. If someone reads only the first sentence,
+   they should understand the most important point.
+
+2. FALSE PRECISION
+   Reporting numbers to four decimal places when the data does not
+   support that level of precision.
+   "Revenue increased by $84,231.47" — the last $231.47 is noise.
+   Fix: Round to meaningful precision. "$84K" is often more honest.
+
+3. CHERRY-PICKING
+   Reporting the metric that looks best, not the most relevant one.
+   Example: reporting "completed order revenue" without mentioning
+   that refund rates doubled.
+   Fix: Report the full picture. Acknowledge metrics that cut against
+   your conclusion and explain why they do not change it.
+
+4. SCOPE CREEP IN INSIGHTS
+   Starting with "why did Q3 revenue decline?" and ending with
+   "here is a complete competitive pricing analysis, a customer
+   segmentation framework, and a recommendation to rebuild the
+   checkout flow."
+   Fix: Answer the stated question. Put additional findings in an
+   appendix labelled "Supplementary Observations."
+
+5. CORRELATION STATED AS CAUSATION
+   "Email customers have 2× higher LTV, so we should invest in email."
+   The email cohort may be self-selecting — more engaged customers
+   chose email themselves.
+   Fix: Always hedge causal claims. "Email customers have higher LTV.
+   This could reflect causal impact of email, or self-selection of
+   more engaged customers into email. A controlled experiment is needed
+   to distinguish."
+
+6. MISREPRESENTING STATISTICAL SIGNIFICANCE
+   "The test was significant (p=0.04)" without reporting effect size.
+   A p-value of 0.04 with a 0.1% relative lift in a billion-row dataset
+   is not a business insight — it is a measurement artefact.
+   Fix: Always pair p-value with effect size (Cohen's d, relative lift,
+   absolute impact in business units).
+
+7. IGNORING THE NULL RESULT
+   Running 10 analyses, finding 2 significant results, and reporting
+   only those 2.
+   Fix: Report all analyses run. Apply multiple-testing correction.
+   A null result is a real result.
+"""
+print(ANALYST_MISTAKES)
+```
+
+---
+
+## Building the Findings Document
+
+```python
+import pandas as pd
+from typing import Any
+
+
+def build_findings_document(
+    project_title: str,
+    analyst: str,
+    date: str,
+    executive_summary: str,
+    insights: list[Insight],
+    methodology_notes: str = "",
+    limitations: list[str] | None = None,
+    appendix_items: list[str] | None = None,
+) -> str:
+    """
+    Assemble a structured findings document as a Markdown string.
+    This becomes the analytical memo that stakeholders receive.
+    """
+    lines = [
+        f"# {project_title}",
+        f"**Analyst:** {analyst}  |  **Date:** {date}",
+        "",
+        "---",
+        "",
+        "## Executive Summary",
+        "",
+        executive_summary,
+        "",
+        "---",
+        "",
+        "## Key Insights",
+        "",
+    ]
+
+    # Sort insights by priority (confidence × impact is a rough proxy)
+    for ins in insights:
+        lines.append(ins.render())
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    if methodology_notes:
+        lines.extend([
+            "## Methodology",
+            "",
+            methodology_notes,
+            "",
+            "---",
+            "",
+        ])
+
+    if limitations:
+        lines.extend([
+            "## Limitations and Caveats",
+            "",
+        ])
+        for lim in limitations:
+            lines.append(f"- {lim}")
+        lines.extend(["", "---", ""])
+
+    if appendix_items:
+        lines.extend([
+            "## Appendix",
+            "",
+        ])
+        for item in appendix_items:
+            lines.append(f"- {item}")
+
+    return "\n".join(lines)
+
+
+memo = build_findings_document(
+    project_title="Q3 Revenue Decline — Root Cause Analysis",
+    analyst="GadaaLabs Analytics Team",
+    date="2023-11-08",
+    executive_summary=(
+        "Q3 2023 revenue declined 18% YoY ($4.2M → $3.4M). "
+        "The decline is not broad-based: it is driven by a 34% spike in SMB churn "
+        "following the July price increase. Enterprise (+2% YoY) and Consumer (flat) "
+        "segments were unaffected. "
+        "847 at-risk SMB accounts represent $240K ARR recoverable through a "
+        "targeted retention campaign. Recommend campaign launch by November 15."
+    ),
+    insights=[insight_1],
+    methodology_notes=(
+        "Analysis period: January 2022 – September 2023. "
+        "Data sources: orders table, customers table, pricing_history table. "
+        "Exclusions: guest checkout orders (3% of total — assumed uniformly distributed). "
+        "Statistical significance threshold: α=0.05, two-tailed, Mann-Whitney U for non-normal distributions."
+    ),
+    limitations=[
+        "Causality is inferred, not established. No controlled experiment separates the price-change effect from concurrent market changes.",
+        "Competitive pricing data for Q3 was not available — cannot rule out competitive pressure as a contributing factor.",
+        "Re-engagement rate projection (30%) is based on a 2021 campaign with different product lines.",
+    ],
+    appendix_items=[
+        "Appendix A: Full segment-level revenue decomposition (analysis_final.ipynb)",
+        "Appendix B: Retention campaign targeting brief and budget estimate",
+        "Appendix C: Statistical test outputs and assumptions",
+        "Appendix D: Data quality report for orders and customers tables",
+    ],
+)
+
+# Preview first 50 lines
+for line in memo.split("\n")[:50]:
+    print(line)
+
+print("\n... [document continues] ...")
+
+# Save memo
+with open("outputs/analytical_memo.md", "w") as f:
+    f.write(memo)
+print("\nMemo saved to outputs/analytical_memo.md")
+```
+
+---
+
+## Generating a Python Insights Report
+
+```python
+import pandas as pd
+
+
+def render_insights_as_dataframe(insights: list[Insight]) -> pd.DataFrame:
+    """
+    Convert a list of Insight objects to a structured DataFrame
+    for use in a notebook findings summary cell.
+    """
+    return pd.DataFrame([{
+        "id": ins.id,
+        "category": ins.category,
+        "finding_headline": ins.finding.split(".")[0],       # First sentence
+        "so_what": ins.so_what.split(".")[0],                # First sentence
+        "recommended_action": ins.recommended_action[:100] + "..." if len(ins.recommended_action) > 100 else ins.recommended_action,
+        "estimated_impact": ins.estimated_impact.split(".")[0],
+        "confidence": ins.confidence,
+        "passes_so_what": ins.passes_so_what_test(),
+    } for ins in insights])
+
+
+insights_df = render_insights_as_dataframe([insight_1])
+print("Insights Summary Table:")
+print(insights_df.to_string())
+```
+
+---
+
+## Key Takeaways
+
+- A finding is an observation. An insight is a finding extended with interpretation, implication, and a recommended action. The difference is whether someone reading your memo knows what to do next.
+- The Pyramid Principle: lead with your conclusion. Executives should understand the most important point from your first sentence. Evidence and methodology follow, for those who want validation.
+- The SCR framework — Situation, Complication, Resolution — structures any analytical narrative in three moves that any audience can follow, from engineer to CEO.
+- Every insight statement should contain five elements: the specific metric, the magnitude, the comparison baseline, the time period, and the population affected. Missing any of these weakens the analytical claim.
+- Prioritise insights on two axes: confidence (how strong is the evidence?) and impact (how large is the effect if acted on?). High confidence + high impact = act now. High impact + low confidence = validate first.
+- Common mistakes to eliminate: burying the lede, false precision, cherry-picking favourable metrics, confusing correlation with causation, reporting p-values without effect size, and ignoring null results.
+- The findings document — executive summary, structured insights, methodology, limitations, appendix — is the professional deliverable. The notebook is the working document. Know the difference and write the memo as if the notebook does not exist.

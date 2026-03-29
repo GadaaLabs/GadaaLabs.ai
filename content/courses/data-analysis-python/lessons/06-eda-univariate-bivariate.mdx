@@ -1,0 +1,800 @@
+---
+title: "Exploratory Data Analysis — Univariate & Bivariate"
+description: "The systematic EDA protocol that expert analysts follow: univariate analysis for every data type, bivariate relationships, distribution interpretation, and a documented findings table."
+duration: 26
+order: 6
+---
+
+## EDA Is Not Casual Browsing
+
+Exploratory data analysis is the phase where you develop understanding: what distributions do your key variables have, how do they relate to each other, and what hypotheses do they suggest? Done poorly, EDA is a random walk through charts that produces no actionable findings. Done well, it is a structured scientific investigation with a protocol, a running hypothesis log, and a documented findings table at the end.
+
+This lesson covers the systematic EDA protocol for univariate and bivariate analysis. Lesson 07 extends this to multivariate work.
+
+---
+
+## The EDA Protocol
+
+Before generating a single chart, define the protocol. This is the checklist that ensures you examine every variable and every pairwise relationship that matters.
+
+```python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import seaborn as sns
+from scipy import stats
+import warnings
+warnings.filterwarnings("ignore")
+
+# Set a clean, professional style
+plt.rcParams.update({
+    "figure.dpi": 120,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.titlesize": 12,
+    "axes.labelsize": 10,
+    "font.family": "sans-serif",
+})
+
+# EDA Protocol Checklist:
+EDA_PROTOCOL = """
+UNIVARIATE ANALYSIS (for every column)
+  Numeric:
+    [ ] Histogram + KDE
+    [ ] Box plot (identify outliers visually)
+    [ ] QQ plot (assess normality)
+    [ ] Descriptive stats: mean, median, std, skew, kurtosis
+    [ ] Note distribution shape and any anomalies
+  Categorical:
+    [ ] Frequency table (value_counts)
+    [ ] Bar chart (sorted by frequency)
+    [ ] Pareto chart (cumulative % of values)
+    [ ] Cardinality ratio
+  DateTime:
+    [ ] Time series line plot
+    [ ] Distribution by hour, day of week, month, year
+
+BIVARIATE ANALYSIS (for each hypothesis-relevant pair)
+  Numeric × Numeric:
+    [ ] Scatter plot with regression line
+    [ ] Pearson r correlation coefficient
+    [ ] Check for non-linear relationships
+  Categorical × Numeric:
+    [ ] Box plots by category
+    [ ] Violin plots
+    [ ] Group means ± confidence interval
+  Categorical × Categorical:
+    [ ] Cross-tabulation (crosstab)
+    [ ] Heatmap of row-normalised proportions
+  Time × Numeric:
+    [ ] Line plot with moving average
+    [ ] YoY comparison bar chart
+"""
+print(EDA_PROTOCOL)
+```
+
+### The Findings Log
+
+```python
+from dataclasses import dataclass, field
+from typing import Literal
+
+
+@dataclass
+class Finding:
+    finding_id: str
+    section: str
+    finding_type: Literal["distribution", "trend", "outlier", "relationship", "anomaly", "segmentation"]
+    description: str
+    chart_file: str | None = None
+    confidence: Literal["high", "medium", "low"] = "medium"
+    so_what: str = ""
+    hypothesis_generated: str = ""
+
+
+findings_log: list[Finding] = []
+
+def log_finding(
+    finding_id: str,
+    section: str,
+    finding_type: str,
+    description: str,
+    so_what: str = "",
+    confidence: str = "medium",
+) -> None:
+    f = Finding(
+        finding_id=finding_id,
+        section=section,
+        finding_type=finding_type,  # type: ignore
+        description=description,
+        so_what=so_what,
+        confidence=confidence,  # type: ignore
+    )
+    findings_log.append(f)
+    print(f"[FINDING {finding_id}] {description}")
+```
+
+---
+
+## Simulate the Dataset
+
+```python
+import pandas as pd
+import numpy as np
+
+np.random.seed(42)
+n = 3000
+
+# GadaaLabs e-commerce orders
+orders = pd.DataFrame({
+    "order_id": range(1, n + 1),
+    "customer_id": np.random.randint(1, 501, n),
+    "product_id": np.random.choice(["SKU-001", "SKU-002", "SKU-003", "SKU-004", "SKU-005"], n),
+    "category": np.random.choice(["Electronics", "Clothing", "Books", "Home", "Sports"],
+                                  p=[0.30, 0.25, 0.20, 0.15, 0.10], size=n),
+    "order_date": pd.date_range("2023-01-01", periods=n, freq="2h"),
+    "revenue": np.concatenate([
+        np.random.exponential(scale=75, size=n - 50),
+        np.random.exponential(scale=800, size=50),   # A few large orders
+    ]),
+    "quantity": np.random.randint(1, 8, n),
+    "status": np.random.choice(["completed", "cancelled", "refunded"],
+                                p=[0.75, 0.15, 0.10], size=n),
+    "segment": np.random.choice(["SMB", "Enterprise", "Consumer"],
+                                 p=[0.30, 0.20, 0.50], size=n),
+    "channel": np.random.choice(["organic", "paid", "email", "direct"],
+                                 p=[0.35, 0.30, 0.20, 0.15], size=n),
+    "customer_age": np.random.randint(18, 72, n),
+    "days_since_signup": np.random.exponential(scale=180, size=n).astype(int).clip(0, 1800),
+})
+
+# Revenue is right-skewed (realistic for e-commerce)
+orders["revenue"] = orders["revenue"].round(2)
+
+print("Dataset shape:", orders.shape)
+print(orders.dtypes)
+```
+
+---
+
+## Univariate Analysis: Numeric Columns
+
+### The Complete Numeric Summary
+
+```python
+def numeric_eda(series: pd.Series, title: str = None) -> dict:
+    """
+    Full univariate analysis for a numeric column.
+    Returns stats dict and shows a 4-panel chart.
+    """
+    title = title or series.name
+    clean = series.dropna()
+    n = len(clean)
+
+    # Compute stats
+    stats_dict = {
+        "n": n,
+        "n_null": series.isnull().sum(),
+        "mean": clean.mean(),
+        "median": clean.median(),
+        "std": clean.std(),
+        "cv": clean.std() / clean.mean() if clean.mean() != 0 else None,  # Coefficient of variation
+        "skewness": clean.skew(),
+        "kurtosis": clean.kurt(),
+        "p1": clean.quantile(0.01),
+        "p5": clean.quantile(0.05),
+        "p25": clean.quantile(0.25),
+        "p75": clean.quantile(0.75),
+        "p95": clean.quantile(0.95),
+        "p99": clean.quantile(0.99),
+        "iqr": clean.quantile(0.75) - clean.quantile(0.25),
+        "n_zeros": int((clean == 0).sum()),
+        "n_negative": int((clean < 0).sum()),
+    }
+
+    # Shapiro-Wilk normality test (on sample — computationally limited to ~5000 obs)
+    sample = clean.sample(min(4999, n), random_state=42)
+    _, p_normal = stats.shapiro(sample)
+    stats_dict["shapiro_p"] = p_normal
+    stats_dict["is_normal_95"] = p_normal > 0.05
+
+    # 4-panel chart
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig.suptitle(f"Univariate Analysis: {title}", fontsize=14, fontweight="bold")
+
+    # Panel 1: Histogram + KDE
+    ax1 = axes[0, 0]
+    ax1.hist(clean, bins=50, color="#4C72B0", alpha=0.7, density=True, label="Histogram")
+    clean.plot.kde(ax=ax1, color="#DD8452", linewidth=2, label="KDE")
+    ax1.axvline(clean.mean(), color="red", linestyle="--", alpha=0.8, label=f"Mean={clean.mean():.1f}")
+    ax1.axvline(clean.median(), color="green", linestyle="--", alpha=0.8, label=f"Median={clean.median():.1f}")
+    ax1.set_title("Histogram + KDE")
+    ax1.legend(fontsize=8)
+
+    # Panel 2: Box plot
+    ax2 = axes[0, 1]
+    ax2.boxplot(clean, vert=True, patch_artist=True,
+                boxprops=dict(facecolor="#4C72B0", alpha=0.7))
+    ax2.set_title("Box Plot")
+    ax2.set_ylabel(title)
+    # Annotate quartiles
+    q1 = clean.quantile(0.25)
+    q3 = clean.quantile(0.75)
+    ax2.text(1.1, q1, f"Q1={q1:.1f}", fontsize=8, va="center")
+    ax2.text(1.1, q3, f"Q3={q3:.1f}", fontsize=8, va="center")
+
+    # Panel 3: QQ Plot (assess normality)
+    ax3 = axes[1, 0]
+    (osm, osr), (slope, intercept, r) = stats.probplot(clean, dist="norm")
+    ax3.scatter(osm, osr, alpha=0.3, s=5, color="#4C72B0")
+    line_x = np.array([min(osm), max(osm)])
+    ax3.plot(line_x, slope * line_x + intercept, color="red", linewidth=1.5, label=f"R²={r**2:.3f}")
+    ax3.set_title("QQ Plot (Normal)")
+    ax3.set_xlabel("Theoretical Quantiles")
+    ax3.set_ylabel("Sample Quantiles")
+    ax3.legend(fontsize=8)
+
+    # Panel 4: Log-transformed histogram (reveals structure in right-skewed data)
+    ax4 = axes[1, 1]
+    log_vals = np.log1p(clean[clean > 0])
+    ax4.hist(log_vals, bins=50, color="#55A868", alpha=0.7, density=True)
+    log_vals.plot.kde(ax=ax4, color="#C44E52", linewidth=2)
+    ax4.set_title("Log(1+x) Transformed")
+    ax4.set_xlabel("log(1 + value)")
+
+    plt.tight_layout()
+    plt.savefig(f"outputs/eda_{title.replace(' ', '_').lower()}_univariate.png",
+                dpi=120, bbox_inches="tight")
+    plt.show()
+
+    return stats_dict
+
+
+# Run on revenue
+revenue_stats = numeric_eda(orders["revenue"], title="Revenue")
+
+print("\nRevenue Statistics:")
+for k, v in revenue_stats.items():
+    if isinstance(v, float):
+        print(f"  {k:<20} {v:.4f}")
+    else:
+        print(f"  {k:<20} {v}")
+```
+
+### Interpreting Skewness
+
+```python
+def interpret_skewness(skewness: float) -> str:
+    """Describe the skewness of a distribution in plain language."""
+    if abs(skewness) < 0.5:
+        return "Approximately symmetric"
+    elif 0.5 <= abs(skewness) < 1.0:
+        direction = "right" if skewness > 0 else "left"
+        return f"Moderately {direction}-skewed"
+    elif 1.0 <= abs(skewness) < 2.0:
+        direction = "right" if skewness > 0 else "left"
+        return f"Highly {direction}-skewed — consider log transform"
+    else:
+        direction = "right" if skewness > 0 else "left"
+        return f"Extremely {direction}-skewed — log transform strongly recommended"
+
+
+skewness = revenue_stats["skewness"]
+print(f"Revenue skewness: {skewness:.2f} — {interpret_skewness(skewness)}")
+
+log_finding(
+    finding_id="F001",
+    section="Univariate — Revenue",
+    finding_type="distribution",
+    description=f"Revenue is {interpret_skewness(skewness).lower()} (skew={skewness:.2f}). "
+                f"Median (${orders['revenue'].median():.0f}) significantly below mean (${orders['revenue'].mean():.0f}).",
+    so_what="Use median, not mean, as the summary statistic for revenue in all reports. "
+            "Apply log transform before any regression or distance-based analysis.",
+    confidence="high",
+)
+```
+
+---
+
+## Univariate Analysis: Categorical Columns
+
+### Frequency Table and Pareto Chart
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def categorical_eda(series: pd.Series, title: str = None, top_n: int = 20) -> pd.DataFrame:
+    """
+    Full univariate analysis for a categorical column.
+    Returns a frequency table and shows a bar + Pareto chart.
+    """
+    title = title or series.name
+    vc = series.value_counts(dropna=False)
+    n = len(series)
+    n_null = series.isnull().sum()
+    n_unique = series.nunique(dropna=True)
+
+    freq_table = pd.DataFrame({
+        "count": vc.values,
+        "pct": (vc.values / n * 100).round(2),
+    }, index=vc.index)
+    freq_table["cumulative_pct"] = freq_table["pct"].cumsum().round(2)
+
+    # Pareto: how many categories account for 80% of observations?
+    pareto_threshold = freq_table[freq_table["cumulative_pct"] <= 80]
+    n_pareto = len(pareto_threshold) + 1
+    top_values = freq_table.head(top_n)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle(f"Univariate Analysis: {title}", fontsize=14, fontweight="bold")
+
+    # Panel 1: Bar chart (top N, sorted)
+    ax1 = axes[0]
+    top_values["count"].plot.bar(ax=ax1, color="#4C72B0", alpha=0.8)
+    ax1.set_title(f"Top {top_n} Values by Frequency")
+    ax1.set_xlabel("")
+    ax1.set_ylabel("Count")
+    ax1.tick_params(axis="x", rotation=45)
+
+    # Panel 2: Pareto chart
+    ax2 = axes[1]
+    ax2_twin = ax2.twinx()
+    top_values["count"].plot.bar(ax=ax2, color="#4C72B0", alpha=0.5)
+    top_values["cumulative_pct"].plot(ax=ax2_twin, color="#C44E52", marker="o", markersize=4, linewidth=2)
+    ax2_twin.axhline(80, color="gray", linestyle="--", alpha=0.7, label="80% threshold")
+    ax2.set_title("Pareto Chart (Cumulative %)")
+    ax2.set_ylabel("Count")
+    ax2_twin.set_ylabel("Cumulative %")
+    ax2_twin.set_ylim(0, 105)
+    ax2.tick_params(axis="x", rotation=45)
+    ax2_twin.legend(loc="upper left", fontsize=8)
+
+    plt.tight_layout()
+    plt.savefig(f"outputs/eda_{title.replace(' ', '_').lower()}_categorical.png",
+                dpi=120, bbox_inches="tight")
+    plt.show()
+
+    print(f"\n{title} — Summary:")
+    print(f"  Unique values: {n_unique:,}")
+    print(f"  Null count: {n_null:,} ({n_null/n*100:.1f}%)")
+    print(f"  Values covering 80% of observations: {n_pareto}")
+    print(f"\nFrequency table (top {top_n}):")
+    print(freq_table.head(top_n).to_string())
+
+    return freq_table
+
+
+category_freq = categorical_eda(orders["category"], title="Category")
+```
+
+---
+
+## Temporal Univariate Analysis
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def temporal_eda(df: pd.DataFrame, date_col: str, value_col: str, freq: str = "W") -> None:
+    """
+    Time series univariate analysis: trend line, seasonality patterns by day of week and hour.
+    """
+    df = df.copy()
+    df[date_col] = pd.to_datetime(df[date_col])
+
+    # Resample
+    ts = df.set_index(date_col)[value_col].resample(freq).sum()
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle(f"Temporal Analysis: {value_col} by Time Dimensions", fontsize=14, fontweight="bold")
+
+    # Panel 1: Weekly trend with 4-week rolling average
+    ax1 = axes[0, 0]
+    ts.plot(ax=ax1, alpha=0.6, label="Weekly", color="#4C72B0")
+    ts.rolling(4).mean().plot(ax=ax1, color="#C44E52", linewidth=2, label="4-week MA")
+    ax1.set_title("Weekly Revenue with 4-Week Moving Average")
+    ax1.set_ylabel(value_col)
+    ax1.legend()
+
+    # Panel 2: Distribution by day of week
+    ax2 = axes[0, 1]
+    df["day_of_week"] = df[date_col].dt.day_name()
+    day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    day_revenue = df.groupby("day_of_week")[value_col].sum().reindex(day_order)
+    day_revenue.plot.bar(ax=ax2, color="#55A868", alpha=0.8)
+    ax2.set_title("Total Revenue by Day of Week")
+    ax2.set_ylabel(value_col)
+    ax2.tick_params(axis="x", rotation=45)
+
+    # Panel 3: Distribution by month
+    ax3 = axes[1, 0]
+    df["month"] = df[date_col].dt.month
+    monthly = df.groupby("month")[value_col].sum()
+    monthly.plot.bar(ax=ax3, color="#DD8452", alpha=0.8)
+    ax3.set_title("Total Revenue by Month")
+    ax3.set_ylabel(value_col)
+    ax3.set_xticklabels(["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][:len(monthly)], rotation=45)
+
+    # Panel 4: Distribution by hour of day
+    ax4 = axes[1, 1]
+    if hasattr(df[date_col].dt, "hour"):
+        df["hour"] = df[date_col].dt.hour
+        hourly = df.groupby("hour")[value_col].sum()
+        hourly.plot.bar(ax=ax4, color="#8172B3", alpha=0.8)
+        ax4.set_title("Total Revenue by Hour of Day")
+        ax4.set_ylabel(value_col)
+        ax4.tick_params(axis="x", rotation=0)
+
+    plt.tight_layout()
+    plt.savefig(f"outputs/eda_temporal_{value_col.lower()}.png", dpi=120, bbox_inches="tight")
+    plt.show()
+
+
+temporal_eda(orders, date_col="order_date", value_col="revenue", freq="W")
+```
+
+---
+
+## Bivariate Analysis: Numeric vs Numeric
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy import stats
+
+
+def numeric_numeric_eda(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    color_by: str | None = None,
+) -> dict:
+    """
+    Bivariate analysis: two numeric columns.
+    Shows scatter plot, regression line, and returns correlation statistics.
+    """
+    clean = df[[x_col, y_col]].dropna()
+    x = clean[x_col]
+    y = clean[y_col]
+
+    # Pearson correlation
+    r, p_pearson = stats.pearsonr(x, y)
+
+    # Spearman correlation (rank-based, robust to outliers and non-linearity)
+    rho, p_spearman = stats.spearmanr(x, y)
+
+    # Regression line
+    slope, intercept, _, _, _ = stats.linregress(x, y)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle(f"Bivariate: {x_col} vs {y_col}", fontsize=14, fontweight="bold")
+
+    # Panel 1: Scatter + regression line
+    ax1 = axes[0]
+    if color_by and color_by in df.columns:
+        groups = df[color_by].unique()
+        palette = plt.cm.tab10.colors
+        for i, grp in enumerate(groups):
+            mask = df[color_by] == grp
+            ax1.scatter(df.loc[mask, x_col], df.loc[mask, y_col],
+                        alpha=0.4, s=15, label=str(grp), color=palette[i % 10])
+        ax1.legend(title=color_by, fontsize=8)
+    else:
+        ax1.scatter(x, y, alpha=0.3, s=15, color="#4C72B0")
+
+    # Regression line
+    x_range = np.linspace(x.min(), x.max(), 100)
+    ax1.plot(x_range, slope * x_range + intercept, color="red", linewidth=2, label="OLS fit")
+    ax1.set_xlabel(x_col)
+    ax1.set_ylabel(y_col)
+    ax1.set_title(f"Scatter (n={len(clean):,})\nPearson r={r:.3f}, Spearman ρ={rho:.3f}")
+    ax1.legend(fontsize=8)
+
+    # Panel 2: Hexbin (better for large datasets — avoids overplotting)
+    ax2 = axes[1]
+    hb = ax2.hexbin(x, y, gridsize=40, cmap="Blues", mincnt=1)
+    plt.colorbar(hb, ax=ax2, label="Count")
+    ax2.set_xlabel(x_col)
+    ax2.set_ylabel(y_col)
+    ax2.set_title(f"Hexbin (density)")
+
+    plt.tight_layout()
+    plt.savefig(f"outputs/eda_scatter_{x_col}_{y_col}.png", dpi=120, bbox_inches="tight")
+    plt.show()
+
+    return {
+        "pearson_r": round(r, 4),
+        "pearson_p": round(p_pearson, 6),
+        "spearman_rho": round(rho, 4),
+        "spearman_p": round(p_spearman, 6),
+        "n": len(clean),
+        "significant_at_05": p_pearson < 0.05,
+        "interpretation": (
+            "Strong positive" if r > 0.7 else
+            "Moderate positive" if r > 0.4 else
+            "Weak positive" if r > 0.1 else
+            "Strong negative" if r < -0.7 else
+            "Moderate negative" if r < -0.4 else
+            "Weak negative" if r < -0.1 else
+            "No linear relationship"
+        ),
+    }
+
+
+qty_revenue = numeric_numeric_eda(orders, "quantity", "revenue", color_by="segment")
+print("\nQuantity vs Revenue correlation:")
+for k, v in qty_revenue.items():
+    print(f"  {k}: {v}")
+```
+
+---
+
+## Bivariate Analysis: Categorical vs Numeric
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+
+
+def categorical_numeric_eda(
+    df: pd.DataFrame,
+    cat_col: str,
+    num_col: str,
+    max_categories: int = 10,
+) -> pd.DataFrame:
+    """
+    Bivariate analysis: categorical grouping vs numeric value.
+    Shows box plots, violin plots, and a group summary table.
+    """
+    # Limit to top categories by frequency
+    top_cats = df[cat_col].value_counts().head(max_categories).index.tolist()
+    plot_df = df[df[cat_col].isin(top_cats)].copy()
+
+    # Group summary
+    group_summary = (
+        plot_df.groupby(cat_col)[num_col]
+        .agg(["count", "mean", "median", "std",
+              lambda x: x.quantile(0.25),
+              lambda x: x.quantile(0.75)])
+        .round(2)
+    )
+    group_summary.columns = ["n", "mean", "median", "std", "p25", "p75"]
+    group_summary = group_summary.sort_values("median", ascending=False)
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle(f"Bivariate: {cat_col} vs {num_col}", fontsize=14, fontweight="bold")
+
+    cat_order = group_summary.index.tolist()
+
+    # Panel 1: Box plot
+    ax1 = axes[0]
+    sns.boxplot(
+        data=plot_df, x=cat_col, y=num_col, order=cat_order,
+        ax=ax1, palette="tab10", flierprops=dict(marker="o", markersize=2, alpha=0.3),
+    )
+    ax1.set_title("Box Plot")
+    ax1.tick_params(axis="x", rotation=45)
+
+    # Panel 2: Violin plot
+    ax2 = axes[1]
+    sns.violinplot(
+        data=plot_df, x=cat_col, y=num_col, order=cat_order,
+        ax=ax2, palette="tab10", inner="quartile",
+    )
+    ax2.set_title("Violin Plot (distribution shape)")
+    ax2.tick_params(axis="x", rotation=45)
+
+    # Panel 3: Strip plot (individual points — good for small groups)
+    ax3 = axes[2]
+    sns.stripplot(
+        data=plot_df.sample(min(500, len(plot_df)), random_state=42),
+        x=cat_col, y=num_col, order=cat_order,
+        ax=ax3, palette="tab10", alpha=0.3, jitter=True, size=3,
+    )
+    # Overlay group medians
+    for i, cat in enumerate(cat_order):
+        median = group_summary.loc[cat, "median"]
+        ax3.hlines(median, i - 0.4, i + 0.4, colors="black", linewidths=2)
+    ax3.set_title("Strip Plot (sampled) with Median")
+    ax3.tick_params(axis="x", rotation=45)
+
+    plt.tight_layout()
+    plt.savefig(f"outputs/eda_cat_num_{cat_col}_{num_col}.png", dpi=120, bbox_inches="tight")
+    plt.show()
+
+    print(f"\nGroup Summary — {num_col} by {cat_col}:")
+    print(group_summary.to_string())
+
+    return group_summary
+
+
+segment_revenue = categorical_numeric_eda(orders, "segment", "revenue")
+
+log_finding(
+    finding_id="F002",
+    section=f"Bivariate — segment × revenue",
+    finding_type="segmentation",
+    description=f"Enterprise segment has {segment_revenue.loc['Enterprise', 'median'] / segment_revenue.loc['Consumer', 'median']:.1f}× higher median revenue than Consumer segment.",
+    so_what="Revenue uplift comes disproportionately from Enterprise customers. Retention investment should prioritise Enterprise.",
+    confidence="high",
+)
+```
+
+---
+
+## Bivariate Analysis: Categorical vs Categorical
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+def categorical_categorical_eda(
+    df: pd.DataFrame,
+    col1: str,
+    col2: str,
+) -> pd.DataFrame:
+    """
+    Bivariate analysis: two categorical columns.
+    Returns cross-tabulation and shows a heatmap.
+    """
+    crosstab = pd.crosstab(
+        df[col1],
+        df[col2],
+        normalize="index",   # Row proportions
+        margins=True,
+    ).round(3)
+
+    # Also get raw counts for context
+    crosstab_raw = pd.crosstab(df[col1], df[col2], margins=True)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle(f"Bivariate: {col1} vs {col2}", fontsize=14, fontweight="bold")
+
+    # Panel 1: Heatmap of row proportions
+    ax1 = axes[0]
+    sns.heatmap(
+        crosstab.drop("All", axis=0).drop("All", axis=1),
+        annot=True, fmt=".2f", cmap="Blues",
+        ax=ax1, linewidths=0.5,
+    )
+    ax1.set_title(f"Row-Normalised Proportions ({col1} → {col2})")
+
+    # Panel 2: Stacked bar chart
+    ax2 = axes[1]
+    crosstab.drop("All", axis=0).drop("All", axis=1).plot.bar(
+        stacked=True, ax=ax2, colormap="tab10", alpha=0.85,
+    )
+    ax2.set_title(f"Stacked Bar — {col2} Mix by {col1}")
+    ax2.set_ylabel("Proportion")
+    ax2.tick_params(axis="x", rotation=45)
+    ax2.legend(title=col2, bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
+
+    plt.tight_layout()
+    plt.savefig(f"outputs/eda_cat_cat_{col1}_{col2}.png", dpi=120, bbox_inches="tight")
+    plt.show()
+
+    print(f"\nCross-tabulation (row %) — {col1} vs {col2}:")
+    print(crosstab.to_string())
+    print(f"\nRaw counts:")
+    print(crosstab_raw.to_string())
+
+    return crosstab
+
+
+channel_segment = categorical_categorical_eda(orders, "channel", "segment")
+```
+
+---
+
+## Bivariate Analysis: Time vs Numeric
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def time_numeric_bivariate(
+    df: pd.DataFrame,
+    date_col: str,
+    value_col: str,
+    group_col: str | None = None,
+    freq: str = "W",
+    n_ma: int = 4,
+) -> None:
+    """
+    Line plot of a numeric value over time, optionally segmented by a group.
+    """
+    df = df.copy()
+    df[date_col] = pd.to_datetime(df[date_col])
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    fig.suptitle(f"{value_col} Over Time" + (f" by {group_col}" if group_col else ""),
+                 fontsize=14, fontweight="bold")
+
+    if group_col:
+        groups = df[group_col].unique()
+        palette = plt.cm.tab10.colors
+        for i, grp in enumerate(groups):
+            ts = (
+                df[df[group_col] == grp]
+                .set_index(date_col)[value_col]
+                .resample(freq)
+                .sum()
+            )
+            ma = ts.rolling(n_ma).mean()
+            ax.fill_between(ts.index, ts.values, alpha=0.15, color=palette[i % 10])
+            ax.plot(ts.index, ts.values, alpha=0.5, color=palette[i % 10], linewidth=1)
+            ax.plot(ma.index, ma.values, color=palette[i % 10], linewidth=2.5, label=f"{grp} ({n_ma}-period MA)")
+    else:
+        ts = df.set_index(date_col)[value_col].resample(freq).sum()
+        ma = ts.rolling(n_ma).mean()
+        ax.fill_between(ts.index, ts.values, alpha=0.15, color="#4C72B0")
+        ax.plot(ts.index, ts.values, alpha=0.5, color="#4C72B0", linewidth=1, label="Weekly")
+        ax.plot(ma.index, ma.values, color="#4C72B0", linewidth=2.5, label=f"{n_ma}-week MA")
+
+    ax.set_xlabel("Date")
+    ax.set_ylabel(value_col)
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    plt.savefig(f"outputs/eda_time_{value_col.lower()}_{group_col or 'all'}.png",
+                dpi=120, bbox_inches="tight")
+    plt.show()
+
+
+time_numeric_bivariate(orders, "order_date", "revenue", group_col="segment", freq="W")
+```
+
+---
+
+## Documenting Findings as a DataFrame
+
+At the end of EDA, export all findings as a structured table.
+
+```python
+import pandas as pd
+
+
+def findings_to_dataframe(findings: list) -> pd.DataFrame:
+    """Convert the findings log to a structured DataFrame for the analysis memo."""
+    return pd.DataFrame([{
+        "id": f.finding_id,
+        "section": f.section,
+        "type": f.finding_type,
+        "description": f.description,
+        "so_what": f.so_what,
+        "confidence": f.confidence,
+    } for f in findings])
+
+
+findings_df = findings_to_dataframe(findings_log)
+print("Findings Summary:")
+print(findings_df.to_string())
+
+# Save to CSV for reference in reports
+findings_df.to_csv("outputs/eda_findings.csv", index=False)
+```
+
+---
+
+## Key Takeaways
+
+- EDA is a protocol, not a random exploration. Define the checklist before opening your chart library: every numeric column gets histogram + KDE + box plot + QQ plot; every categorical column gets a frequency table and Pareto chart; every datetime column gets a temporal decomposition.
+- Right-skewed distributions (positive skewness &gt; 1) should trigger log-transform investigation. When mean significantly exceeds median, use median as your summary statistic in reports.
+- The Pareto principle appears in almost every e-commerce dataset: a small number of categories, customers, or products account for the majority of revenue. Document the 80/20 threshold explicitly.
+- Bivariate analysis requires choosing the right chart type for the variable combination: scatter/hexbin for numeric × numeric; box/violin/strip for categorical × numeric; heatmap/stacked bar for categorical × categorical; line with MA for time × numeric.
+- Always compute both Pearson r (linear relationship) and Spearman ρ (monotonic relationship). A big gap between them signals a non-linear relationship or the presence of influential outliers.
+- The `log_finding()` pattern — structured findings with `so_what`, `confidence`, and section tracking — turns EDA from a visual tour into a document. Export the findings table before moving to the next phase.
+- The findings table is the primary output of EDA — not the charts. Charts are evidence; the findings table is the argument.

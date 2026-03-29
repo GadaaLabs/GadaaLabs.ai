@@ -1,0 +1,845 @@
+---
+title: "Multivariate EDA, Correlation & Hypothesis Generation"
+description: "Find relationships across three or more variables: correlation matrices, multicollinearity, PCA for EDA, faceted charts, cohort analysis, segment profiling, and hypothesis generation from data."
+duration: 24
+order: 7
+---
+
+## From Pairs to Patterns
+
+Univariate and bivariate analysis examines variables in isolation or in pairs. Multivariate EDA is where the interesting analytical work happens: understanding how variables interact, how segments behave differently from each other, and how a third variable changes the story told by two others. This lesson extends the EDA protocol to cover the patterns that require three or more dimensions.
+
+---
+
+## Correlation Matrix: Pearson, Spearman, Kendall
+
+```python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+import warnings
+warnings.filterwarnings("ignore")
+
+np.random.seed(42)
+n = 2000
+
+orders = pd.DataFrame({
+    "order_id": range(1, n + 1),
+    "customer_id": np.random.randint(1, 501, n),
+    "revenue": np.random.exponential(scale=75, size=n).round(2),
+    "quantity": np.random.randint(1, 8, n),
+    "customer_age": np.random.randint(18, 72, n),
+    "days_since_signup": np.random.exponential(scale=180, size=n).astype(int).clip(0, 1800),
+    "n_prev_orders": np.random.randint(0, 30, n),
+    "discount_pct": np.random.choice([0, 5, 10, 15, 20], p=[0.5, 0.2, 0.15, 0.1, 0.05], size=n),
+    "segment": np.random.choice(["SMB", "Enterprise", "Consumer"], p=[0.3, 0.2, 0.5], size=n),
+    "category": np.random.choice(["Electronics", "Clothing", "Books", "Home"], n),
+})
+
+# Add a realistic correlation: more previous orders → higher revenue (loyal customer effect)
+orders["revenue"] = orders["revenue"] + orders["n_prev_orders"] * 3 + np.random.randn(n) * 15
+orders["revenue"] = orders["revenue"].clip(lower=0.01).round(2)
+
+numeric_cols = ["revenue", "quantity", "customer_age", "days_since_signup",
+                "n_prev_orders", "discount_pct"]
+
+
+def compute_correlation_matrices(df: pd.DataFrame, cols: list[str]) -> dict:
+    """
+    Compute Pearson, Spearman, and Kendall correlation matrices.
+    Also compute p-value matrix for Pearson correlations.
+
+    When to use each:
+    - Pearson: linear relationships, normally distributed variables
+    - Spearman: monotonic relationships, non-normal distributions, ordinal data
+    - Kendall: small samples, many tied ranks, more robust than Spearman
+    """
+    sub = df[cols].dropna()
+
+    pearson = sub.corr(method="pearson")
+    spearman = sub.corr(method="spearman")
+    kendall = sub.corr(method="kendall")
+
+    # P-value matrix for Pearson (manual computation)
+    n = len(sub)
+    p_matrix = pd.DataFrame(np.zeros((len(cols), len(cols))), index=cols, columns=cols)
+    for i, col1 in enumerate(cols):
+        for j, col2 in enumerate(cols):
+            if i == j:
+                p_matrix.loc[col1, col2] = 0.0
+            else:
+                _, p = stats.pearsonr(sub[col1], sub[col2])
+                p_matrix.loc[col1, col2] = p
+
+    return {"pearson": pearson, "spearman": spearman, "kendall": kendall, "p_values": p_matrix}
+
+
+corr_data = compute_correlation_matrices(orders, numeric_cols)
+
+print("Pearson Correlation Matrix:")
+print(corr_data["pearson"].round(3).to_string())
+```
+
+### Heatmap with Significance Masking
+
+```python
+def plot_correlation_heatmap(
+    corr_matrix: pd.DataFrame,
+    p_matrix: pd.DataFrame | None = None,
+    title: str = "Correlation Matrix",
+    significance_threshold: float = 0.05,
+    min_abs_corr: float = 0.0,
+) -> None:
+    """
+    Plot a correlation heatmap. Optionally mask:
+    - Non-significant correlations (p > significance_threshold)
+    - Weak correlations (|r| < min_abs_corr)
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    fig.suptitle(title, fontsize=14, fontweight="bold")
+
+    # Panel 1: Full heatmap
+    ax1 = axes[0]
+    mask_upper = np.triu(np.ones_like(corr_matrix, dtype=bool))  # Hide upper triangle
+    sns.heatmap(
+        corr_matrix,
+        mask=mask_upper,
+        annot=True,
+        fmt=".2f",
+        cmap="RdBu_r",
+        center=0,
+        vmin=-1, vmax=1,
+        ax=ax1,
+        linewidths=0.5,
+        square=True,
+    )
+    ax1.set_title("Full Correlation Matrix")
+
+    # Panel 2: Masked — only show significant, non-trivial correlations
+    ax2 = axes[1]
+    # Build mask: upper triangle OR (not significant AND weak)
+    significance_mask = np.zeros_like(corr_matrix, dtype=bool)
+    if p_matrix is not None:
+        significance_mask = p_matrix.values > significance_threshold
+    weak_mask = corr_matrix.abs().values < min_abs_corr
+    combined_mask = mask_upper | (significance_mask & weak_mask)
+
+    sns.heatmap(
+        corr_matrix,
+        mask=combined_mask,
+        annot=True,
+        fmt=".2f",
+        cmap="RdBu_r",
+        center=0,
+        vmin=-1, vmax=1,
+        ax=ax2,
+        linewidths=0.5,
+        square=True,
+    )
+    ax2.set_title(f"Significant Correlations Only (p<{significance_threshold}, |r|>{min_abs_corr})")
+
+    plt.tight_layout()
+    plt.savefig("outputs/correlation_heatmap.png", dpi=120, bbox_inches="tight")
+    plt.show()
+
+
+plot_correlation_heatmap(
+    corr_data["pearson"],
+    p_matrix=corr_data["p_values"],
+    title="Pearson Correlation — GadaaLabs Orders",
+    significance_threshold=0.05,
+    min_abs_corr=0.1,
+)
+```
+
+---
+
+## Multicollinearity: Variance Inflation Factor
+
+When building explanatory models or interpreting feature contributions, multicollinearity — where predictors are themselves correlated — inflates coefficient uncertainty and makes interpretation unreliable. VIF quantifies this.
+
+```python
+import pandas as pd
+import numpy as np
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+
+def compute_vif(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """
+    Compute Variance Inflation Factor for each variable.
+
+    VIF Interpretation:
+    - VIF = 1: No correlation with other predictors
+    - VIF 1–5: Moderate, usually acceptable
+    - VIF 5–10: High, investigate
+    - VIF > 10: Severe multicollinearity — consider removing one variable
+
+    Note: VIF requires no nulls and numeric columns only.
+    """
+    sub = df[cols].dropna()
+
+    vif_data = pd.DataFrame()
+    vif_data["feature"] = cols
+    vif_data["VIF"] = [
+        variance_inflation_factor(sub.values, i)
+        for i in range(len(cols))
+    ]
+    vif_data["severity"] = vif_data["VIF"].apply(
+        lambda v: "OK" if v < 5 else "High" if v < 10 else "CRITICAL"
+    )
+    return vif_data.sort_values("VIF", ascending=False)
+
+
+vif_report = compute_vif(orders, numeric_cols)
+print("Variance Inflation Factor:")
+print(vif_report.to_string())
+```
+
+---
+
+## Pair Plots for Multi-Dimensional Overview
+
+```python
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+
+def eda_pairplot(
+    df: pd.DataFrame,
+    cols: list[str],
+    hue: str | None = None,
+    sample_n: int = 500,
+) -> None:
+    """
+    Generate a seaborn pairplot for multivariate overview.
+    Samples to keep rendering fast.
+    """
+    plot_df = df[cols + ([hue] if hue else [])].dropna()
+    if len(plot_df) > sample_n:
+        plot_df = plot_df.sample(sample_n, random_state=42)
+
+    g = sns.pairplot(
+        plot_df,
+        vars=cols,
+        hue=hue,
+        diag_kind="kde",
+        plot_kws={"alpha": 0.3, "s": 10},
+        height=2.5,
+    )
+    g.fig.suptitle("Pairplot: Multivariate Overview", y=1.02, fontsize=13)
+    plt.savefig("outputs/pairplot.png", dpi=100, bbox_inches="tight")
+    plt.show()
+
+
+eda_pairplot(
+    orders,
+    cols=["revenue", "quantity", "n_prev_orders", "days_since_signup"],
+    hue="segment",
+    sample_n=500,
+)
+```
+
+---
+
+## PCA for 2D EDA Projection
+
+PCA in EDA is not dimensionality reduction for modelling — it is a lens to see whether the data has natural clusters or gradients across many variables simultaneously.
+
+```python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+
+
+def pca_eda_projection(
+    df: pd.DataFrame,
+    numeric_cols: list[str],
+    color_col: str | None = None,
+    n_components: int = 2,
+    sample_n: int = 1000,
+) -> pd.DataFrame:
+    """
+    Project high-dimensional numeric data to 2D using PCA for visual EDA.
+    Returns the DataFrame with PC1 and PC2 columns added.
+    """
+    sub = df[numeric_cols].dropna()
+    if color_col and color_col in df.columns:
+        color_data = df.loc[sub.index, color_col]
+    else:
+        color_data = None
+
+    # Standardise (PCA is scale-sensitive)
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(sub)
+
+    # Fit PCA
+    pca = PCA(n_components=n_components, random_state=42)
+    components = pca.fit_transform(scaled)
+
+    explained = pca.explained_variance_ratio_
+    print(f"PCA Explained Variance:")
+    for i, ev in enumerate(explained):
+        print(f"  PC{i+1}: {ev*100:.1f}%")
+    print(f"  Total: {sum(explained)*100:.1f}%")
+
+    # Loadings
+    loadings = pd.DataFrame(
+        pca.components_.T,
+        columns=[f"PC{i+1}" for i in range(n_components)],
+        index=numeric_cols,
+    )
+    print("\nPC Loadings (contribution of each variable):")
+    print(loadings.round(3).to_string())
+
+    # Visualise
+    result_df = pd.DataFrame(components, columns=["PC1", "PC2"], index=sub.index)
+    if color_data is not None:
+        result_df[color_col] = color_data.values
+
+    # Sample for plotting
+    plot_df = result_df.sample(min(sample_n, len(result_df)), random_state=42)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Panel 1: 2D scatter coloured by group
+    ax1 = axes[0]
+    if color_col and color_col in plot_df.columns:
+        groups = plot_df[color_col].unique()
+        for i, grp in enumerate(groups):
+            mask = plot_df[color_col] == grp
+            ax1.scatter(
+                plot_df.loc[mask, "PC1"], plot_df.loc[mask, "PC2"],
+                alpha=0.4, s=15, label=str(grp),
+            )
+        ax1.legend(title=color_col, fontsize=8)
+    else:
+        ax1.scatter(plot_df["PC1"], plot_df["PC2"], alpha=0.3, s=15)
+
+    ax1.set_xlabel(f"PC1 ({explained[0]*100:.1f}% variance)")
+    ax1.set_ylabel(f"PC2 ({explained[1]*100:.1f}% variance)")
+    ax1.set_title("PCA 2D Projection")
+
+    # Panel 2: Loadings biplot
+    ax2 = axes[1]
+    for i, col in enumerate(numeric_cols):
+        ax2.arrow(0, 0, loadings.loc[col, "PC1"], loadings.loc[col, "PC2"],
+                  head_width=0.02, head_length=0.02, fc="#C44E52", ec="#C44E52")
+        ax2.text(loadings.loc[col, "PC1"] * 1.1, loadings.loc[col, "PC2"] * 1.1,
+                 col, fontsize=9)
+    ax2.set_xlim(-1.2, 1.2)
+    ax2.set_ylim(-1.2, 1.2)
+    ax2.axhline(0, color="gray", linewidth=0.5)
+    ax2.axvline(0, color="gray", linewidth=0.5)
+    ax2.set_title("PCA Loadings (Variable Contributions)")
+    ax2.set_xlabel("PC1")
+    ax2.set_ylabel("PC2")
+
+    plt.tight_layout()
+    plt.savefig("outputs/pca_eda.png", dpi=120, bbox_inches="tight")
+    plt.show()
+
+    return result_df
+
+
+pca_result = pca_eda_projection(
+    orders,
+    numeric_cols=["revenue", "quantity", "n_prev_orders", "days_since_signup", "discount_pct"],
+    color_col="segment",
+)
+```
+
+---
+
+## Facet Plots: Segmenting the Same Chart by a Third Variable
+
+Faceted plots are the most efficient way to visualise a relationship across a categorical variable without cluttering a single chart.
+
+```python
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+
+def faceted_scatter(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    facet_col: str,
+    col_wrap: int = 3,
+) -> None:
+    """
+    A scatter plot faceted by a categorical variable.
+    Use this to see if the x→y relationship changes across segments.
+    """
+    g = sns.FacetGrid(
+        df.sample(min(2000, len(df)), random_state=42),
+        col=facet_col,
+        col_wrap=col_wrap,
+        height=4,
+        aspect=1.2,
+        sharey=False,
+    )
+    g.map_dataframe(
+        sns.scatterplot, x=x_col, y=y_col,
+        alpha=0.3, s=15, color="#4C72B0",
+    )
+    g.map_dataframe(
+        sns.regplot,
+        x=x_col, y=y_col,
+        scatter=False, color="red", line_kws={"linewidth": 2},
+    )
+    g.set_titles(col_template=f"{facet_col}: {{col_name}}")
+    g.set_axis_labels(x_col, y_col)
+    g.fig.suptitle(f"{x_col} vs {y_col} by {facet_col}", y=1.02, fontsize=13)
+    plt.savefig(f"outputs/facet_{x_col}_{y_col}_{facet_col}.png", dpi=120, bbox_inches="tight")
+    plt.show()
+
+
+faceted_scatter(orders, "n_prev_orders", "revenue", "segment")
+
+
+def faceted_distribution(
+    df: pd.DataFrame,
+    value_col: str,
+    facet_col: str,
+    kind: str = "hist",
+    col_wrap: int = 3,
+) -> None:
+    """
+    Distribution plot (histogram or KDE) faceted by a categorical variable.
+    Compare distributional shape across segments.
+    """
+    g = sns.FacetGrid(df, col=facet_col, col_wrap=col_wrap, height=4, sharex=False)
+    if kind == "hist":
+        g.map(sns.histplot, value_col, bins=30, kde=True, color="#4C72B0", alpha=0.7)
+    elif kind == "kde":
+        g.map(sns.kdeplot, value_col, fill=True, color="#4C72B0", alpha=0.5)
+    g.set_titles(col_template=f"{facet_col}: {{col_name}}")
+    g.fig.suptitle(f"Distribution of {value_col} by {facet_col}", y=1.02, fontsize=13)
+    plt.savefig(f"outputs/facet_dist_{value_col}_{facet_col}.png", dpi=120, bbox_inches="tight")
+    plt.show()
+
+
+faceted_distribution(orders, "revenue", "category", kind="hist")
+```
+
+---
+
+## Cohort Analysis
+
+Cohort analysis segments users by a time dimension (typically first event date) and tracks a behaviour metric over subsequent time periods. It answers "do customers acquired in different periods behave differently over time?"
+
+```python
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+def build_cohort_analysis(
+    df: pd.DataFrame,
+    customer_col: str,
+    order_date_col: str,
+    value_col: str,
+    cohort_period: str = "M",  # "M" = monthly cohorts
+    observation_periods: int = 12,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Build a retention/revenue cohort matrix.
+
+    Each row is a cohort (customers by first purchase month).
+    Each column is a period offset (months since first purchase).
+    Cell value is the metric (revenue or retention rate) for that cohort at that offset.
+
+    Returns:
+        cohort_revenue: Revenue matrix (cohort × period offset)
+        cohort_retention: Retention rate matrix (cohort × period offset)
+    """
+    df = df.copy()
+    df[order_date_col] = pd.to_datetime(df[order_date_col])
+
+    # Assign each order to its period
+    df["order_period"] = df[order_date_col].dt.to_period(cohort_period)
+
+    # Find each customer's first order period (cohort assignment)
+    first_order = (
+        df.groupby(customer_col)[order_date_col]
+        .min()
+        .dt.to_period(cohort_period)
+        .rename("cohort_period")
+    )
+    df = df.join(first_order, on=customer_col)
+
+    # Compute period offset
+    df["period_offset"] = (df["order_period"] - df["cohort_period"]).apply(lambda x: x.n)
+
+    # Keep only forward-looking offsets within our window
+    df = df[(df["period_offset"] >= 0) & (df["period_offset"] < observation_periods)]
+
+    # Revenue cohort matrix
+    cohort_revenue = (
+        df.groupby(["cohort_period", "period_offset"])[value_col]
+        .sum()
+        .unstack(level="period_offset")
+        .fillna(0)
+    )
+
+    # Retention cohort matrix: unique customers per (cohort, offset)
+    cohort_customers = (
+        df.groupby(["cohort_period", "period_offset"])[customer_col]
+        .nunique()
+        .unstack(level="period_offset")
+        .fillna(0)
+    )
+
+    # Cohort size = customers at offset 0
+    cohort_sizes = cohort_customers[0]
+    cohort_retention = cohort_customers.divide(cohort_sizes, axis=0).round(3) * 100
+
+    return cohort_revenue, cohort_retention
+
+
+def plot_cohort_heatmap(
+    cohort_matrix: pd.DataFrame,
+    title: str,
+    fmt: str = ".0f",
+    cmap: str = "YlOrRd",
+) -> None:
+    """Render a cohort matrix as a heatmap."""
+    fig, ax = plt.subplots(figsize=(14, 8))
+    sns.heatmap(
+        cohort_matrix,
+        annot=True,
+        fmt=fmt,
+        cmap=cmap,
+        ax=ax,
+        linewidths=0.5,
+        cbar_kws={"label": title},
+    )
+    ax.set_title(title, fontsize=13, fontweight="bold")
+    ax.set_xlabel("Periods Since First Purchase")
+    ax.set_ylabel("Cohort (First Purchase Period)")
+    plt.tight_layout()
+    plt.savefig(f"outputs/cohort_{title.replace(' ', '_').lower()}.png", dpi=120, bbox_inches="tight")
+    plt.show()
+
+
+# Build cohorts on the orders dataset
+cohort_rev, cohort_ret = build_cohort_analysis(
+    orders,
+    customer_col="customer_id",
+    order_date_col="order_date",
+    value_col="revenue",
+    cohort_period="M",
+    observation_periods=6,
+)
+
+print("Cohort Revenue Matrix (first 5 cohorts × 6 periods):")
+print(cohort_rev.head().round(0).to_string())
+
+print("\nCohort Retention Matrix (%):")
+print(cohort_ret.head().round(1).to_string())
+
+plot_cohort_heatmap(cohort_ret.head(8), "Customer Retention Rate by Monthly Cohort (%)", fmt=".1f", cmap="Blues")
+```
+
+---
+
+## Segment Analysis: Profiling Groups
+
+```python
+import pandas as pd
+import numpy as np
+
+
+def profile_segments(
+    df: pd.DataFrame,
+    segment_col: str,
+    numeric_cols: list[str],
+    categorical_cols: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Build a rich segment profile: central tendency, spread, and composition.
+    """
+    segments = df[segment_col].unique()
+    profiles = []
+
+    for seg in segments:
+        mask = df[segment_col] == seg
+        seg_df = df[mask]
+
+        profile = {"segment": seg, "n_rows": len(seg_df)}
+
+        for col in numeric_cols:
+            vals = seg_df[col].dropna()
+            profile[f"{col}_mean"] = round(vals.mean(), 2)
+            profile[f"{col}_median"] = round(vals.median(), 2)
+            profile[f"{col}_p90"] = round(vals.quantile(0.9), 2)
+            profile[f"{col}_std"] = round(vals.std(), 2)
+
+        if categorical_cols:
+            for col in categorical_cols:
+                top = seg_df[col].value_counts().index[0] if len(seg_df) > 0 else "N/A"
+                top_pct = seg_df[col].value_counts().iloc[0] / len(seg_df) * 100 if len(seg_df) > 0 else 0
+                profile[f"{col}_top"] = top
+                profile[f"{col}_top_pct"] = round(top_pct, 1)
+
+        profiles.append(profile)
+
+    result = pd.DataFrame(profiles).set_index("segment")
+    return result
+
+
+segment_profile = profile_segments(
+    orders,
+    segment_col="segment",
+    numeric_cols=["revenue", "quantity", "n_prev_orders", "days_since_signup"],
+    categorical_cols=["category", "channel"],
+)
+
+print("Segment Profile:")
+print(segment_profile.T.to_string())
+```
+
+---
+
+## Interaction Effects
+
+An interaction effect occurs when the relationship between two variables changes depending on the value of a third variable. This is one of the most important and most overlooked patterns in EDA.
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+
+
+def test_interaction_effect(
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    moderator_col: str,
+) -> pd.DataFrame:
+    """
+    Test for an interaction effect: does the x→y correlation differ
+    across levels of the moderator variable?
+
+    An interaction exists if the correlation coefficient is significantly
+    different across groups.
+    """
+    from scipy import stats
+
+    groups = df[moderator_col].dropna().unique()
+    results = []
+
+    for grp in groups:
+        mask = df[moderator_col] == grp
+        sub = df[mask][[x_col, y_col]].dropna()
+        if len(sub) < 10:
+            continue
+        r, p = stats.pearsonr(sub[x_col], sub[y_col])
+        results.append({
+            "group": grp,
+            "n": len(sub),
+            "pearson_r": round(r, 4),
+            "p_value": round(p, 6),
+            "significant": p < 0.05,
+        })
+
+    result_df = pd.DataFrame(results).sort_values("pearson_r", ascending=False)
+
+    # Visualise: one regression line per group
+    fig, ax = plt.subplots(figsize=(10, 6))
+    palette = plt.cm.tab10.colors
+
+    sample = df.sample(min(1000, len(df)), random_state=42)
+    for i, grp in enumerate(groups):
+        mask = sample[moderator_col] == grp
+        grp_data = sample[mask][[x_col, y_col]].dropna()
+        ax.scatter(grp_data[x_col], grp_data[y_col],
+                   alpha=0.3, s=15, color=palette[i % 10], label=str(grp))
+        # Regression line
+        from scipy.stats import linregress
+        if len(grp_data) > 2:
+            slope, intercept, *_ = linregress(grp_data[x_col], grp_data[y_col])
+            x_range = np.linspace(grp_data[x_col].min(), grp_data[x_col].max(), 50)
+            ax.plot(x_range, slope * x_range + intercept,
+                    color=palette[i % 10], linewidth=2.5, alpha=0.9)
+
+    ax.set_xlabel(x_col)
+    ax.set_ylabel(y_col)
+    ax.set_title(f"Interaction: {x_col} × {y_col}, moderated by {moderator_col}")
+    ax.legend(title=moderator_col)
+    plt.tight_layout()
+    plt.savefig(f"outputs/interaction_{x_col}_{y_col}_{moderator_col}.png", dpi=120, bbox_inches="tight")
+    plt.show()
+
+    return result_df
+
+
+interaction = test_interaction_effect(orders, "n_prev_orders", "revenue", "segment")
+print("Interaction Effect — n_prev_orders × revenue by segment:")
+print(interaction.to_string())
+print("\nInterpretation: If r varies significantly across groups, the relationship is moderated by the segment variable.")
+```
+
+---
+
+## Hypothesis Generation Framework
+
+The output of multivariate EDA should be a set of specific, testable hypotheses. Each hypothesis should come from a chart or statistic — not from intuition alone.
+
+```python
+from dataclasses import dataclass
+from typing import Literal
+
+
+@dataclass
+class Hypothesis:
+    id: str
+    source: str              # Which chart/stat generated this
+    statement: str           # H₁: the alternative hypothesis
+    null_statement: str      # H₀: the null to be tested
+    test_type: str           # What statistical test to use (see Lesson 09)
+    variables: list[str]     # Variables involved
+    expected_direction: str  # e.g., "positive relationship", "higher in Group A"
+    confidence_prior: Literal["high", "medium", "low"] = "medium"
+    actionable_if_true: str = ""
+
+
+hypothesis_log: list[Hypothesis] = []
+
+def add_hypothesis(h: Hypothesis) -> None:
+    hypothesis_log.append(h)
+    print(f"[H{h.id}] {h.statement}")
+
+
+# Example hypotheses generated from our EDA
+add_hypothesis(Hypothesis(
+    id="01",
+    source="Faceted scatter: n_prev_orders × revenue by segment",
+    statement="Customers with more previous orders have significantly higher per-order revenue.",
+    null_statement="There is no significant linear relationship between number of previous orders and order revenue.",
+    test_type="Pearson correlation + t-test on regression slope",
+    variables=["n_prev_orders", "revenue"],
+    expected_direction="Positive correlation — loyalty effect",
+    confidence_prior="high",
+    actionable_if_true="Investing in re-engagement of lapsed customers should yield higher AOV per reactivated purchase.",
+))
+
+add_hypothesis(Hypothesis(
+    id="02",
+    source="Cohort retention heatmap",
+    statement="Monthly cohorts acquired in Q1 have higher 6-month retention than cohorts acquired in Q3.",
+    null_statement="6-month retention rates do not significantly differ across monthly acquisition cohorts.",
+    test_type="Chi-square test of independence or proportion Z-test",
+    variables=["acquisition_cohort", "6_month_retention"],
+    expected_direction="Q1 cohorts retain better (potentially seasonal acquisition quality effect)",
+    confidence_prior="medium",
+    actionable_if_true="Shift acquisition budget toward Q1 if LTV analysis confirms higher ROI.",
+))
+
+add_hypothesis(Hypothesis(
+    id="03",
+    source="Segment profile table",
+    statement="Enterprise customers have a statistically significantly higher median order value than SMB customers.",
+    null_statement="Median order values for Enterprise and SMB segments are equal.",
+    test_type="Mann-Whitney U test (non-parametric, right-skewed distribution)",
+    variables=["segment", "revenue"],
+    expected_direction="Enterprise median revenue > SMB median revenue",
+    confidence_prior="high",
+    actionable_if_true="Segment-specific pricing and tiering strategy is justified.",
+))
+
+
+def hypotheses_to_dataframe(hypotheses: list[Hypothesis]) -> pd.DataFrame:
+    return pd.DataFrame([{
+        "id": h.id,
+        "statement": h.statement,
+        "test_type": h.test_type,
+        "variables": ", ".join(h.variables),
+        "confidence_prior": h.confidence_prior,
+        "actionable_if_true": h.actionable_if_true,
+    } for h in hypotheses])
+
+
+hypo_df = hypotheses_to_dataframe(hypothesis_log)
+print("\nHypothesis Log:")
+print(hypo_df.to_string())
+```
+
+---
+
+## Red Flags: Always Check for These
+
+```python
+import pandas as pd
+import numpy as np
+
+
+def check_red_flags(df: pd.DataFrame, numeric_cols: list[str]) -> list[str]:
+    """
+    Check for common data issues that invalidate downstream analysis.
+    Returns a list of warning strings.
+    """
+    warnings_list = []
+
+    # 1. Perfectly correlated features (likely duplicates or derived columns)
+    corr = df[numeric_cols].corr()
+    for i in range(len(numeric_cols)):
+        for j in range(i + 1, len(numeric_cols)):
+            r = corr.iloc[i, j]
+            if abs(r) > 0.999:
+                warnings_list.append(
+                    f"CRITICAL: {numeric_cols[i]} and {numeric_cols[j]} are perfectly correlated "
+                    f"(r={r:.4f}) — likely duplicates or one is derived from the other."
+                )
+
+    # 2. Constant columns (zero variance — useless for analysis)
+    for col in numeric_cols:
+        if df[col].std() < 1e-10:
+            warnings_list.append(f"WARNING: {col} has zero variance — constant column.")
+
+    # 3. Data leakage signal: a column correlates >0.9 with the target
+    # (In analysis context: suspiciously high correlation may indicate
+    # a feature that encodes the outcome rather than predicts it)
+    # This requires knowing which column is the "target"
+
+    # 4. Near-zero variance features (very low information content)
+    for col in numeric_cols:
+        cv = df[col].std() / df[col].mean() if df[col].mean() != 0 else 0
+        if 0 < abs(cv) < 0.01:
+            warnings_list.append(
+                f"INFO: {col} has very low coefficient of variation ({cv:.4f}) — "
+                "near-constant, likely low analytical value."
+            )
+
+    # 5. Features that are likely post-hoc derivations (perfectly linear relationships)
+    # Already caught by perfect correlation check above.
+
+    return warnings_list
+
+
+red_flags = check_red_flags(orders, numeric_cols)
+if red_flags:
+    print("Red Flags Detected:")
+    for flag in red_flags:
+        print(f"  {flag}")
+else:
+    print("No red flags detected.")
+```
+
+---
+
+## Key Takeaways
+
+- Correlation matrices should be computed with all three methods (Pearson, Spearman, Kendall) and interpreted together. A large gap between Pearson and Spearman signals a non-linear relationship or strong outlier influence.
+- Significance masking — hiding correlations where p &gt; 0.05 — prevents you from pattern-matching noise. Report significant correlations only, but document all that were tested (multiple testing correction in Lesson 09).
+- VIF above 5 signals multicollinearity. Before removing a variable, understand whether it is analytically meaningful — multicollinearity is a modelling problem, not necessarily an analysis problem.
+- PCA for EDA is a visual exploration tool, not a modelling decision. Its value is in the loading plot: which variables cluster together, and what does that clustering mean about the underlying structure of the data?
+- Cohort analysis is the single most important analytical technique for any subscription or repeat-purchase business. It separates the question "are customers good?" from "are we acquiring better customers over time?"
+- Interaction effects — where the x→y relationship changes across groups — are extremely common and often analytically critical. A single regression line across all segments frequently hides opposite effects within each segment.
+- Every pattern observed in multivariate EDA should be converted into a formal, testable hypothesis with a stated null hypothesis and a planned statistical test. EDA without hypothesis generation is exploration without direction.

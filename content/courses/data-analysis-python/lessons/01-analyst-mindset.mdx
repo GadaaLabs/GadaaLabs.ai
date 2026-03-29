@@ -1,0 +1,671 @@
+---
+title: "The Expert Analyst Mindset — Framing Problems Before Touching Data"
+description: "Learn how expert data analysts think before writing a single line of code: problem framing, analytical briefs, question taxonomy, cognitive traps, and building a rigorous analysis plan."
+duration: 20
+order: 1
+---
+
+## Why Most Analysis Fails Before It Starts
+
+The single most common reason a data analysis project delivers no value is not bad data, insufficient Python skill, or the wrong chart type. It is a poorly framed problem. A team spends two weeks building a dashboard that answers a question nobody asked, or produces a statistically significant finding that maps to no decision anyone can make. The analysis was technically correct and practically useless.
+
+Expert analysts invest disproportionate time at the beginning of a project in a phase that produces no charts and no code: understanding the problem deeply enough to define what a successful answer actually looks like. This lesson covers that phase — the cognitive and structural work that happens before you open a notebook.
+
+---
+
+## The Five Questions Before You Touch Data
+
+Every analytical engagement, regardless of scope, should begin with the same five questions. Until you can answer all five clearly, you are not ready to start.
+
+### Question 1: What Is the Business Objective?
+
+Not the analytical objective — the business objective. What decision will this analysis enable? What action becomes possible once you have the answer? If the stakeholder cannot articulate a decision or action, the analysis is exploratory at best and vanity work at worst.
+
+Bad: "We want to understand our customers better."
+Good: "We want to decide whether to invest in a loyalty programme for our top 20% of customers by revenue."
+
+### Question 2: What Does Success Look Like?
+
+What is the specific, measurable output that would constitute a successful analysis? This forces precision. "A report" is not success. "A ranked list of customer segments by lifetime value, with statistical confidence intervals, delivered as a notebook and a one-page memo by Friday" is success.
+
+### Question 3: What Data Do We Have, and What Do We Not Have?
+
+Scope the data landscape before committing to a direction. What tables exist? What time range do they cover? What population do they represent? What is missing? A question you cannot answer with available data should be flagged immediately — not discovered on day nine.
+
+### Question 4: Who Are the Stakeholders and What Are Their Priors?
+
+Who will consume this analysis? What do they already believe? What would surprise them? What would threaten them? Understanding stakeholder priors helps you anticipate pushback, design your narrative, and avoid producing an answer that is technically correct but politically undeliverable.
+
+### Question 5: What Is the Timeline and What Are the Constraints?
+
+A rigorous analysis with perfect data in six weeks is sometimes less valuable than a directional analysis with available data in three days. Know the decision deadline. Know whether this is a one-time analysis or a recurring report. Know the format expected (slide deck, notebook, dashboard, memo).
+
+---
+
+## Problem Framing: From Vague Request to Precise Question
+
+Stakeholders rarely arrive with well-formed analytical questions. They arrive with symptoms: "our sales are down," "customers aren't engaging," "we think there's a pricing problem." The analyst's job is to convert symptoms into precise, falsifiable analytical questions.
+
+### The Decomposition Pattern
+
+Take the symptom and ask "What could cause this?" repeatedly until you reach measurable quantities.
+
+Symptom: "Our sales are down."
+
+Level 1 decomposition:
+- Is revenue down, or is unit volume down, or both?
+- Is this across all channels or concentrated in one?
+- Is this a new trend or continuation of an existing trend?
+- Is it all product categories or specific ones?
+- Is it all customer segments or specific ones?
+- Is it a demand problem or a supply/availability problem?
+
+Each branch becomes a potential analytical question. The analyst picks the branch most relevant to the decision at hand.
+
+Precise analytical question: "Did Q3 revenue decline affect all customer segments equally, or is it driven by a specific cohort — and if concentrated, what behavioural change in that cohort explains it?"
+
+This question is falsifiable. You can answer it with data. It connects to a decision (where to intervene). It has a clear answer format (yes/no + supporting breakdown).
+
+---
+
+## The Analytical Brief Template
+
+Before writing code, write a brief. This is a one-page document that serves as the contract between analyst and stakeholder. It prevents scope creep, forces clarity, and gives you a reference point when the project drifts.
+
+```python
+from dataclasses import dataclass, field
+from typing import List, Optional
+from datetime import date
+
+
+@dataclass
+class AnalysisBrief:
+    """
+    Structured template for scoping an analytical project.
+    Fill this out before opening a notebook.
+    """
+
+    # Core framing
+    project_title: str
+    business_objective: str          # The decision this analysis will enable
+    analytical_question: str         # The precise, falsifiable question being answered
+
+    # Hypothesis
+    primary_hypothesis: str          # What you expect to find (and why)
+    null_hypothesis: str             # The default assumption to be tested against
+
+    # Data
+    data_sources: List[str]          # Tables, files, APIs involved
+    date_range: str                  # "2023-01-01 to 2024-06-30"
+    population: str                  # Who / what is being analysed
+
+    # Metrics
+    primary_metric: str              # The one number that answers the question
+    secondary_metrics: List[str]     # Supporting signals
+
+    # Constraints
+    known_data_issues: List[str] = field(default_factory=list)
+    out_of_scope: List[str] = field(default_factory=list)
+    assumptions: List[str] = field(default_factory=list)
+
+    # Delivery
+    deliverable_format: str = "Jupyter notebook + 1-page memo"
+    deadline: Optional[date] = None
+    stakeholders: List[str] = field(default_factory=list)
+
+    def render(self) -> str:
+        """Render the brief as a readable string for sharing."""
+        lines = [
+            f"# Analytical Brief: {self.project_title}",
+            "",
+            f"**Business Objective:** {self.business_objective}",
+            f"**Analytical Question:** {self.analytical_question}",
+            "",
+            f"**Primary Hypothesis:** {self.primary_hypothesis}",
+            f"**Null Hypothesis:** {self.null_hypothesis}",
+            "",
+            "**Data Sources:**",
+            *[f"  - {s}" for s in self.data_sources],
+            f"**Date Range:** {self.date_range}",
+            f"**Population:** {self.population}",
+            "",
+            f"**Primary Metric:** {self.primary_metric}",
+            "**Secondary Metrics:**",
+            *[f"  - {m}" for m in self.secondary_metrics],
+            "",
+            "**Known Data Issues:**",
+            *[f"  - {i}" for i in self.known_data_issues],
+            "**Out of Scope:**",
+            *[f"  - {o}" for o in self.out_of_scope],
+            "**Assumptions:**",
+            *[f"  - {a}" for a in self.assumptions],
+            "",
+            f"**Deliverable:** {self.deliverable_format}",
+            f"**Deadline:** {self.deadline}",
+            f"**Stakeholders:** {', '.join(self.stakeholders)}",
+        ]
+        return "\n".join(lines)
+
+
+# Example: filled brief for the "sales are down" problem
+brief = AnalysisBrief(
+    project_title="Q3 Revenue Decline Root Cause Analysis",
+    business_objective=(
+        "Determine where to focus retention and re-engagement spend "
+        "in Q4 based on which customer segments drove the Q3 revenue decline."
+    ),
+    analytical_question=(
+        "Is the Q3 revenue decline concentrated in a specific customer segment "
+        "or acquisition cohort, and if so, what behavioural changes in that "
+        "segment explain the decline?"
+    ),
+    primary_hypothesis=(
+        "The decline is concentrated in SMB customers acquired in 2022 "
+        "who experienced a price increase in July 2023 and have not returned."
+    ),
+    null_hypothesis=(
+        "The decline is proportional across all segments, consistent with "
+        "broad market seasonality."
+    ),
+    data_sources=[
+        "orders table (transactions 2022-01-01 to 2023-09-30)",
+        "customers table (all registered accounts)",
+        "events table (login, browse, cart events)",
+        "pricing_history table (price changes by SKU)",
+    ],
+    date_range="2022-01-01 to 2023-09-30",
+    population="All customers who placed at least one order in 2022 or 2023",
+    primary_metric="Monthly revenue by customer segment (YoY % change)",
+    secondary_metrics=[
+        "Order frequency per customer per month",
+        "Average order value",
+        "Churn rate (no purchase in 90 days)",
+        "Reactivation rate after price change",
+    ],
+    known_data_issues=[
+        "Orders table has ~3% rows with null customer_id (guest checkouts)",
+        "Events table only available from 2022-06-01",
+    ],
+    out_of_scope=[
+        "New customer acquisition analysis",
+        "Supply chain or inventory issues",
+        "Competitor pricing analysis",
+    ],
+    assumptions=[
+        "Seasonality follows prior year pattern",
+        "Segment definitions are stable (no reclassification in period)",
+    ],
+    deliverable_format="Jupyter notebook + 1-page executive memo",
+    deadline=date(2023, 11, 10),
+    stakeholders=["VP Revenue", "Head of CRM", "CFO"],
+)
+
+print(brief.render())
+```
+
+---
+
+## Types of Analytical Questions
+
+Not all analytical questions are the same. Expert analysts categorise the question type before choosing methods, because the type determines the appropriate approach, the valid conclusions, and the limitations you must communicate.
+
+### Descriptive Questions
+
+"What happened?" — Summarise a phenomenon over a defined period. No causal inference. Output is aggregated facts.
+
+Example: "What was our average order value by product category in Q3?"
+
+Tools: GroupBy aggregations, pivot tables, time series summaries.
+
+Limitation: Describes the past. Cannot explain why or predict what happens next.
+
+### Diagnostic Questions
+
+"Why did it happen?" — Investigate the drivers of an observed phenomenon. Requires segmentation, correlation analysis, and hypothesis testing. Causal inference is aspired to but rarely achieved without experimental design.
+
+Example: "Why did cart abandonment increase 15% in October?"
+
+Tools: Segmentation, funnel analysis, cohort analysis, correlation, hypothesis testing.
+
+Limitation: Correlation is not causation. Controlled experiments are needed for strong causal claims.
+
+### Predictive Questions
+
+"What will happen?" — Forecast future values or classify future outcomes. Requires historical patterns and often machine learning.
+
+Example: "Which customers are most likely to churn in the next 30 days?"
+
+Tools: Regression, classification, time series forecasting.
+
+Limitation: Predictions are probabilistic. Model degradation over time. Requires careful validation.
+
+### Prescriptive Questions
+
+"What should we do?" — Combine prediction with decision logic to recommend specific actions.
+
+Example: "Which customers should we target with a discount offer to maximise retention ROI?"
+
+Tools: Decision rules, optimisation, experiment design.
+
+Limitation: Requires strong predictive foundation. Recommendations can have unintended consequences.
+
+```python
+from enum import Enum
+
+
+class QuestionType(Enum):
+    DESCRIPTIVE = "descriptive"
+    DIAGNOSTIC = "diagnostic"
+    PREDICTIVE = "predictive"
+    PRESCRIPTIVE = "prescriptive"
+
+
+def classify_question(question: str) -> dict:
+    """
+    A simple classifier that maps question keywords to type.
+    In practice, this is a judgment call — use this as a checklist prompt.
+    """
+    q_lower = question.lower()
+
+    # Keyword signals (heuristic only — always confirm with judgment)
+    descriptive_signals = ["what is", "what was", "how many", "how much", "summarise", "total", "average"]
+    diagnostic_signals = ["why", "what caused", "what drove", "explain", "reason", "factor"]
+    predictive_signals = ["predict", "forecast", "likely", "will", "future", "next"]
+    prescriptive_signals = ["should", "recommend", "optimise", "best action", "maximise", "minimise"]
+
+    scores = {
+        QuestionType.DESCRIPTIVE: sum(s in q_lower for s in descriptive_signals),
+        QuestionType.DIAGNOSTIC: sum(s in q_lower for s in diagnostic_signals),
+        QuestionType.PREDICTIVE: sum(s in q_lower for s in predictive_signals),
+        QuestionType.PRESCRIPTIVE: sum(s in q_lower for s in prescriptive_signals),
+    }
+
+    best = max(scores, key=scores.get)
+    return {
+        "detected_type": best.value,
+        "scores": {k.value: v for k, v in scores.items()},
+        "causal_inference_required": best in (QuestionType.DIAGNOSTIC, QuestionType.PRESCRIPTIVE),
+        "experiment_recommended": best == QuestionType.PRESCRIPTIVE,
+    }
+
+
+# Test
+examples = [
+    "What was our monthly revenue in 2023?",
+    "Why did churn increase after the July price change?",
+    "Which customers are most likely to purchase again next month?",
+    "Which customers should we email to maximise reactivation revenue?",
+]
+
+for q in examples:
+    result = classify_question(q)
+    print(f"Q: {q}")
+    print(f"   Type: {result['detected_type']}")
+    print(f"   Causal inference required: {result['causal_inference_required']}")
+    print()
+```
+
+---
+
+## The "So What?" Test
+
+Every finding in an analysis must pass the "So What?" test before it belongs in a deliverable. The test is simple: after stating a finding, ask "so what?" If you cannot answer with a specific, actionable implication, the finding is observation, not insight.
+
+Observation: "Customers in the 25–34 age bracket have the highest average order value."
+
+So what? "Therefore, if we are designing a premium tier, the 25–34 segment is the primary candidate — and our marketing spend should be disproportionately weighted there."
+
+Now it's an insight.
+
+A second pass: "So what should we do differently tomorrow?" If the answer is "nothing changes," the insight does not belong at the top of your report. It may belong in an appendix as supporting context.
+
+```python
+def so_what_test(finding: str, implication: str, recommended_action: str) -> dict:
+    """
+    Force yourself to complete the full insight chain before writing up.
+    """
+    is_actionable = len(recommended_action.strip()) > 0
+    is_quantified = any(
+        char.isdigit() for char in finding
+    )  # Weak proxy — real check is manual
+
+    return {
+        "finding": finding,
+        "implication": implication,
+        "recommended_action": recommended_action,
+        "is_actionable": is_actionable,
+        "appears_quantified": is_quantified,
+        "passes_so_what": is_actionable and is_quantified,
+    }
+
+
+result = so_what_test(
+    finding="SMB customers acquired in 2022 have a 34% higher churn rate post price-increase vs Enterprise customers.",
+    implication="Price sensitivity is concentrated in the SMB segment — Enterprise customers have higher stickiness.",
+    recommended_action=(
+        "Offer SMB customers acquired before July 2023 a grandfathered pricing tier "
+        "for 12 months to reduce churn; evaluate ROI vs full-price recovery."
+    ),
+)
+
+for k, v in result.items():
+    print(f"{k}: {v}")
+```
+
+---
+
+## Role Clarity: Analyst, Scientist, BI Analyst
+
+Knowing your role is not bureaucratic box-ticking — it determines your scope, your methods, and the bar of rigour required.
+
+**Data Analyst:** Describes and diagnoses using existing data. Primary outputs are aggregated summaries, trends, segmentations, and statistical comparisons. Causal claims are conservative and hedged. Tools: SQL, pandas, matplotlib, basic statistics.
+
+**Data Scientist:** Builds predictive and prescriptive models. Works upstream of the analyst on the question taxonomy. Requires ML training/validation infrastructure. Causal inference via experimental design. Tools: scikit-learn, statsmodels, experiment frameworks.
+
+**BI Analyst / Analytics Engineer:** Builds the data infrastructure that analysts consume: pipelines, data models, dashboards, semantic layers. Output is repeatable, automated reporting — not one-time investigation. Tools: dbt, Looker, SQL, Airflow.
+
+In many organisations these roles blur. The important principle: be explicit about which hat you are wearing for a given deliverable. When you are doing analyst work, do not promise data scientist outputs. When you are doing BI work, do not promise analytical investigation.
+
+---
+
+## Common Cognitive Traps
+
+### The HiPPO Effect
+
+Highest Paid Person's Opinion. When seniority determines analytical conclusions rather than evidence, the analyst has been converted into a confirmation machine. The defence: the Analytical Brief. If the question, hypothesis, and success metric are agreed before data is touched, it is harder for authority to override findings post-hoc.
+
+### Confirmation Bias
+
+Analysts find what they look for. The defence: state a null hypothesis. If you expect SMB churn to be the driver, force yourself to test the null that all segments are equal. Report the test result, not just the hypothesis you wanted to confirm.
+
+### P-Hacking
+
+Running multiple tests on the same data until one reaches p &lt; 0.05. The defence: pre-register your hypotheses before analysis, apply multiple-comparison corrections (Bonferroni, Benjamini-Hochberg — covered in Lesson 09), and report all tests run, not just the significant ones.
+
+### Survivorship Bias
+
+Analysing only the data that survived some selection process and drawing conclusions about all data. Classic example: analysing only completed orders to understand customer satisfaction — ignoring all the customers who abandoned the funnel. Always ask: what data is missing, and how was this dataset created?
+
+### The Streetlight Effect
+
+Looking for the answer where the data is easy, not where the answer actually lives. You cannot conclude that desktop is your best channel just because mobile events data is missing. Acknowledge data gaps explicitly.
+
+```python
+# Survivorship bias detection: check for selection effects
+import pandas as pd
+import numpy as np
+
+# Simulated orders table (only completed orders — guest checkouts excluded)
+np.random.seed(42)
+n = 1000
+
+orders = pd.DataFrame({
+    "order_id": range(1, n + 1),
+    "customer_id": np.random.choice(range(1, 400), size=n),  # 400 customers, repeat buyers
+    "status": np.random.choice(["completed", "abandoned", "cancelled"], p=[0.6, 0.3, 0.1], size=n),
+    "revenue": np.where(
+        np.random.choice([True, False], p=[0.6, 0.4], size=n),
+        np.random.exponential(scale=85, size=n),
+        0.0,
+    ),
+    "channel": np.random.choice(["organic", "paid", "email", "direct"], size=n),
+})
+
+# TRAP: Naive analyst looks only at completed orders
+completed = orders[orders["status"] == "completed"]
+print("Average revenue (completed only):", completed["revenue"].mean().round(2))
+print("Channel mix (completed only):")
+print(completed["channel"].value_counts(normalize=True).round(3))
+
+print()
+
+# CORRECT: Always report the full funnel
+print("Order status distribution:")
+print(orders["status"].value_counts(normalize=True).round(3))
+
+print()
+print("Completion rate by channel:")
+channel_funnel = (
+    orders.groupby("channel")["status"]
+    .value_counts(normalize=True)
+    .unstack(fill_value=0)
+    .round(3)
+)
+print(channel_funnel)
+
+# KEY INSIGHT: If abandonment rate differs by channel,
+# the "best" channel analysis on completed orders alone is misleading.
+```
+
+---
+
+## Building an Analysis Plan
+
+Before opening a notebook, write a plan. The analysis plan converts the brief into a sequence of analytical steps with estimated effort and explicit dependencies.
+
+```python
+from dataclasses import dataclass, field
+from typing import List, Optional
+from enum import Enum
+
+
+class Complexity(Enum):
+    LOW = "low"       # < 2 hours
+    MEDIUM = "medium" # 2–8 hours
+    HIGH = "high"     # > 8 hours
+
+
+@dataclass
+class AnalysisStep:
+    step_id: int
+    name: str
+    description: str
+    complexity: Complexity
+    data_dependencies: List[str]
+    output: str                   # What artifact this step produces
+    depends_on_steps: List[int] = field(default_factory=list)
+    notes: Optional[str] = None
+
+
+@dataclass
+class AnalysisPlan:
+    brief: AnalysisBrief
+    steps: List[AnalysisStep]
+
+    def total_estimated_hours(self) -> str:
+        mapping = {Complexity.LOW: 1.5, Complexity.MEDIUM: 5, Complexity.HIGH: 12}
+        low = sum(mapping[s.complexity] * 0.5 for s in self.steps)
+        high = sum(mapping[s.complexity] * 1.5 for s in self.steps)
+        return f"{low:.0f}–{high:.0f} hours"
+
+    def render(self) -> None:
+        print(f"Analysis Plan: {self.brief.project_title}")
+        print(f"Estimated effort: {self.total_estimated_hours()}")
+        print("-" * 60)
+        for step in self.steps:
+            deps = f" [depends on: {step.depends_on_steps}]" if step.depends_on_steps else ""
+            print(f"Step {step.step_id}: {step.name} ({step.complexity.value}){deps}")
+            print(f"  → {step.description}")
+            print(f"  Output: {step.output}")
+            if step.notes:
+                print(f"  Note: {step.notes}")
+            print()
+
+
+# Example plan for the Q3 revenue analysis
+plan = AnalysisPlan(
+    brief=brief,
+    steps=[
+        AnalysisStep(
+            step_id=1,
+            name="Data Ingestion & Profiling",
+            description="Load all four tables, run automated profiling, document schema and null patterns.",
+            complexity=Complexity.LOW,
+            data_dependencies=["orders", "customers", "events", "pricing_history"],
+            output="profiling_report.html",
+        ),
+        AnalysisStep(
+            step_id=2,
+            name="Data Quality Assessment",
+            description="Score each dimension of quality, identify issues requiring cleaning decisions.",
+            complexity=Complexity.MEDIUM,
+            data_dependencies=["orders", "customers"],
+            output="data_quality_report.md",
+            depends_on_steps=[1],
+        ),
+        AnalysisStep(
+            step_id=3,
+            name="Revenue Trend Analysis",
+            description="Monthly revenue YoY comparison, overall and by channel.",
+            complexity=Complexity.LOW,
+            data_dependencies=["orders"],
+            output="revenue_trend_chart.png",
+            depends_on_steps=[2],
+        ),
+        AnalysisStep(
+            step_id=4,
+            name="Segment Decomposition",
+            description="Define customer segments (SMB/Enterprise/Consumer), compute segment-level revenue trends.",
+            complexity=Complexity.MEDIUM,
+            data_dependencies=["orders", "customers"],
+            output="segment_revenue_breakdown.csv + charts",
+            depends_on_steps=[2],
+        ),
+        AnalysisStep(
+            step_id=5,
+            name="Price Change Impact Analysis",
+            description="Cohort analysis: compare order frequency and revenue before/after July price change by segment.",
+            complexity=Complexity.HIGH,
+            data_dependencies=["orders", "customers", "pricing_history"],
+            output="price_impact_cohort_analysis.ipynb",
+            depends_on_steps=[3, 4],
+            notes="Requires merging pricing history to orders by SKU and date — test join logic carefully.",
+        ),
+        AnalysisStep(
+            step_id=6,
+            name="Hypothesis Testing",
+            description="Statistical test: is SMB churn rate post price-increase significantly different from Enterprise?",
+            complexity=Complexity.MEDIUM,
+            data_dependencies=["orders", "customers"],
+            output="hypothesis_test_results.md",
+            depends_on_steps=[4, 5],
+        ),
+        AnalysisStep(
+            step_id=7,
+            name="Insight Synthesis & Memo",
+            description="Write executive memo (1 page), compile findings notebook, prepare stakeholder presentation.",
+            complexity=Complexity.MEDIUM,
+            data_dependencies=[],
+            output="executive_memo.pdf + analysis_final.ipynb",
+            depends_on_steps=[6],
+        ),
+    ],
+)
+
+plan.render()
+```
+
+---
+
+## The Kickoff Notebook Structure
+
+Every analysis notebook should start with the same structural cells. This is not aesthetic preference — it is a professional standard that makes the notebook self-documenting and stakeholder-ready from the first commit.
+
+```python
+# ============================================================
+# CELL 1: Title and context
+# ============================================================
+"""
+# Q3 Revenue Decline Root Cause Analysis
+**Project:** GadaaLabs E-Commerce Revenue Analysis
+**Analyst:** [Your Name]
+**Date:** 2023-11-01
+**Version:** v1.0 — initial analysis
+
+## Objective
+Determine whether Q3 revenue decline is concentrated in a specific
+customer segment, and identify the behavioural drivers.
+
+## Deliverables
+- This notebook (full analysis)
+- Executive memo (1-page summary)
+- Stakeholder slides (top 5 findings)
+"""
+
+# ============================================================
+# CELL 2: Imports and configuration
+# ============================================================
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+from datetime import datetime
+
+pd.set_option("display.max_columns", 50)
+pd.set_option("display.max_rows", 100)
+pd.set_option("display.float_format", "{:,.2f}".format)
+
+# Project paths
+DATA_DIR = Path("../data")
+OUTPUT_DIR = Path("../outputs")
+REPORT_DIR = Path("../reports")
+
+OUTPUT_DIR.mkdir(exist_ok=True)
+REPORT_DIR.mkdir(exist_ok=True)
+
+# Analysis parameters (centralised — change once, applies everywhere)
+ANALYSIS_START = "2022-01-01"
+ANALYSIS_END = "2023-09-30"
+CHURN_WINDOW_DAYS = 90          # No purchase in 90 days = churned
+PRICE_CHANGE_DATE = "2023-07-01"
+SIGNIFICANCE_LEVEL = 0.05
+
+print(f"Analysis period: {ANALYSIS_START} to {ANALYSIS_END}")
+print(f"Notebook run at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+# ============================================================
+# CELL 3: Data loading (stub — filled in Lesson 02)
+# ============================================================
+# orders = pd.read_csv(DATA_DIR / "orders.csv", parse_dates=["order_date"])
+# customers = pd.read_csv(DATA_DIR / "customers.csv", parse_dates=["signup_date"])
+# print(f"Loaded {len(orders):,} orders, {len(customers):,} customers")
+
+# ============================================================
+# CELL 4: Findings log (updated throughout analysis)
+# ============================================================
+findings = []  # List of dicts: {section, finding, implication, confidence}
+
+def log_finding(section: str, finding: str, implication: str, confidence: str = "medium") -> None:
+    """Add a finding to the running log."""
+    findings.append({
+        "section": section,
+        "finding": finding,
+        "implication": implication,
+        "confidence": confidence,
+    })
+    print(f"[FINDING — {section}] {finding}")
+
+# Usage throughout the notebook:
+# log_finding(
+#     section="Revenue Trend",
+#     finding="Revenue declined 18% YoY in Q3 (Jul–Sep 2023).",
+#     implication="Decline is material — not seasonal noise.",
+#     confidence="high",
+# )
+```
+
+---
+
+## Key Takeaways
+
+- Expert analysis begins with the Five Questions: business objective, success metric, data availability, stakeholders, timeline. If any is unclear, stop and clarify before touching data.
+- The Analytical Brief is a pre-analysis contract between analyst and stakeholder. It prevents scope creep, forces precision, and provides a reference when the project drifts.
+- Analytical questions have a taxonomy — descriptive, diagnostic, predictive, prescriptive — and the type determines valid methods and the rigour of causal claims you can make.
+- Every finding must pass the "So What?" test: if you cannot name a specific action that changes as a result, it is observation, not insight.
+- The primary cognitive traps — HiPPO effect, confirmation bias, p-hacking, survivorship bias, streetlight effect — all have structural defences: pre-registered hypotheses, null hypothesis testing, multiple-comparison corrections, and explicit documentation of data gaps.
+- The analysis plan converts the brief into sequenced steps with effort estimates and data dependencies. It is the project manager's tool and the analyst's audit trail.
+- A consistent kickoff notebook structure — title cell, imports cell, centralised parameters, findings log — turns your working notebook into a professional deliverable from day one.
