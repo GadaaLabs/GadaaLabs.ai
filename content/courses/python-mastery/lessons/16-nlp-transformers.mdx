@@ -1,0 +1,640 @@
+---
+title: "NLP & Transformers — From Tokenization to Fine-Tuning"
+description: "Natural language processing from bag-of-words to transformers: tokenization, embeddings, attention, and HuggingFace fine-tuning. Build a sentiment analyzer and text classifier."
+duration: 32
+order: 16
+---
+
+## The Text Pipeline
+
+Every NLP system starts with raw text and ends with numbers. The pipeline is always:
+
+```
+Raw text → Normalize → Tokenize → Vectorize → Model → Decode
+```
+
+Understanding each step matters because each introduces tradeoffs: information loss, computational cost, and sensitivity to domain.
+
+## Text Preprocessing
+
+<PythonPlayground code={String.raw`import re
+import numpy as np
+
+# ── Normalization ─────────────────────────────────────────────────────────────
+def normalize(text):
+    text = text.lower()
+    text = re.sub(r"http\S+|www\.\S+", " ", text)        # Remove URLs
+    text = re.sub(r"[^a-z0-9\s'.,!?]", " ", text)        # Keep alphanumeric + punctuation
+    text = re.sub(r"\s+", " ", text).strip()              # Collapse whitespace
+    return text
+
+# ── Simple tokenizer ──────────────────────────────────────────────────────────
+def tokenize(text):
+    # Word tokenization: split on word boundaries
+    tokens = re.findall(r"\b[a-z]{2,}\b", text)
+    return tokens
+
+# ── Stop words ────────────────────────────────────────────────────────────────
+STOP_WORDS = {
+    "the", "a", "an", "is", "it", "in", "on", "at", "to", "for",
+    "of", "and", "or", "but", "not", "this", "that", "was", "are",
+    "with", "be", "by", "from", "as", "he", "she", "they", "we",
+    "you", "i", "my", "your", "its", "our", "their", "have", "has"
+}
+
+def remove_stopwords(tokens):
+    return [t for t in tokens if t not in STOP_WORDS]
+
+# ── Stemming (rule-based suffix removal) ─────────────────────────────────────
+def stem(word):
+    """Simple Porter-inspired stemmer."""
+    for suffix, replacement in [("tion","t"), ("ing",""), ("ness",""), ("ly",""),
+                                  ("ed",""), ("er",""), ("est",""), ("ies","y")]:
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[:-len(suffix)] + replacement
+    return word
+
+# ── Demo ──────────────────────────────────────────────────────────────────────
+samples = [
+    "The movie was absolutely AMAZING! A truly incredible experience.",
+    "Terrible film. Boring and predictable. Wasted my time completely.",
+    "Check this out: https://example.com/movie - it's worth watching!",
+]
+
+for text in samples:
+    normalized = normalize(text)
+    tokens = tokenize(normalized)
+    filtered = remove_stopwords(tokens)
+    stemmed = [stem(t) for t in filtered]
+    print(f"Original:  {text[:60]}")
+    print(f"Tokens:    {tokens}")
+    print(f"Filtered:  {filtered}")
+    print(f"Stemmed:   {stemmed}")
+    print()
+`} packages={["numpy"]} height={420} title="Text Preprocessing Pipeline" />
+
+## Bag of Words and TF-IDF
+
+<PythonPlayground code={String.raw`import numpy as np
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+
+corpus = [
+    "the cat sat on the mat",
+    "the cat ate the rat",
+    "the dog sat on the log",
+    "the cat and the dog are friends",
+]
+
+# ── Bag of Words ──────────────────────────────────────────────────────────────
+bow = CountVectorizer()
+X_bow = bow.fit_transform(corpus).toarray()
+print("=== Bag of Words ===")
+print(f"Vocabulary size: {len(bow.vocabulary_)}")
+print(f"Feature names: {bow.get_feature_names_out()}")
+print("Document-term matrix:")
+for i, row in enumerate(X_bow):
+    nonzero = [(bow.get_feature_names_out()[j], v) for j, v in enumerate(row) if v > 0]
+    print(f"  Doc {i}: {dict(nonzero)}")
+
+# ── TF-IDF ────────────────────────────────────────────────────────────────────
+# TF-IDF(t,d) = TF(t,d) * log(N / df(t))
+# Words appearing in every document get low IDF; rare words get high IDF
+tfidf = TfidfVectorizer()
+X_tfidf = tfidf.fit_transform(corpus).toarray()
+
+print("\\n=== TF-IDF ===")
+print("Word weights (higher = more distinctive):")
+feature_names = tfidf.get_feature_names_out()
+# Show mean TF-IDF per word (across documents)
+mean_tfidf = X_tfidf.mean(axis=0)
+sorted_idx = np.argsort(mean_tfidf)[::-1]
+for i in sorted_idx[:8]:
+    print(f"  {feature_names[i]:12s}: {mean_tfidf[i]:.4f}")
+
+# ── Cosine similarity ─────────────────────────────────────────────────────────
+def cosine_sim(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
+
+print("\\n=== Document Similarity (TF-IDF cosine) ===")
+for i in range(len(corpus)):
+    for j in range(i+1, len(corpus)):
+        sim = cosine_sim(X_tfidf[i], X_tfidf[j])
+        print(f"  Doc {i} vs Doc {j}: {sim:.4f}  [{corpus[i][:20]}...] vs [{corpus[j][:20]}...]")
+`} packages={["numpy", "scikit-learn"]} height={420} title="Bag of Words and TF-IDF" />
+
+## Word Embeddings — Intuition
+
+Before transformers, **Word2Vec** (2013) was the standard way to represent words as dense vectors. The key insight: words that appear in similar contexts should have similar vectors.
+
+```
+king - man + woman ≈ queen    (famous word analogy)
+paris - france + italy ≈ rome (geographic analogy)
+```
+
+This emerges from training on billions of words with a simple self-supervised objective: predict neighboring words.
+
+**GloVe** extends this by factorizing the word co-occurrence matrix. Both produce vectors where semantic relationships become geometric relationships.
+
+The critical limitation: **one vector per word**. "Bank" (financial) and "bank" (river) get the same embedding. Transformers solve this with contextual embeddings.
+
+## The Attention Mechanism
+
+Attention lets each token directly access information from every other token in the sequence:
+
+```python
+# Scaled dot-product attention (the core operation in every transformer)
+def attention(Q, K, V, mask=None):
+    d_k = Q.shape[-1]
+    scores = Q @ K.transpose(-2, -1) / math.sqrt(d_k)  # Scale by sqrt(d_k)
+    if mask is not None:
+        scores = scores.masked_fill(mask == 0, -1e9)
+    weights = torch.softmax(scores, dim=-1)             # Probability distribution
+    return weights @ V, weights                         # Weighted sum of values
+```
+
+Interpretation: for each token (Q), compute how much it should attend to every other token (K), then retrieve a weighted mixture of their values (V).
+
+**Multi-head attention** runs this in parallel with different learned projections, letting the model attend to different types of relationships simultaneously.
+
+## Transformer Architecture
+
+```
+Input tokens → Token Embeddings + Positional Encoding
+    ↓
+[Multi-Head Self-Attention → Add & Norm → Feed-Forward → Add & Norm] × N
+    ↓
+Output (contextualized representations)
+```
+
+**Positional encoding** injects position information since attention is order-invariant. The original transformer uses sinusoidal functions; modern models learn position embeddings.
+
+**BERT vs GPT:**
+
+| Property | BERT | GPT |
+|---|---|---|
+| Direction | Bidirectional | Left-to-right only |
+| Training | Masked LM + NSP | Next token prediction |
+| Best for | Classification, NER, QA | Generation, completion |
+| Key idea | See full context | Autoregressive |
+
+## Tokenization Deep Dive
+
+Modern tokenizers operate on **subword units**, not whole words:
+
+- **BPE (Byte-Pair Encoding)**: merge frequent byte pairs iteratively. Used by GPT, RoBERTa.
+- **WordPiece**: similar to BPE but maximizes language model likelihood. Used by BERT.
+- **SentencePiece**: language-agnostic, works on raw text. Used by T5, LLaMA.
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+text = "The quick brown fox jumped over the lazy dogs."
+
+tokens = tokenizer(text, return_tensors="pt")
+print(tokenizer.convert_ids_to_tokens(tokens.input_ids[0]))
+# ['[CLS]', 'the', 'quick', 'brown', 'fox', 'jumped', 'over', 'the', 'lazy', 'dogs', '.', '[SEP]']
+
+# Subword splitting for unknown/rare words
+rare_text = "Pneumonoultramicroscopicsilicovolcanoconiosis is challenging."
+rare_tokens = tokenizer.tokenize(rare_text)
+print(rare_tokens)
+# ['pneumon', '##oul', '##tra', '##micro', '##scop', '##ics', '##ili', ...]
+```
+
+Special tokens encode structural information:
+- `[CLS]` — classification token (BERT); its final representation used for classification
+- `[SEP]` — separates sequences in BERT
+- `[PAD]` — padding to equalize sequence lengths
+- `[MASK]` — masked token in BERT pre-training
+
+## TF-IDF Sentiment Classifier
+
+<PythonPlayground code={String.raw`import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.pipeline import Pipeline
+
+# ── Generate synthetic movie review dataset ───────────────────────────────────
+rng = np.random.default_rng(42)
+
+positive_phrases = [
+    "absolutely fantastic movie", "loved every minute of it",
+    "brilliant acting and direction", "masterpiece of cinema",
+    "highly recommend to everyone", "incredible storytelling",
+    "wonderful performances throughout", "beautifully crafted film",
+    "outstanding achievement in filmmaking", "emotionally powerful",
+    "gripping from start to finish", "superb cinematography",
+    "unforgettable characters", "thoroughly enjoyed this",
+    "one of the best films", "excellent in every way",
+]
+
+negative_phrases = [
+    "terrible waste of time", "boring and predictable",
+    "awful acting throughout", "completely disappointed",
+    "worst movie ever seen", "painfully slow and dull",
+    "horrible script and direction", "avoid at all costs",
+    "could not stay awake", "extremely disappointing film",
+    "poorly written characters", "a complete disaster",
+    "two hours of nothing", "so bad it hurts",
+    "total waste of money", "dreadful in every way",
+]
+
+def make_review(phrases, is_positive, n):
+    reviews = []
+    for _ in range(n):
+        n_phrases = rng.integers(2, 5)
+        chosen = rng.choice(phrases, n_phrases, replace=True)
+        # Add some noise words
+        noise = rng.choice(["the", "a", "it", "was", "really", "quite", "very"],
+                            rng.integers(3, 8))
+        words = list(chosen) + list(noise)
+        rng.shuffle(words)
+        review = " ".join(words)
+        reviews.append(review)
+    return reviews
+
+pos_reviews = make_review(positive_phrases, True, 250)
+neg_reviews = make_review(negative_phrases, False, 250)
+
+reviews = pos_reviews + neg_reviews
+labels  = [1]*250 + [0]*250
+
+# Shuffle
+idx = rng.permutation(500)
+reviews = [reviews[i] for i in idx]
+labels  = [labels[i] for i in idx]
+labels_arr = np.array(labels)
+
+print(f"Dataset: {len(reviews)} reviews, {labels_arr.mean():.0%} positive")
+print(f"Sample positive: {pos_reviews[0][:80]}")
+print(f"Sample negative: {neg_reviews[0][:80]}")
+
+# ── Build TF-IDF + Logistic Regression pipeline ────────────────────────────────
+pipeline = Pipeline([
+    ("tfidf", TfidfVectorizer(
+        ngram_range=(1, 2),    # Unigrams and bigrams
+        max_features=5000,
+        min_df=2,              # Ignore terms in fewer than 2 documents
+        sublinear_tf=True,     # Apply log(TF+1) instead of raw TF
+    )),
+    ("clf", LogisticRegression(C=1.0, max_iter=1000, random_state=42)),
+])
+
+# ── Cross-validation ──────────────────────────────────────────────────────────
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+for metric in ["accuracy", "precision", "recall", "f1"]:
+    scores = cross_val_score(pipeline, reviews, labels_arr, cv=cv, scoring=metric)
+    print(f"  {metric:12s}: {scores.mean():.4f} +/- {scores.std():.4f}")
+
+# ── Fit and inspect ───────────────────────────────────────────────────────────
+pipeline.fit(reviews, labels_arr)
+
+test_sentences = [
+    "This movie was absolutely fantastic and brilliant",
+    "Terrible waste of time completely awful",
+    "The acting was okay but the story was boring",
+    "Outstanding performance loved every minute",
+]
+preds = pipeline.predict(test_sentences)
+probas = pipeline.predict_proba(test_sentences)
+
+print("\\nPredictions:")
+for text, pred, prob in zip(test_sentences, preds, probas):
+    sentiment = "POSITIVE" if pred == 1 else "NEGATIVE"
+    print(f"  [{sentiment} {prob[pred]:.2%}] {text[:55]}")
+`} packages={["numpy", "scikit-learn"]} height={480} title="TF-IDF Sentiment Classifier" />
+
+<PythonPlayground code={String.raw`import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+
+# Multi-class text classifier: 4 topic categories
+rng = np.random.default_rng(99)
+
+categories = {
+    "tech":    ["software code algorithm neural network machine learning python data",
+                "computer programming database cloud API server deployment docker"],
+    "sports":  ["football basketball soccer player team game championship match score",
+                "athlete training coach tournament winner stadium league season"],
+    "finance": ["stock market investment portfolio dividend earnings revenue profit",
+                "economy inflation interest rate banking fund hedge equity bonds"],
+    "health":  ["medical doctor patient hospital treatment therapy diagnosis symptoms",
+                "medicine surgery vaccine nutrition exercise fitness wellness diet"],
+}
+
+texts, label_names = [], []
+for cat, word_sets in categories.items():
+    for _ in range(120):
+        all_words = " ".join(word_sets).split()
+        n_words = rng.integers(8, 20)
+        text = " ".join(rng.choice(all_words, n_words))
+        texts.append(text)
+        label_names.append(cat)
+
+from sklearn.preprocessing import LabelEncoder
+le = LabelEncoder()
+labels = le.fit_transform(label_names)
+
+pipeline = Pipeline([
+    ("tfidf", TfidfVectorizer(ngram_range=(1,2), max_features=3000)),
+    ("clf",   MultinomialNB(alpha=0.1)),
+])
+
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+scores = cross_val_score(pipeline, texts, labels, cv=cv, scoring="f1_weighted")
+print(f"Naive Bayes 4-class CV F1: {scores.mean():.4f} +/- {scores.std():.4f}")
+
+pipeline.fit(texts, labels)
+test = [
+    "machine learning algorithm neural network training",
+    "football championship team winning the league",
+    "stock market investment portfolio returns",
+    "medical treatment patient hospital diagnosis",
+]
+preds = le.inverse_transform(pipeline.predict(test))
+probas = pipeline.predict_proba(test)
+for text, pred, prob in zip(test, preds, probas):
+    confidence = max(prob)
+    print(f"  [{pred:8s} {confidence:.2%}] {text[:50]}")
+`} packages={["numpy", "scikit-learn"]} height={400} title="Naive Bayes Multi-Class Text Classifier" />
+
+## Fine-Tuning BERT with HuggingFace
+
+This code runs in a Python environment with PyTorch and `transformers` installed:
+
+```python
+from datasets import load_dataset
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    TrainingArguments,
+    Trainer,
+)
+import numpy as np
+from sklearn.metrics import accuracy_score, f1_score
+
+# Load dataset
+dataset = load_dataset("imdb")
+
+# Tokenizer
+tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+
+def tokenize(batch):
+    return tokenizer(
+        batch["text"],
+        truncation=True,
+        max_length=512,
+        padding="max_length",
+    )
+
+tokenized = dataset.map(tokenize, batched=True, batch_size=1000)
+tokenized.set_format("torch", columns=["input_ids", "attention_mask", "label"])
+
+# Model: DistilBERT is 40% smaller than BERT, 60% faster, retains 97% accuracy
+model = AutoModelForSequenceClassification.from_pretrained(
+    "distilbert-base-uncased",
+    num_labels=2
+)
+
+# Metrics
+def compute_metrics(eval_pred):
+    logits, labels = eval_pred
+    preds = np.argmax(logits, axis=-1)
+    return {
+        "accuracy": accuracy_score(labels, preds),
+        "f1": f1_score(labels, preds, average="binary"),
+    }
+
+# Training arguments
+args = TrainingArguments(
+    output_dir="./results",
+    num_train_epochs=3,
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=32,
+    warmup_ratio=0.1,
+    weight_decay=0.01,
+    learning_rate=2e-5,
+    evaluation_strategy="epoch",
+    save_strategy="epoch",
+    load_best_model_at_end=True,
+    fp16=True,       # Mixed precision for speed
+)
+
+trainer = Trainer(
+    model=model,
+    args=args,
+    train_dataset=tokenized["train"].select(range(5000)),   # Subset for demo
+    eval_dataset=tokenized["test"].select(range(1000)),
+    compute_metrics=compute_metrics,
+)
+
+trainer.train()
+# Fine-tuned BERT reaches ~93% accuracy on IMDB vs ~90% for TF-IDF + LR
+```
+
+## Embeddings for Similarity Search
+
+```python
+from sentence_transformers import SentenceTransformer
+import numpy as np
+
+model = SentenceTransformer("all-MiniLM-L6-v2")   # 80MB, fast, excellent quality
+
+docs = [
+    "Python is a high-level programming language",
+    "Machine learning requires lots of data",
+    "Neural networks are inspired by the brain",
+    "The stock market crashed yesterday",
+    "Interest rates affect mortgage payments",
+]
+
+doc_embeddings = model.encode(docs, normalize_embeddings=True)
+
+query = "deep learning with neural nets"
+query_embedding = model.encode(query, normalize_embeddings=True)
+
+# Cosine similarity is just dot product when vectors are normalized
+similarities = doc_embeddings @ query_embedding
+
+print("Semantic similarity to:", query)
+for doc, sim in sorted(zip(docs, similarities), key=lambda x: -x[1]):
+    print(f"  {sim:.4f}: {doc}")
+# Output correctly ranks neural networks > ML > Python > finance docs
+```
+
+## PROJECT: Sentiment Analyzer
+
+<PythonPlayground code={String.raw`import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
+from sklearn.metrics import classification_report
+import re
+
+rng = np.random.default_rng(7)
+
+# ── Richer synthetic dataset (500 reviews) ────────────────────────────────────
+POSITIVE = [
+    "brilliant masterpiece film loved every second",
+    "fantastic performances outstanding direction beautiful story",
+    "absolutely amazing movie incredible experience wonderful",
+    "gripping emotional journey excellent acting highly recommend",
+    "stunning visuals perfect pacing loved the characters",
+    "one of the best films I have ever seen amazing",
+    "deeply moving and thought provoking brilliant screenplay",
+    "outstanding ensemble cast superb writing loved it",
+    "thoroughly entertaining from start to finish recommend",
+    "beautiful touching story excellent in every way",
+]
+NEGATIVE = [
+    "terrible boring waste time awful disappointed",
+    "horrible acting dreadful plot completely unwatchable",
+    "worst film ever made avoid disaster embarrassing",
+    "painfully slow and dull could not finish it",
+    "absolutely dreadful waste money bad script direction",
+    "poor direction terrible dialogue boring predictable",
+    "awful disappointing mess incoherent storyline",
+    "disgraceful production terrible performances avoid",
+    "tedious and pointless complete waste of time",
+    "extremely bad poor quality disappointing in every way",
+]
+
+def augment(phrases, n):
+    reviews = []
+    for _ in range(n):
+        base = rng.choice(phrases)
+        words = base.split()
+        # Random word dropout
+        keep = rng.random(len(words)) > 0.15
+        words = [w for w, k in zip(words, keep) if k]
+        # Random word repeat
+        if len(words) > 2:
+            idx = rng.integers(len(words))
+            words.insert(idx, words[idx])
+        reviews.append(" ".join(words))
+    return reviews
+
+pos = augment(POSITIVE, 250)
+neg = augment(NEGATIVE, 250)
+reviews = pos + neg
+labels = np.array([1]*250 + [0]*250)
+idx = rng.permutation(500)
+reviews = [reviews[i] for i in idx]
+labels = labels[idx]
+
+print(f"Dataset: {len(reviews)} reviews")
+print(f"Class balance: {labels.mean():.0%} positive")
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+pipeline = Pipeline([
+    ("tfidf", TfidfVectorizer(
+        ngram_range=(1, 3),
+        max_features=8000,
+        sublinear_tf=True,
+        min_df=1,
+    )),
+    ("clf", LogisticRegression(C=2.0, solver="lbfgs", max_iter=2000, random_state=42)),
+])
+
+# ── Cross-validation ──────────────────────────────────────────────────────────
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+for metric in ["accuracy", "f1", "roc_auc"]:
+    s = cross_val_score(pipeline, reviews, labels, cv=cv, scoring=metric)
+    print(f"  {metric:12s}: {s.mean():.4f} +/- {s.std():.4f}")
+
+# ── Train and evaluate ────────────────────────────────────────────────────────
+X_train, X_test, y_train, y_test = train_test_split(
+    reviews, labels, test_size=0.2, stratify=labels, random_state=42
+)
+pipeline.fit(X_train, y_train)
+y_pred = pipeline.predict(X_test)
+print("\\n" + classification_report(y_test, y_pred, target_names=["Negative","Positive"]))
+
+# ── Most predictive words ─────────────────────────────────────────────────────
+tfidf = pipeline.named_steps["tfidf"]
+clf   = pipeline.named_steps["clf"]
+feature_names = np.array(tfidf.get_feature_names_out())
+coef = clf.coef_[0]
+
+print("Top positive words/phrases:")
+for idx in np.argsort(coef)[-10:][::-1]:
+    print(f"  +{coef[idx]:.3f}  {feature_names[idx]}")
+
+print("\\nTop negative words/phrases:")
+for idx in np.argsort(coef)[:10]:
+    print(f"  {coef[idx]:.3f}  {feature_names[idx]}")
+
+# ── Sample predictions ────────────────────────────────────────────────────────
+test_reviews = [
+    "This was a brilliant and moving experience highly recommend",
+    "Terrible boring film waste of time awful",
+    "Not bad but could be better mixed feelings",
+    "Absolutely stunning masterpiece loved every moment",
+]
+probas = pipeline.predict_proba(test_reviews)
+print("\\nSample predictions:")
+for text, prob in zip(test_reviews, probas):
+    label = "POSITIVE" if prob[1] > 0.5 else "NEGATIVE"
+    print(f"  [{label} {max(prob):.1%}] {text[:55]}")
+`} packages={["numpy", "scikit-learn"]} height={560} title="Sentiment Analyzer — Full Project" />
+
+## Prompt Engineering for Generative Models
+
+```python
+from groq import Groq
+
+client = Groq()
+
+# ── System prompt pattern ─────────────────────────────────────────────────────
+response = client.chat.completions.create(
+    model="llama-3.3-70b-versatile",
+    messages=[
+        {
+            "role": "system",
+            "content": "You are a sentiment analysis expert. Analyze text and return JSON only."
+        },
+        {
+            "role": "user",
+            "content": "Analyze: 'The film had stunning visuals but a weak plot.'"
+        }
+    ],
+    response_format={"type": "json_object"},
+)
+
+# ── Few-shot pattern ──────────────────────────────────────────────────────────
+few_shot = [
+    {"role": "user",      "content": "Classify: 'The model crashed.' → "},
+    {"role": "assistant", "content": "TECHNICAL_ISSUE"},
+    {"role": "user",      "content": "Classify: 'Payment declined.' → "},
+    {"role": "assistant", "content": "BILLING_ISSUE"},
+    {"role": "user",      "content": "Classify: 'Cannot login to account.' → "},
+]
+
+# ── Chain-of-thought ──────────────────────────────────────────────────────────
+cot_prompt = """
+<task>Classify the customer support ticket below.</task>
+<instructions>
+1. Identify the core problem described
+2. Consider which department handles this type of issue
+3. Rate urgency from 1-5
+4. Output JSON: {"category": "...", "urgency": N, "summary": "..."}
+</instructions>
+<ticket>My API key stopped working and I have a demo in 2 hours!</ticket>
+"""
+```
+
+## Key Takeaways
+
+- TF-IDF + logistic regression remains competitive for short-text classification; always establish this baseline before reaching for transformers
+- BERT-style models produce **contextual** embeddings — the same word gets different vectors in different sentences; this resolves polysemy
+- BPE/WordPiece tokenization means out-of-vocabulary words are impossible — every character sequence can be tokenized
+- Fine-tuning requires only 2-5 epochs; too many epochs causes catastrophic forgetting of pre-trained knowledge
+- `[CLS]` token's final-layer embedding is the standard representation for classification tasks
+- Cosine similarity between normalized embeddings is equivalent to dot product — normalize once, then use matrix multiplication for bulk similarity search
+- Use `sentence-transformers` for semantic similarity; avoid fine-tuning BERT from scratch unless you have &gt;10k labeled examples
+- Prompt engineering (system prompts, few-shot examples, chain-of-thought) can substitute for fine-tuning when labeled data is scarce

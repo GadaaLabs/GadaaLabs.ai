@@ -1,0 +1,598 @@
+---
+title: "Pandas — DataFrames, Cleaning & Analysis"
+description: "Pandas for production data work: loading, cleaning, transforming, grouping, and analyzing real datasets. Build a complete sales data analyzer that handles messy real-world data."
+duration: 30
+order: 10
+---
+
+## The Core Abstractions: Series and DataFrame
+
+Pandas has two fundamental data structures:
+
+- **Series**: a 1D labeled array — like a column in a spreadsheet with an index
+- **DataFrame**: a 2D table of Series — like a spreadsheet, where every column is a Series sharing the same index
+
+The *index* is the key that makes pandas different from NumPy. Every row has a label (the index), and operations align on these labels automatically. When you add two DataFrames, pandas lines them up by index — not by position.
+
+<PythonPlayground code={String.raw`import pandas as pd
+import numpy as np
+
+# Series
+s = pd.Series([10, 20, 30, 40], index=["a", "b", "c", "d"], name="scores")
+print("Series:")
+print(s)
+print(f"\nIndex: {s.index.tolist()}")
+print(f"Values: {s.values}")
+print(f"dtype: {s.dtype}")
+print()
+
+# Series arithmetic aligns on index
+s2 = pd.Series([1, 2, 3], index=["b", "c", "e"])
+print("s + s2 (aligns on index, NaN where no match):")
+print(s + s2)
+print()
+
+# DataFrame from a dict
+df = pd.DataFrame({
+    "name":   ["Alice", "Bob", "Carol", "Dave"],
+    "age":    [30, 25, 35, 28],
+    "salary": [75000.0, 60000.0, 90000.0, 55000.0],
+    "dept":   ["eng", "sales", "eng", "marketing"],
+})
+print("DataFrame:")
+print(df)
+print(f"\nShape: {df.shape}  (rows, cols)")
+print(f"dtypes:\n{df.dtypes}")
+`} packages={["numpy", "pandas"]} />
+
+## Indexing: .loc, .iloc, Boolean, .at, .iat
+
+<PythonPlayground code={String.raw`import pandas as pd
+
+df = pd.DataFrame({
+    "name":   ["Alice", "Bob", "Carol", "Dave", "Eve"],
+    "age":    [30, 25, 35, 28, 22],
+    "salary": [75000.0, 60000.0, 90000.0, 55000.0, 48000.0],
+    "dept":   ["eng", "sales", "eng", "marketing", "sales"],
+}, index=["a", "b", "c", "d", "e"])  # string index
+
+print("DataFrame with string index:")
+print(df)
+print()
+
+# .loc: label-based
+print(".loc['b'] (row 'b' as Series):")
+print(df.loc["b"])
+print()
+print(".loc['a':'c', 'name':'age'] (label slice, inclusive):")
+print(df.loc["a":"c", "name":"age"])
+print()
+
+# .iloc: position-based (0-indexed, exclusive end like Python slices)
+print(".iloc[1:3, 0:2] (rows 1-2, cols 0-1):")
+print(df.iloc[1:3, 0:2])
+print()
+
+# Boolean indexing
+high_earners = df[df["salary"] > 60000]
+print("High earners (salary > 60000):")
+print(high_earners)
+print()
+
+# Multiple conditions: & (and), | (or), ~ (not)
+# Note: use parentheses — Python operator precedence bites here
+result = df[(df["salary"] > 55000) & (df["dept"] == "eng")]
+print("Eng with salary > 55000:")
+print(result)
+print()
+
+# .at and .iat: single-cell access (faster than .loc/.iloc for scalar)
+print(f".at['c', 'salary']: {df.at['c', 'salary']}")
+print(f".iat[0, 1]: {df.iat[0, 1]}")
+`} packages={["numpy", "pandas"]} />
+
+## Data Inspection
+
+<PythonPlayground code={String.raw`import pandas as pd
+import numpy as np
+import io
+
+# Create a slightly messy dataset for inspection
+csv_text = """id,name,age,salary,dept,rating
+1,Alice,30,75000,eng,4.5
+2,Bob,,60000,sales,3.8
+3,Carol,35,90000,eng,
+4,Dave,28,55000,marketing,4.1
+5,Eve,22,48000,sales,3.5
+6,Frank,45,110000,eng,4.9
+7,Grace,31,72000,,4.2
+8,Hank,28,55000,marketing,4.1
+"""
+
+df = pd.read_csv(io.StringIO(csv_text))
+print("=== df.info() ===")
+df.info()
+print()
+
+print("=== df.describe() ===")
+print(df.describe())
+print()
+
+print("=== df.head(3) ===")
+print(df.head(3))
+
+print("\n=== Missing values ===")
+print(df.isnull().sum())
+print(f"\nTotal missing: {df.isnull().sum().sum()}")
+print(f"% missing per column:\n{(df.isnull().mean() * 100).round(1)}")
+print()
+
+print("=== Cardinality ===")
+print(df.nunique())
+print()
+
+print("=== value_counts (dept) ===")
+print(df["dept"].value_counts())
+print()
+
+print("=== value_counts with normalize ===")
+print(df["dept"].value_counts(normalize=True).round(3))
+`} packages={["numpy", "pandas"]} />
+
+## Handling Missing Data
+
+Missing data in pandas is represented as `NaN` (for floats) or `pd.NA` (for nullable integer/string types). Understanding where `NaN` comes from and how to handle it is one of the most important practical skills.
+
+<PythonPlayground code={String.raw`import pandas as pd
+import numpy as np
+
+df = pd.DataFrame({
+    "a": [1.0, 2.0, np.nan, 4.0, np.nan],
+    "b": [10, np.nan, 30, np.nan, 50],
+    "c": ["x", "y", None, "w", "v"],
+    "d": [1.1, 2.2, 3.3, 4.4, 5.5],
+})
+print("Original:")
+print(df)
+print()
+
+# Detection
+print("isnull():")
+print(df.isnull())
+print()
+
+# dropna: drop rows/columns with any NaN
+print("dropna() — drop rows with any NaN:")
+print(df.dropna())
+print()
+
+# dropna with thresh: keep rows with at least N non-NaN values
+print("dropna(thresh=3) — keep rows with >=3 non-null values:")
+print(df.dropna(thresh=3))
+print()
+
+# dropna on subset
+print("dropna(subset=['a','b']) — only care about columns a and b:")
+print(df.dropna(subset=["a", "b"]))
+print()
+
+# fillna
+print("fillna(0):")
+print(df.fillna(0))
+print()
+
+# fill with column-specific values
+fill_values = {"a": df["a"].mean(), "b": df["b"].median(), "c": "unknown"}
+print(f"Fill a with mean ({df['a'].mean():.1f}), b with median ({df['b'].median():.0f}), c with 'unknown':")
+print(df.fillna(fill_values))
+print()
+
+# forward fill and backward fill
+print("ffill (forward fill — carry last valid value forward):")
+print(df[["a", "b"]].ffill())
+`} packages={["numpy", "pandas"]} />
+
+## Data Types, Conversion & String Operations
+
+<PythonPlayground code={String.raw`import pandas as pd
+import numpy as np
+import io
+
+csv_text = """date,amount,category,description
+2024-01-15,  $1,250.00  ,FOOD, Grocery store purchase
+2024-01-16,99.99,TECH,Amazon.com order
+2024-01-17, bad_amount,FOOD,Coffee shop
+2024-01-18,450.00,TRAVEL, Flight to NYC
+2024-01-19,75.50,TECH,Monthly subscription
+"""
+df = pd.read_csv(io.StringIO(csv_text))
+print("Raw data:")
+print(df)
+print(f"\ndtypes:\n{df.dtypes}")
+print()
+
+# String cleaning
+df["description"] = df["description"].str.strip()
+df["category"] = df["category"].str.strip().str.upper()
+
+# Clean the amount column
+df["amount_clean"] = (df["amount"]
+    .str.strip()
+    .str.replace(r'[$,]', '', regex=True)  # remove $ and commas
+    .str.strip()
+)
+df["amount_num"] = pd.to_numeric(df["amount_clean"], errors="coerce")
+
+# Parse dates
+df["date"] = pd.to_datetime(df["date"])
+
+print("Cleaned data:")
+print(df[["date", "amount_num", "category", "description"]])
+print(f"\ndtypes:\n{df[['date', 'amount_num', 'category', 'description']].dtypes}")
+print()
+
+# String accessor operations
+df["desc_lower"] = df["description"].str.lower()
+df["desc_words"] = df["description"].str.split().str.len()
+is_amazon = df["description"].str.contains("amazon", case=False, na=False)
+
+print(f"Contains 'amazon': {is_amazon.values}")
+print(f"Word counts:\n{df[['description', 'desc_words']]}")
+print()
+
+# Extract with regex
+amounts = pd.Series(["$1,250.00", "$99.99", "$450.00"])
+extracted = amounts.str.extract(r'\$([0-9,]+\.[0-9]{2})')
+print("Extracted amounts:", extracted[0].tolist())
+`} packages={["numpy", "pandas"]} />
+
+## GroupBy: Split-Apply-Combine
+
+GroupBy is pandas' most powerful feature. The pattern: split the DataFrame into groups, apply a function to each group, combine the results.
+
+<PythonPlayground code={String.raw`import pandas as pd
+import numpy as np
+
+rng = np.random.default_rng(42)
+
+# Generate sales data
+n = 200
+products = ["Widget", "Gadget", "Doohickey", "Thingamajig"]
+regions = ["North", "South", "East", "West"]
+
+df = pd.DataFrame({
+    "product": rng.choice(products, n),
+    "region": rng.choice(regions, n),
+    "sales": rng.integers(100, 5000, n).astype(float),
+    "units": rng.integers(1, 50, n),
+    "quarter": rng.choice(["Q1", "Q2", "Q3", "Q4"], n),
+})
+
+print("Sample data (first 5 rows):")
+print(df.head())
+print()
+
+# Basic groupby
+print("=== Mean sales by product ===")
+print(df.groupby("product")["sales"].mean().round(2))
+print()
+
+# Multiple aggregations with agg
+print("=== Multiple aggregations by product ===")
+result = df.groupby("product")["sales"].agg(
+    count="count",
+    mean="mean",
+    total="sum",
+    max_sale="max"
+).round(2)
+print(result)
+print()
+
+# Named aggregation on multiple columns
+print("=== Multi-column named aggregation ===")
+result2 = df.groupby("region").agg(
+    total_sales=("sales", "sum"),
+    avg_units=("units", "mean"),
+    num_transactions=("sales", "count")
+).round(2)
+print(result2.sort_values("total_sales", ascending=False))
+print()
+
+# Groupby on multiple keys
+print("=== Pivot: product × quarter total sales ===")
+pivot = df.groupby(["product", "quarter"])["sales"].sum().unstack(fill_value=0)
+print(pivot.astype(int))
+print()
+
+# transform — keeps the same index as the original DataFrame
+# Great for adding group-level statistics as a new column
+df["product_avg_sales"] = df.groupby("product")["sales"].transform("mean")
+df["sales_vs_avg"] = (df["sales"] - df["product_avg_sales"]).round(2)
+print("=== Sales relative to product average (first 8 rows) ===")
+print(df[["product", "sales", "product_avg_sales", "sales_vs_avg"]].head(8))
+`} packages={["numpy", "pandas"]} />
+
+## Merging, Joining, and Concatenating
+
+<PythonPlayground code={String.raw`import pandas as pd
+
+# Two related tables
+employees = pd.DataFrame({
+    "emp_id": [1, 2, 3, 4, 5],
+    "name": ["Alice", "Bob", "Carol", "Dave", "Eve"],
+    "dept_id": [10, 20, 10, 30, 20],
+})
+
+departments = pd.DataFrame({
+    "dept_id": [10, 20, 40],
+    "dept_name": ["Engineering", "Sales", "Marketing"],
+    "budget": [500000, 200000, 150000],
+})
+
+print("Employees:")
+print(employees)
+print("\nDepartments:")
+print(departments)
+print()
+
+# Inner join: only matching rows from both
+inner = pd.merge(employees, departments, on="dept_id", how="inner")
+print("INNER join (only matching dept_ids):")
+print(inner)
+print()
+
+# Left join: all employees, NaN for unmatched departments
+left = pd.merge(employees, departments, on="dept_id", how="left")
+print("LEFT join (all employees, NaN for unmatched depts):")
+print(left)
+print()
+
+# concat: stack DataFrames vertically (or horizontally)
+q1_sales = pd.DataFrame({"region": ["North","South"], "sales": [100, 200]})
+q2_sales = pd.DataFrame({"region": ["North","East"],  "sales": [150, 175]})
+
+combined = pd.concat([q1_sales, q2_sales], keys=["Q1","Q2"])
+print("Concat with keys:")
+print(combined)
+print()
+
+# Reset index after concat if you don't want the MultiIndex
+combined_reset = pd.concat([q1_sales, q2_sales], ignore_index=True)
+print("Concat with reset index:")
+print(combined_reset)
+`} packages={["numpy", "pandas"]} />
+
+## Time Series
+
+<PythonPlayground code={String.raw`import pandas as pd
+import numpy as np
+
+# Create a time series
+rng = np.random.default_rng(42)
+dates = pd.date_range("2024-01-01", periods=90, freq="D")
+values = 100 + np.cumsum(rng.standard_normal(90))  # random walk
+
+ts = pd.Series(values, index=dates, name="price")
+print("Time series (first 5):")
+print(ts.head())
+print(f"\nDatetimeIndex freq: {ts.index.freq}")
+print()
+
+# Resampling: group by time period
+print("Monthly mean:")
+print(ts.resample("ME").mean().round(2))  # ME = Month End
+print()
+
+print("Weekly min/max:")
+print(ts.resample("W").agg(["min", "max"]).round(2).head(4))
+print()
+
+# Rolling statistics
+ts_df = ts.to_frame()
+ts_df["ma7"]  = ts.rolling(window=7).mean()   # 7-day moving average
+ts_df["ma30"] = ts.rolling(window=30).mean()  # 30-day moving average
+ts_df["std7"] = ts.rolling(window=7).std()    # 7-day rolling std
+
+print("Rolling stats (last 5 rows):")
+print(ts_df.tail(5).round(2))
+print()
+
+# DatetimeIndex accessors
+df_dates = pd.DataFrame({"date": dates, "value": values})
+df_dates["month"]    = df_dates["date"].dt.month
+df_dates["dow"]      = df_dates["date"].dt.day_name()
+df_dates["is_weekend"] = df_dates["date"].dt.dayofweek >= 5
+
+print("Avg by day of week:")
+print(df_dates.groupby("dow")["value"].mean().round(2).sort_values(ascending=False).head(5))
+`} packages={["numpy", "pandas"]} />
+
+## Performance Tips
+
+```python
+# 1. Avoid chained indexing — it can operate on copies
+df["col"][mask] = value        # BAD: may not modify df
+df.loc[mask, "col"] = value    # GOOD: always modifies df
+
+# 2. Use vectorized string ops (.str accessor) instead of apply
+df["upper"] = df["name"].apply(lambda x: x.upper())  # SLOW
+df["upper"] = df["name"].str.upper()                   # FAST
+
+# 3. Use categorical for low-cardinality string columns
+df["status"] = df["status"].astype("category")  # saves memory, speeds groupby
+
+# 4. Prefer agg/transform over apply — apply is pure Python
+df.groupby("col").agg("mean")               # fast C
+df.groupby("col").apply(lambda g: g.mean()) # slow Python
+
+# 5. Read only what you need
+df = pd.read_csv("big.csv", usecols=["a", "b", "c"])
+```
+
+## PROJECT: Sales Data Analyzer
+
+<PythonPlayground code={String.raw`import pandas as pd
+import numpy as np
+import io
+
+# --- Generate a realistic, messy sales dataset ---
+rng = np.random.default_rng(42)
+N = 1000
+
+products = ["Widget Pro", "Gadget Max", "Doohickey Lite", "widget pro", "GADGET MAX"]
+regions = ["North", "South", "East", "West", "NORTH", "south"]
+customers = [f"CUST{i:04d}" for i in range(1, 51)]  # 50 customers
+
+raw_data = {
+    "order_id":   range(1, N+1),
+    "date":       pd.date_range("2023-01-01", periods=N, freq="8H").strftime("%Y-%m-%d"),
+    "product":    rng.choice(products, N),
+    "region":     rng.choice(regions, N),
+    "customer_id": rng.choice(customers, N),
+    "units":      rng.integers(1, 50, N).astype(float),
+    "unit_price": rng.choice([9.99, 24.99, 49.99, 99.99, np.nan], N),
+    "discount":   rng.choice([0, 0.05, 0.10, 0.15, 0.20, np.nan], N),
+}
+
+df = pd.DataFrame(raw_data)
+
+# Introduce messiness
+# Duplicate 50 rows
+dup_idx = rng.choice(N, 50, replace=False)
+df = pd.concat([df, df.iloc[dup_idx]], ignore_index=True)
+
+# Set some fields to NaN
+nan_idx = rng.choice(len(df), 30, replace=False)
+df.loc[nan_idx, "units"] = np.nan
+
+print(f"Raw dataset: {len(df)} rows, {df.shape[1]} columns")
+print(f"Missing values:\n{df.isnull().sum()}")
+print(f"\nSample of messy data:")
+print(df[df["product"].str.contains("widget", case=True, na=False)]["product"].value_counts())
+`} packages={["numpy", "pandas"]} />
+
+<PythonPlayground code={String.raw`import pandas as pd
+import numpy as np
+import io
+
+# Rebuild dataset compactly for this playground
+rng = np.random.default_rng(42)
+N = 1000
+
+products_clean = ["Widget Pro", "Gadget Max", "Doohickey Lite", "Thingamajig"]
+regions_clean = ["North", "South", "East", "West"]
+products_messy = ["Widget Pro", "Gadget Max", "Doohickey Lite",
+                  "widget pro", "GADGET MAX", "Widget Pro"]
+regions_messy  = ["North", "South", "East", "West", "NORTH", "south"]
+customers = [f"CUST{i:04d}" for i in range(1, 51)]
+
+df = pd.DataFrame({
+    "order_id":    range(1, N+1),
+    "date":        pd.date_range("2023-01-01", periods=N, freq="8H").strftime("%Y-%m-%d"),
+    "product":     rng.choice(products_messy, N),
+    "region":      rng.choice(regions_messy, N),
+    "customer_id": rng.choice(customers, N),
+    "units":       rng.integers(1, 50, N).astype(float),
+    "unit_price":  rng.choice([9.99, 24.99, 49.99, 99.99], N).astype(float),
+    "discount":    rng.choice([0.0, 0.05, 0.10, 0.15, 0.20], N),
+})
+
+# Add duplicates and NaNs
+dup_idx = rng.choice(N, 50, replace=False)
+df = pd.concat([df, df.iloc[dup_idx]], ignore_index=True)
+nan_idx = rng.choice(len(df), 30, replace=False)
+df.loc[nan_idx, "units"] = np.nan
+
+print(f"Before cleaning: {len(df)} rows")
+
+# === CLEANING ===
+
+# 1. Remove duplicates
+df = df.drop_duplicates(subset=[c for c in df.columns if c != "order_id"])
+print(f"After dedup:     {len(df)} rows")
+
+# 2. Standardize categorical columns
+df["product"] = df["product"].str.strip().str.title()
+df["region"]  = df["region"].str.strip().str.title()
+
+# 3. Fix date type
+df["date"] = pd.to_datetime(df["date"])
+
+# 4. Handle missing units (fill with median)
+df["units"] = df["units"].fillna(df["units"].median())
+
+# 5. Compute derived columns
+df["revenue"] = df["units"] * df["unit_price"] * (1 - df["discount"])
+df["month"]   = df["date"].dt.to_period("M")
+df["quarter"] = df["date"].dt.to_period("Q")
+
+print(f"After cleaning:  {len(df)} rows, {df.isnull().sum().sum()} NaN values")
+print()
+
+# === ANALYSIS ===
+
+print("=" * 55)
+print("SALES ANALYSIS REPORT")
+print("=" * 55)
+
+# Revenue by product
+print("\n--- Revenue by Product ---")
+by_product = df.groupby("product")["revenue"].agg(
+    total="sum",
+    avg_order="mean",
+    transactions="count"
+).sort_values("total", ascending=False)
+by_product["total"] = by_product["total"].map("{chr(36)}{:,.0f}".format)
+by_product["avg_order"] = by_product["avg_order"].map("{chr(36)}{:,.2f}".format)
+print(by_product)
+
+# Revenue by region
+print("\n--- Revenue by Region ---")
+by_region = df.groupby("region")["revenue"].sum().sort_values(ascending=False)
+total_rev = df["revenue"].sum()
+for region, rev in by_region.items():
+    pct = rev / total_rev * 100
+    print(f"  {region:<10} {chr(36)}{rev:>10,.0f}  ({pct:.1f}%)")
+
+# Monthly revenue trend
+print("\n--- Monthly Revenue (2023) ---")
+monthly = df.groupby("month")["revenue"].sum()
+max_month = monthly.idxmax()
+for period, rev in monthly.items():
+    bar = "█" * int(rev / monthly.max() * 20)
+    marker = " ← peak" if period == max_month else ""
+    print(f"  {str(period):<10} {chr(36)}{rev:>8,.0f}  {bar}{marker}")
+
+# Top 5 customers
+print("\n--- Top 5 Customers by Revenue ---")
+top_customers = (df.groupby("customer_id")["revenue"]
+                 .sum()
+                 .sort_values(ascending=False)
+                 .head(5))
+for cust, rev in top_customers.items():
+    pct = rev / total_rev * 100
+    print(f"  {cust}: {chr(36)}{rev:,.0f} ({pct:.1f}% of total)")
+
+# Growth rate (MoM)
+print("\n--- Month-over-Month Growth ---")
+monthly_series = df.groupby("month")["revenue"].sum()
+mom_growth = monthly_series.pct_change() * 100
+for period, growth in mom_growth.dropna().items():
+    arrow = "▲" if growth > 0 else "▼"
+    print(f"  {str(period)}: {arrow} {growth:+.1f}%")
+
+print(f"\nTotal Revenue: {chr(36)}{total_rev:,.0f}")
+print(f"Total Orders:  {len(df):,}")
+print(f"Avg Order:     {chr(36)}{df['revenue'].mean():,.2f}")
+`} packages={["numpy", "pandas"]} />
+
+## Key Takeaways
+
+- **Index alignment is pandas' superpower and footgun**: operations between DataFrames/Series automatically align on the index — great for correctness, but unexpected when your indexes don't match and you get all-NaN results
+- **`.loc` is label-based, `.iloc` is position-based**: never mix them up, and always use `.loc[mask, col] = value` to avoid the chained-assignment warning
+- **`pd.to_numeric(errors='coerce')` and `pd.to_datetime` are your first cleaning steps**: they turn bad data into `NaN` rather than raising exceptions, giving you explicit control over what to do next
+- **`groupby().agg()` with named aggregations is more readable than chaining**: `agg(total=("col", "sum"), count=("col", "count"))` produces a clean, named-column result in one call
+- **`transform` keeps the original shape**: use it when you want to add a group statistic as a column to the original DataFrame without reducing rows
+- **Categorical dtype is a free optimization**: string columns with low cardinality (status, region, category) use 5–20x less memory as `category` and sort/groupby faster
+- **`merge` vs `concat`**: `merge` joins on column values (like SQL JOIN); `concat` stacks DataFrames along an axis (like UNION ALL) — they solve different problems
+- **Chained indexing (`df["col"][mask] = val`) may silently fail**: pandas can't tell if you're working on a copy or a view; always use `.loc` for assignment

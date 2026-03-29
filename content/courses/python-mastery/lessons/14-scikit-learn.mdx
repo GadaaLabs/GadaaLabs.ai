@@ -1,0 +1,540 @@
+---
+title: "Machine Learning with scikit-learn"
+description: "End-to-end machine learning in Python: the scikit-learn API, preprocessing, model selection, evaluation, and hyperparameter tuning. Build a complete customer churn predictor."
+duration: 32
+order: 14
+---
+
+## The ML Workflow
+
+Every machine learning project follows the same arc:
+
+```
+Problem Definition → Data Collection → Preprocessing → Feature Engineering
+→ Model Selection → Training → Evaluation → Hyperparameter Tuning → Deployment
+```
+
+scikit-learn covers everything from preprocessing through evaluation in a single, consistent API. Understanding its conventions unlocks the entire ecosystem.
+
+## The Estimator Protocol
+
+Every scikit-learn object follows the same interface:
+
+- `fit(X, y)` — learn from data
+- `predict(X)` — make predictions (models)
+- `transform(X)` — transform data (preprocessors)
+- `fit_transform(X, y)` — fit then transform in one step
+
+This consistency is the library's superpower. A `StandardScaler` and a `RandomForestClassifier` have the same method names. Pipeline composition becomes trivial.
+
+```python
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_train)   # Learn mean/std, then scale
+X_test_scaled = scaler.transform(X_test)   # Use learned mean/std (never refit!)
+
+clf = RandomForestClassifier(n_estimators=100)
+clf.fit(X_scaled, y_train)
+predictions = clf.predict(X_test_scaled)
+```
+
+The critical rule: **fit only on training data, transform both train and test**. Fitting on test data is data leakage.
+
+## Data Preprocessing
+
+<PythonPlayground code={String.raw`import numpy as np
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder, OneHotEncoder
+from sklearn.impute import SimpleImputer
+
+rng = np.random.default_rng(42)
+
+# --- Scaling ---
+X = rng.normal(loc=[100, 0.01, 1000], scale=[20, 0.005, 200], size=(8, 3))
+print("Raw data (3 features with very different scales):")
+print(X.round(2))
+
+scaler = StandardScaler()
+X_std = scaler.fit_transform(X)
+print("\\nAfter StandardScaler (mean=0, std=1):")
+print(X_std.round(3))
+print(f"Means: {X_std.mean(axis=0).round(6)}")
+print(f"Stds:  {X_std.std(axis=0).round(6)}")
+
+minmax = MinMaxScaler()
+X_mm = minmax.fit_transform(X)
+print("\\nAfter MinMaxScaler (range 0-1):")
+print(X_mm.round(3))
+
+# --- Imputation ---
+X_missing = np.array([[1.0, np.nan, 3.0],
+                       [4.0, 5.0,   np.nan],
+                       [np.nan, 8.0, 9.0],
+                       [10.0, 11.0, 12.0]])
+
+imputer = SimpleImputer(strategy='mean')
+X_filled = imputer.fit_transform(X_missing)
+print("\\nImputed (missing replaced with column mean):")
+print(X_filled)
+`} packages={["numpy", "scikit-learn"]} height={380} title="Scaling and Imputation" />
+
+<PythonPlayground code={String.raw`import numpy as np
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+
+# --- Label Encoding (ordinal categories) ---
+categories = ['bronze', 'silver', 'gold', 'silver', 'platinum', 'bronze']
+le = LabelEncoder()
+encoded = le.fit_transform(categories)
+print("Label Encoding (ordinal):")
+print(f"  Classes: {le.classes_}")
+print(f"  Encoded: {encoded}")
+print(f"  Decoded: {le.inverse_transform([0, 2, 3])}")
+
+# --- One-Hot Encoding (nominal categories) ---
+colors = np.array(['red', 'blue', 'green', 'red', 'blue']).reshape(-1, 1)
+ohe = OneHotEncoder(sparse_output=False)
+encoded_ohe = ohe.fit_transform(colors)
+print("\\nOne-Hot Encoding (nominal):")
+print(f"  Categories: {ohe.categories_}")
+print(f"  Shape: {encoded_ohe.shape}")
+print(encoded_ohe)
+
+# --- Polynomial Features ---
+from sklearn.preprocessing import PolynomialFeatures
+X = np.array([[2, 3], [4, 1]])
+poly = PolynomialFeatures(degree=2, include_bias=False)
+X_poly = poly.fit_transform(X)
+print("\\nPolynomial Features (degree=2):")
+print(f"  Feature names: {poly.get_feature_names_out(['a', 'b'])}")
+print(f"  Original: {X}")
+print(f"  Expanded: {X_poly}")
+`} packages={["numpy", "scikit-learn"]} height={380} title="Encoding and Feature Engineering" />
+
+## Train/Test Split and Cross-Validation
+
+<PythonPlayground code={String.raw`import numpy as np
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+
+# Generate a classification dataset
+X, y = make_classification(
+    n_samples=500, n_features=10, n_informative=6,
+    n_redundant=2, n_classes=2, random_state=42
+)
+print(f"Dataset: {X.shape}, class balance: {y.mean():.2%} positive")
+
+# --- Basic split ---
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y  # stratify preserves class balance
+)
+print(f"Train: {X_train.shape}, Test: {X_test.shape}")
+print(f"Train class balance: {y_train.mean():.2%}")
+print(f"Test class balance:  {y_test.mean():.2%}")
+
+# --- Cross-validation (more reliable than single split) ---
+clf = RandomForestClassifier(n_estimators=50, random_state=42)
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+scores = cross_val_score(clf, X, y, cv=cv, scoring='accuracy')
+print(f"\\n5-Fold CV Accuracy: {scores}")
+print(f"Mean: {scores.mean():.4f} +/- {scores.std():.4f}")
+
+# Compare multiple metrics
+for metric in ['accuracy', 'precision', 'recall', 'f1', 'roc_auc']:
+    s = cross_val_score(clf, X, y, cv=cv, scoring=metric)
+    print(f"  {metric:12s}: {s.mean():.4f} +/- {s.std():.4f}")
+`} packages={["numpy", "scikit-learn"]} height={400} title="Train/Test Split and Cross-Validation" />
+
+## Models Overview
+
+<PythonPlayground code={String.raw`import numpy as np
+from sklearn.datasets import make_classification, make_regression
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.linear_model import LogisticRegression, Ridge, Lasso
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.cluster import KMeans
+
+rng = np.random.default_rng(42)
+
+# Classification dataset
+X_clf, y_clf = make_classification(
+    n_samples=400, n_features=8, n_informative=5, random_state=42
+)
+
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+classifiers = {
+    "LogisticRegression":       LogisticRegression(max_iter=1000, random_state=42),
+    "DecisionTree":             DecisionTreeClassifier(max_depth=5, random_state=42),
+    "RandomForest(100)":        RandomForestClassifier(n_estimators=100, random_state=42),
+    "GradientBoosting":         GradientBoostingClassifier(n_estimators=50, random_state=42),
+}
+
+print("=== Classifier Comparison (5-fold CV F1) ===")
+for name, clf in classifiers.items():
+    scores = cross_val_score(clf, X_clf, y_clf, cv=cv, scoring='f1')
+    print(f"  {name:25s}  {scores.mean():.4f} +/- {scores.std():.4f}")
+
+# Regression dataset
+X_reg, y_reg = make_regression(n_samples=300, n_features=10, noise=20, random_state=42)
+
+regressors = {
+    "Ridge(alpha=1)":   Ridge(alpha=1.0),
+    "Ridge(alpha=10)":  Ridge(alpha=10.0),
+    "Lasso(alpha=1)":   Lasso(alpha=1.0),
+    "Lasso(alpha=0.1)": Lasso(alpha=0.1),
+}
+
+print("\\n=== Regressor Comparison (5-fold CV R2) ===")
+from sklearn.model_selection import KFold
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
+for name, reg in regressors.items():
+    scores = cross_val_score(reg, X_reg, y_reg, cv=kf, scoring='r2')
+    print(f"  {name:20s}  {scores.mean():.4f} +/- {scores.std():.4f}")
+
+# Clustering
+X_cluster = rng.normal(size=(200, 2))
+X_cluster[:50] += [3, 3]
+X_cluster[50:100] += [-3, 3]
+km = KMeans(n_clusters=3, random_state=42, n_init=10)
+labels = km.fit_predict(X_cluster)
+print(f"\\nKMeans cluster sizes: {dict(zip(*np.unique(labels, return_counts=True)))}")
+`} packages={["numpy", "scikit-learn"]} height={420} title="Model Comparison" />
+
+## Evaluation Metrics
+
+<PythonPlayground code={String.raw`import numpy as np
+from sklearn.datasets import make_classification
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score,
+    roc_auc_score, confusion_matrix, classification_report
+)
+
+X, y = make_classification(
+    n_samples=600, n_features=10, n_informative=6,
+    weights=[0.7, 0.3],   # Imbalanced: 70% negative, 30% positive
+    random_state=42
+)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.25, stratify=y, random_state=42
+)
+
+clf = RandomForestClassifier(n_estimators=100, random_state=42)
+clf.fit(X_train, y_train)
+y_pred = clf.predict(X_test)
+y_proba = clf.predict_proba(X_test)[:, 1]
+
+print("=== Evaluation Metrics ===")
+print(f"Accuracy:  {accuracy_score(y_test, y_pred):.4f}  (misleading on imbalanced data!)")
+print(f"Precision: {precision_score(y_test, y_pred):.4f}  (of predicted positive, how many are?)")
+print(f"Recall:    {recall_score(y_test, y_pred):.4f}  (of actual positive, how many found?)")
+print(f"F1 Score:  {f1_score(y_test, y_pred):.4f}  (harmonic mean of precision & recall)")
+print(f"ROC-AUC:   {roc_auc_score(y_test, y_proba):.4f}  (probability ranking quality)")
+
+print("\\n=== Confusion Matrix ===")
+cm = confusion_matrix(y_test, y_pred)
+print(f"           Predicted 0  Predicted 1")
+print(f"Actual 0:  {cm[0,0]:10d}  {cm[0,1]:10d}  (TN, FP)")
+print(f"Actual 1:  {cm[1,0]:10d}  {cm[1,1]:10d}  (FN, TP)")
+
+print("\\n=== Classification Report ===")
+print(classification_report(y_test, y_pred, target_names=["No Churn", "Churn"]))
+`} packages={["numpy", "scikit-learn"]} height={400} title="Evaluation Metrics" />
+
+## Pipelines and ColumnTransformer
+
+Pipelines are non-negotiable in production ML. They prevent data leakage and make deployment simple:
+
+<PythonPlayground code={String.raw`import numpy as np
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+
+rng = np.random.default_rng(42)
+n = 300
+
+# Simulate a mixed dataset (numeric + categorical)
+tenure = rng.integers(1, 73, n).astype(float)
+tenure[rng.choice(n, 20, replace=False)] = np.nan   # Add missing values
+
+monthly = rng.uniform(20, 120, n)
+contract = rng.choice(["month-to-month", "one_year", "two_year"], n)
+payment  = rng.choice(["bank", "credit_card", "check"], n)
+
+# Stack into array: columns [tenure, monthly, contract_idx, payment_idx]
+# (Using indices for categorical since we work with arrays)
+from sklearn.preprocessing import LabelEncoder
+le_contract = LabelEncoder().fit(["month-to-month", "one_year", "two_year"])
+le_payment  = LabelEncoder().fit(["bank", "credit_card", "check"])
+contract_enc = le_contract.transform(contract).astype(float).reshape(-1,1)
+payment_enc  = le_payment.transform(payment).astype(float).reshape(-1,1)
+
+X = np.hstack([
+    tenure.reshape(-1,1),
+    monthly.reshape(-1,1),
+    contract_enc,
+    payment_enc
+])
+
+# Churn: more likely if month-to-month and high monthly charges
+churn_prob = 0.1 + 0.4*(contract_enc.ravel()==0) + 0.003*monthly
+y = (rng.random(n) < churn_prob).astype(int)
+print(f"Dataset: {X.shape}, churn rate: {y.mean():.1%}")
+
+# Numeric pipeline: impute then scale
+numeric_pipeline = Pipeline([
+    ("imputer", SimpleImputer(strategy="median")),
+    ("scaler",  StandardScaler()),
+])
+
+# Categorical pipeline: impute then one-hot encode
+categorical_pipeline = Pipeline([
+    ("imputer", SimpleImputer(strategy="most_frequent")),
+    ("encoder", OneHotEncoder(sparse_output=False, handle_unknown="ignore")),
+])
+
+# Combine with ColumnTransformer
+preprocessor = ColumnTransformer([
+    ("numeric",      numeric_pipeline,      [0, 1]),    # tenure, monthly
+    ("categorical",  categorical_pipeline,  [2, 3]),    # contract, payment
+])
+
+# Full pipeline
+full_pipeline = Pipeline([
+    ("preprocessor", preprocessor),
+    ("classifier",   RandomForestClassifier(n_estimators=100, random_state=42)),
+])
+
+# Cross-validate the ENTIRE pipeline (no leakage)
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+scores = cross_val_score(full_pipeline, X, y, cv=cv, scoring="f1")
+print(f"Pipeline CV F1: {scores.mean():.4f} +/- {scores.std():.4f}")
+
+# Fit on all data and inspect
+full_pipeline.fit(X, y)
+print(f"Pipeline steps: {[name for name, _ in full_pipeline.steps]}")
+print("Pipeline fitted successfully — ready for deployment.")
+`} packages={["numpy", "scikit-learn"]} height={440} title="Pipeline with ColumnTransformer" />
+
+## Hyperparameter Tuning
+
+<PythonPlayground code={String.raw`import numpy as np
+from sklearn.datasets import make_classification
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, StratifiedKFold
+
+X, y = make_classification(n_samples=400, n_features=8, n_informative=5, random_state=42)
+
+cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+
+# --- GridSearchCV: exhaustive, guaranteed to find best in grid ---
+param_grid = {
+    "n_estimators": [50, 100],
+    "max_depth":    [None, 5, 10],
+    "min_samples_split": [2, 5],
+}
+grid_search = GridSearchCV(
+    RandomForestClassifier(random_state=42),
+    param_grid, cv=cv, scoring="f1", n_jobs=-1, verbose=0
+)
+grid_search.fit(X, y)
+print("=== GridSearchCV ===")
+print(f"Best params: {grid_search.best_params_}")
+print(f"Best F1:     {grid_search.best_score_:.4f}")
+print(f"Combinations tested: {len(grid_search.cv_results_['mean_test_score'])}")
+
+# --- RandomizedSearchCV: faster for large spaces ---
+from scipy.stats import randint as sp_randint
+param_dist = {
+    "n_estimators":      sp_randint(20, 200),
+    "max_depth":         [None, 3, 5, 10, 20],
+    "min_samples_split": sp_randint(2, 20),
+    "max_features":      ["sqrt", "log2", 0.5],
+}
+rand_search = RandomizedSearchCV(
+    RandomForestClassifier(random_state=42),
+    param_dist, n_iter=15, cv=cv, scoring="f1", random_state=42, verbose=0
+)
+rand_search.fit(X, y)
+print("\\n=== RandomizedSearchCV ===")
+print(f"Best params: {rand_search.best_params_}")
+print(f"Best F1:     {rand_search.best_score_:.4f}")
+print(f"Iterations:  15 (vs {len(grid_search.cv_results_['mean_test_score'])} for grid)")
+
+# Retrieve top results
+import pandas as pd
+results = pd.DataFrame(rand_search.cv_results_)
+top = results[["param_n_estimators","param_max_depth","mean_test_score"]].nlargest(5, "mean_test_score")
+print("\\nTop 5 random search results:")
+print(top.to_string(index=False))
+`} packages={["numpy", "pandas", "scikit-learn"]} height={420} title="GridSearchCV vs RandomizedSearchCV" />
+
+## PROJECT: Customer Churn Predictor
+
+<PythonPlayground code={String.raw`import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+
+# ── 1. Generate realistic churn dataset ──────────────────────────────────────
+rng = np.random.default_rng(2024)
+N = 1000
+
+tenure          = rng.integers(1, 73, N)
+monthly_charges = rng.uniform(20, 120, N)
+total_charges   = tenure * monthly_charges * rng.uniform(0.9, 1.1, N)
+num_products    = rng.integers(1, 6, N)
+support_calls   = rng.integers(0, 10, N)
+contract        = rng.choice(["month-to-month","one_year","two_year"],
+                              N, p=[0.5, 0.3, 0.2])
+payment         = rng.choice(["bank_transfer","credit_card","electronic_check","mailed_check"],
+                              N, p=[0.3, 0.3, 0.25, 0.15])
+internet        = rng.choice(["DSL","Fiber","No"], N, p=[0.35, 0.45, 0.20])
+senior          = rng.choice([0, 1], N, p=[0.84, 0.16])
+
+# Inject ~5% missing values in monthly_charges
+missing_idx = rng.choice(N, 50, replace=False)
+monthly_charges_missing = monthly_charges.copy().astype(float)
+monthly_charges_missing[missing_idx] = np.nan
+
+# Churn probability model
+churn_logit = (
+    -2.0
+    - 0.03 * tenure
+    + 0.015 * monthly_charges
+    + 0.8  * (contract == "month-to-month")
+    - 0.5  * (contract == "two_year")
+    + 0.3  * (internet == "Fiber")
+    + 0.15 * support_calls
+    + 0.2  * senior
+    - 0.1  * num_products
+)
+churn_prob = 1 / (1 + np.exp(-churn_logit))
+churn = (rng.random(N) < churn_prob).astype(int)
+
+df = pd.DataFrame({
+    "tenure":           tenure,
+    "monthly_charges":  monthly_charges_missing,
+    "total_charges":    total_charges,
+    "num_products":     num_products,
+    "support_calls":    support_calls,
+    "contract":         contract,
+    "payment":          payment,
+    "internet":         internet,
+    "senior":           senior,
+    "churn":            churn,
+})
+
+print("=== Dataset Summary ===")
+print(f"Shape: {df.shape}")
+print(f"Churn rate: {churn.mean():.1%}")
+print(f"Missing values: {df.isnull().sum().sum()}")
+
+# ── 2. Build full pipeline ────────────────────────────────────────────────────
+numeric_features     = ["tenure","monthly_charges","total_charges","num_products","support_calls"]
+categorical_features = ["contract","payment","internet","senior"]
+
+numeric_transformer = Pipeline([
+    ("imputer", SimpleImputer(strategy="median")),
+    ("scaler",  StandardScaler()),
+])
+categorical_transformer = Pipeline([
+    ("imputer", SimpleImputer(strategy="most_frequent")),
+    ("encoder", OneHotEncoder(sparse_output=False, handle_unknown="ignore")),
+])
+
+preprocessor = ColumnTransformer([
+    ("num", numeric_transformer,  numeric_features),
+    ("cat", categorical_transformer, categorical_features),
+])
+
+pipeline = Pipeline([
+    ("preprocessor", preprocessor),
+    ("classifier",   RandomForestClassifier(
+        n_estimators=200, max_depth=10, min_samples_split=5,
+        random_state=42, n_jobs=-1
+    )),
+])
+
+X = df.drop("churn", axis=1)
+y = df["churn"]
+
+# ── 3. Cross-validation ───────────────────────────────────────────────────────
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+for metric in ["accuracy", "precision", "recall", "f1", "roc_auc"]:
+    scores = cross_val_score(pipeline, X, y, cv=cv, scoring=metric)
+    print(f"  CV {metric:12s}: {scores.mean():.4f} +/- {scores.std():.4f}")
+
+# ── 4. Train/test split for detailed evaluation ───────────────────────────────
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42
+)
+pipeline.fit(X_train, y_train)
+y_pred  = pipeline.predict(X_test)
+y_proba = pipeline.predict_proba(X_test)[:, 1]
+
+print(f"\\n=== Test Set Results ===")
+print(f"ROC-AUC: {roc_auc_score(y_test, y_proba):.4f}")
+print(classification_report(y_test, y_pred, target_names=["Stay","Churn"]))
+
+# ── 5. Confusion matrix ───────────────────────────────────────────────────────
+cm = confusion_matrix(y_test, y_pred)
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+im = axes[0].imshow(cm, cmap="Blues")
+axes[0].set_xlabel("Predicted"); axes[0].set_ylabel("Actual")
+axes[0].set_xticks([0,1]); axes[0].set_yticks([0,1])
+axes[0].set_xticklabels(["Stay","Churn"]); axes[0].set_yticklabels(["Stay","Churn"])
+axes[0].set_title("Confusion Matrix")
+for i in range(2):
+    for j in range(2):
+        axes[0].text(j, i, cm[i,j], ha="center", va="center", fontsize=14, fontweight="bold")
+
+# ── 6. Feature importance ─────────────────────────────────────────────────────
+rf = pipeline.named_steps["classifier"]
+ohe_cats = pipeline.named_steps["preprocessor"] \
+           .named_transformers_["cat"]["encoder"].get_feature_names_out(categorical_features)
+feature_names = numeric_features + list(ohe_cats)
+importances = rf.feature_importances_
+top_n = 10
+top_idx = np.argsort(importances)[-top_n:]
+
+axes[1].barh(
+    [feature_names[i] for i in top_idx],
+    importances[top_idx],
+    color="steelblue"
+)
+axes[1].set_xlabel("Importance")
+axes[1].set_title(f"Top {top_n} Feature Importances")
+
+plt.tight_layout()
+plt.show()
+print("Charts displayed above.")
+`} packages={["numpy", "pandas", "matplotlib", "scikit-learn"]} height={600} title="Customer Churn Predictor — Full Pipeline" />
+
+## Key Takeaways
+
+- The estimator protocol (`fit/predict/transform`) is universal — learn it once, use it everywhere
+- Always use `Pipeline` — it prevents data leakage and makes deployment a single `pickle` file
+- `ColumnTransformer` handles mixed numeric/categorical data in a single, leak-proof transform
+- Cross-validation beats a single train/test split; `StratifiedKFold` is the default for classification
+- Accuracy is misleading on imbalanced datasets — prefer F1, precision/recall, and ROC-AUC
+- `RandomizedSearchCV` is usually better than `GridSearchCV` for large hyperparameter spaces
+- Feature importance from Random Forest gives free feature selection; remove low-importance features to reduce noise
+- Fit preprocessors **only on training data**, then use `transform` on test — this is the most common ML bug to avoid

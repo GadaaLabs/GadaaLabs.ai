@@ -1,0 +1,601 @@
+---
+title: "Concurrency — Threading, Multiprocessing & asyncio"
+description: "Master Python's three concurrency models: threading for I/O-bound work, multiprocessing for CPU-bound work, and asyncio for high-throughput async systems. Build a parallel data processor and an async task manager."
+duration: 28
+order: 13
+---
+
+## The Concurrency Problem
+
+Modern programs wait constantly — for disk, network, databases, external APIs. A sequential program wastes CPU during every wait. Concurrency lets you overlap that waiting.
+
+Python offers **three distinct models**, each solving a different problem:
+
+| Model | Best for | Parallelism? | Overhead |
+|---|---|---|---|
+| `threading` | I/O-bound work | Concurrent, not parallel | Low |
+| `multiprocessing` | CPU-bound work | True parallel | High |
+| `asyncio` | High-throughput I/O | Concurrent, not parallel | Very low |
+
+Understanding which to use is 90% of the battle.
+
+## The GIL — What It Is and Why It Matters
+
+The **Global Interpreter Lock** (GIL) is a mutex in CPython that ensures only one thread executes Python bytecode at a time. This means:
+
+- Multiple threads **cannot** run Python code in parallel on multiple CPU cores
+- The GIL is released during **I/O operations** — so threads can overlap I/O even without true parallelism
+- C extensions (NumPy, Pandas) often release the GIL during computation — so they can be parallelized with threads
+
+```python
+# This looks parallel but isn't — GIL prevents simultaneous bytecode execution
+import threading
+
+def cpu_work(n):
+    return sum(i*i for i in range(n))
+
+# Two threads competing for the GIL — slower than sequential
+t1 = threading.Thread(target=cpu_work, args=(10_000_000,))
+t2 = threading.Thread(target=cpu_work, args=(10_000_000,))
+t1.start(); t2.start()
+t1.join(); t2.join()
+```
+
+For CPU-bound Python code: use **multiprocessing** (separate processes = separate GILs).
+For I/O-bound code: **threading** or **asyncio** both work fine.
+
+## Threading — I/O-Bound Work
+
+### The Core Primitives
+
+```python
+import threading
+import time
+
+def worker(name, delay):
+    print(f"[{name}] starting")
+    time.sleep(delay)   # Simulates I/O — GIL is released here
+    print(f"[{name}] done after {delay}s")
+
+# Create and start threads
+t1 = threading.Thread(target=worker, args=("A", 2))
+t2 = threading.Thread(target=worker, args=("B", 1))
+
+t1.start()
+t2.start()
+
+t1.join()  # Wait for t1 to finish
+t2.join()  # Wait for t2 to finish
+# Total time: ~2s (not 3s) — they ran concurrently
+```
+
+### Synchronization Primitives
+
+**Lock** prevents race conditions when multiple threads share mutable state:
+
+```python
+import threading
+
+counter = 0
+lock = threading.Lock()
+
+def increment(n):
+    global counter
+    for _ in range(n):
+        with lock:          # Acquire lock, execute, release
+            counter += 1   # Now thread-safe
+
+threads = [threading.Thread(target=increment, args=(10000,)) for _ in range(10)]
+for t in threads: t.start()
+for t in threads: t.join()
+print(counter)  # Always 100000
+```
+
+**RLock** (Reentrant Lock) — the same thread can acquire it multiple times:
+
+```python
+rlock = threading.RLock()
+
+def recursive_task(depth):
+    with rlock:                      # Works even if called recursively
+        if depth > 0:
+            recursive_task(depth - 1)
+```
+
+**Semaphore** — limits concurrent access to a resource:
+
+```python
+# Limit to 3 concurrent database connections
+db_semaphore = threading.Semaphore(3)
+
+def query_database(query_id):
+    with db_semaphore:
+        print(f"Query {query_id} executing")
+        time.sleep(0.5)
+        print(f"Query {query_id} complete")
+```
+
+**Event** — thread signaling:
+
+```python
+ready = threading.Event()
+
+def producer():
+    time.sleep(1)
+    print("Data ready!")
+    ready.set()   # Signal all waiting threads
+
+def consumer():
+    ready.wait()  # Block until event is set
+    print("Consumer received signal")
+```
+
+### Producer-Consumer with Queue
+
+`queue.Queue` is thread-safe — the canonical pattern for thread communication:
+
+<PythonPlayground code={String.raw`import threading
+import queue
+import time
+import random
+
+POISON_PILL = None
+
+def producer(q, n_items):
+    for i in range(n_items):
+        item = f"item-{i}"
+        q.put(item)
+        print(f"Produced: {item}")
+        time.sleep(0.01)  # Simulate production time
+    q.put(POISON_PILL)    # Signal consumers to stop
+    print("Producer done")
+
+def consumer(q, name):
+    while True:
+        item = q.get()    # Blocks until item available
+        if item is POISON_PILL:
+            q.put(POISON_PILL)  # Pass poison pill to next consumer
+            print(f"Consumer {name} stopping")
+            break
+        print(f"Consumer {name} processed: {item}")
+        time.sleep(0.02)  # Simulate processing time
+
+q = queue.Queue(maxsize=5)  # Buffer up to 5 items
+
+prod = threading.Thread(target=producer, args=(q, 8))
+cons1 = threading.Thread(target=consumer, args=(q, "A"))
+cons2 = threading.Thread(target=consumer, args=(q, "B"))
+
+prod.start(); cons1.start(); cons2.start()
+prod.join(); cons1.join(); cons2.join()
+print("All done!")
+`} height={400} title="Producer-Consumer Pattern" />
+
+### ThreadPoolExecutor — The Right Way
+
+Manual thread management is error-prone. Use `concurrent.futures.ThreadPoolExecutor`:
+
+<PythonPlayground code={String.raw`from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import math
+
+def simulate_io_task(n):
+    """Simulates I/O with CPU computation."""
+    time.sleep(0.05)  # I/O wait
+    result = sum(math.sqrt(i) for i in range(n))
+    return n, round(result, 2)
+
+tasks = [1000, 2000, 500, 1500, 3000, 800, 2500, 400]
+
+# Sequential baseline
+start = time.time()
+sequential_results = [simulate_io_task(n) for n in tasks]
+sequential_time = time.time() - start
+
+# ThreadPoolExecutor
+start = time.time()
+with ThreadPoolExecutor(max_workers=4) as executor:
+    futures = {executor.submit(simulate_io_task, n): n for n in tasks}
+    parallel_results = []
+    for future in as_completed(futures):
+        result = future.result()
+        parallel_results.append(result)
+        print(f"  Completed task n={result[0]}: {result[1]}")
+
+parallel_time = time.time() - start
+
+print(f"\\nSequential: {sequential_time:.3f}s")
+print(f"Parallel (4 workers): {parallel_time:.3f}s")
+print(f"Speedup: {sequential_time/parallel_time:.1f}x")
+`} height={400} title="ThreadPoolExecutor Speedup" />
+
+## Multiprocessing — CPU-Bound Work
+
+Each `Process` has its own Python interpreter and memory space — no GIL contention:
+
+```python
+from multiprocessing import Process, Pool, Queue
+import os
+
+def cpu_intensive(n):
+    """Pure CPU work — benefits from multiprocessing."""
+    return sum(i * i for i in range(n))
+
+if __name__ == "__main__":   # REQUIRED on Windows/macOS
+    with Pool(processes=4) as pool:
+        results = pool.map(cpu_intensive, [1_000_000] * 8)
+    print(results)
+```
+
+### ProcessPoolExecutor
+
+```python
+from concurrent.futures import ProcessPoolExecutor
+import math
+
+def factorize(n):
+    """CPU-bound: find prime factors."""
+    factors = []
+    d = 2
+    while d * d <= n:
+        while n % d == 0:
+            factors.append(d)
+            n //= d
+        d += 1
+    if n > 1:
+        factors.append(n)
+    return factors
+
+numbers = [999983, 1000003, 999979, 1000033]
+
+if __name__ == "__main__":
+    with ProcessPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(factorize, numbers))
+    for n, factors in zip(numbers, results):
+        print(f"{n}: {factors}")
+```
+
+### Shared Memory and Manager
+
+```python
+from multiprocessing import Process, Value, Array, Manager
+
+def increment_shared(val, lock):
+    for _ in range(10000):
+        with lock:
+            val.value += 1
+
+# Value: a single shared value with a lock
+from multiprocessing import Lock
+counter = Value('i', 0)   # 'i' = C int
+lock = Lock()
+
+processes = [Process(target=increment_shared, args=(counter, lock))
+             for _ in range(4)]
+for p in processes: p.start()
+for p in processes: p.join()
+print(counter.value)   # 40000
+```
+
+## concurrent.futures: Unified Interface
+
+Both `ThreadPoolExecutor` and `ProcessPoolExecutor` share the same API:
+
+```python
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+import time
+
+def fetch(url):
+    time.sleep(1)   # Simulate network request
+    return f"Response from {url}"
+
+urls = ["api.example.com", "data.service.io", "cdn.fast.net"]
+
+with ThreadPoolExecutor(max_workers=3) as executor:
+    futures = [executor.submit(fetch, url) for url in urls]
+
+    # Wait for first to complete
+    done, pending = wait(futures, return_when=FIRST_COMPLETED)
+    for f in done:
+        print(f"First result: {f.result()}")
+
+    # Cancel pending if needed
+    for f in pending:
+        f.cancel()
+```
+
+## asyncio — High-Throughput Async I/O
+
+`asyncio` uses a **single thread** with an event loop. No OS thread overhead, handles thousands of concurrent connections:
+
+```python
+import asyncio
+
+async def fetch_data(url: str, delay: float) -> str:
+    """async def makes this a coroutine."""
+    print(f"Starting: {url}")
+    await asyncio.sleep(delay)    # Yield control to event loop
+    print(f"Done: {url}")
+    return f"data from {url}"
+
+async def main():
+    # Run concurrently with asyncio.gather
+    results = await asyncio.gather(
+        fetch_data("api/users", 1.0),
+        fetch_data("api/orders", 0.5),
+        fetch_data("api/products", 0.8),
+    )
+    for r in results:
+        print(r)
+
+asyncio.run(main())
+```
+
+### asyncio Patterns
+
+**create_task** — fire and forget, schedule without awaiting immediately:
+
+```python
+async def main():
+    task1 = asyncio.create_task(fetch_data("api/a", 1.0))
+    task2 = asyncio.create_task(fetch_data("api/b", 0.5))
+
+    # Do other work here while tasks run concurrently
+    print("Tasks started, doing other work...")
+    await asyncio.sleep(0.1)
+
+    # Now collect results
+    result1 = await task1
+    result2 = await task2
+```
+
+**Semaphore for rate limiting:**
+
+```python
+async def fetch_with_limit(session, url, semaphore):
+    async with semaphore:      # Max 10 concurrent requests
+        await asyncio.sleep(0.1)   # Simulated request
+        return f"result from {url}"
+
+async def main():
+    semaphore = asyncio.Semaphore(10)
+    urls = [f"api/item/{i}" for i in range(100)]
+    tasks = [fetch_with_limit(None, url, semaphore) for url in urls]
+    results = await asyncio.gather(*tasks)
+    print(f"Fetched {len(results)} items")
+```
+
+**asyncio.wait_for for timeouts:**
+
+```python
+async def slow_operation():
+    await asyncio.sleep(10)
+    return "done"
+
+async def main():
+    try:
+        result = await asyncio.wait_for(slow_operation(), timeout=2.0)
+    except asyncio.TimeoutError:
+        print("Operation timed out after 2s")
+```
+
+### asyncio Queue — Producer/Consumer
+
+<PythonPlayground code={String.raw`import asyncio
+import time
+import random
+
+async def producer(queue, n_items, name):
+    for i in range(n_items):
+        item = (random.randint(1, 5), f"{name}-item-{i}")  # (priority, data)
+        await queue.put(item)
+        print(f"[{name}] produced {item[1]} (priority {item[0]})")
+        await asyncio.sleep(0.02)
+    print(f"[{name}] finished producing")
+
+async def consumer(queue, name):
+    processed = 0
+    while True:
+        try:
+            priority, item = await asyncio.wait_for(queue.get(), timeout=0.5)
+            print(f"  [{name}] processing {item} (priority {priority})")
+            await asyncio.sleep(0.03 * priority)  # Higher priority = more work
+            queue.task_done()
+            processed += 1
+        except asyncio.TimeoutError:
+            print(f"  [{name}] no more items, processed {processed} total")
+            break
+
+async def main():
+    queue = asyncio.Queue(maxsize=10)
+    start = time.time()
+
+    # Start producers and consumers concurrently
+    await asyncio.gather(
+        producer(queue, 6, "P1"),
+        producer(queue, 4, "P2"),
+        consumer(queue, "C1"),
+        consumer(queue, "C2"),
+    )
+
+    elapsed = time.time() - start
+    print(f"\\nTotal time: {elapsed:.2f}s")
+
+asyncio.run(main())
+`} height={450} title="asyncio Producer-Consumer Queue" />
+
+## When to Use Which: Decision Matrix
+
+```
+Is your bottleneck I/O (network, disk, database)?
+  YES → Is your concurrency level very high (100+ simultaneous)?
+          YES → asyncio
+          NO  → threading or ThreadPoolExecutor
+  NO  → Is it pure Python CPU work?
+          YES → multiprocessing / ProcessPoolExecutor
+          NO  → (NumPy/Pandas/C extensions) → threading may work due to GIL release
+```
+
+Key rules:
+- **asyncio** requires your entire stack to be async-aware (libraries must support it)
+- **threading** works with any existing synchronous code
+- **multiprocessing** has high startup overhead — worthwhile for tasks taking &gt;100ms
+- Never share mutable state between threads without synchronization primitives
+
+## PROJECT: Parallel Data Processor
+
+<PythonPlayground code={String.raw`from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import math
+import statistics
+
+def process_item(item_id):
+    """
+    Simulate a mixed I/O + CPU task:
+    - I/O phase: 20ms wait
+    - CPU phase: some math
+    """
+    time.sleep(0.02)  # I/O wait (GIL released)
+    result = sum(math.sqrt(item_id * k) for k in range(100))
+    return item_id, round(result, 4)
+
+N_ITEMS = 60
+items = list(range(1, N_ITEMS + 1))
+
+# --- Sequential baseline ---
+print("=== Sequential Processing ===")
+start = time.time()
+sequential = [process_item(i) for i in items]
+seq_time = time.time() - start
+print(f"Processed {N_ITEMS} items in {seq_time:.3f}s")
+
+# --- Parallel with different worker counts ---
+print("\\n=== Parallel Processing ===")
+results_by_workers = {}
+
+for n_workers in [2, 4, 8]:
+    start = time.time()
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(process_item, i): i for i in items}
+        parallel = []
+        for future in as_completed(futures):
+            parallel.append(future.result())
+    elapsed = time.time() - start
+    speedup = seq_time / elapsed
+    results_by_workers[n_workers] = elapsed
+    print(f"  {n_workers:2d} workers: {elapsed:.3f}s  (speedup: {speedup:.1f}x)")
+
+# --- Verify correctness ---
+seq_dict = dict(sequential)
+print(f"\\nResults consistent: {len(seq_dict) == N_ITEMS}")
+
+# --- Summary ---
+best_workers = min(results_by_workers, key=results_by_workers.get)
+best_time = results_by_workers[best_workers]
+print(f"\\nBest config: {best_workers} workers ({best_time:.3f}s)")
+print(f"Max speedup achieved: {seq_time/best_time:.1f}x")
+print(f"Efficiency (speedup/workers): {(seq_time/best_time)/best_workers:.1%}")
+`} height={450} title="Parallel Data Processor" />
+
+## PROJECT: Async Task Manager
+
+<PythonPlayground code={String.raw`import asyncio
+import time
+import heapq
+from dataclasses import dataclass, field
+from typing import Any
+
+@dataclass(order=True)
+class Task:
+    priority: int
+    task_id: int = field(compare=False)
+    name: str = field(compare=False)
+    work_units: int = field(compare=False)
+
+class AsyncTaskManager:
+    def __init__(self, max_workers=3):
+        self.queue = asyncio.PriorityQueue()
+        self.max_workers = max_workers
+        self.completed = []
+        self.cancelled = set()
+        self.stats = {"submitted": 0, "completed": 0, "cancelled": 0}
+
+    async def submit(self, task: Task):
+        await self.queue.put(task)
+        self.stats["submitted"] += 1
+        print(f"  [SUBMIT] {task.name} (priority={task.priority})")
+
+    async def worker(self, worker_id: int):
+        while True:
+            try:
+                task = await asyncio.wait_for(self.queue.get(), timeout=0.3)
+            except asyncio.TimeoutError:
+                return  # No more tasks
+
+            if task.task_id in self.cancelled:
+                print(f"  [SKIP]   Worker-{worker_id} skipping cancelled {task.name}")
+                self.queue.task_done()
+                self.stats["cancelled"] += 1
+                continue
+
+            print(f"  [RUN]    Worker-{worker_id} running {task.name} ({task.work_units} units)")
+            await asyncio.sleep(task.work_units * 0.04)  # Simulate async work
+            self.completed.append(task)
+            self.queue.task_done()
+            self.stats["completed"] += 1
+            print(f"  [DONE]   Worker-{worker_id} finished {task.name}")
+
+    def cancel(self, task_id: int):
+        self.cancelled.add(task_id)
+        print(f"  [CANCEL] Task {task_id} marked for cancellation")
+
+    async def run(self):
+        workers = [asyncio.create_task(self.worker(i))
+                   for i in range(self.max_workers)]
+        await asyncio.gather(*workers)
+
+async def main():
+    manager = AsyncTaskManager(max_workers=3)
+    start = time.time()
+
+    print("=== Submitting Tasks ===")
+    tasks = [
+        Task(priority=1, task_id=1, name="critical-db-migration",   work_units=5),
+        Task(priority=3, task_id=2, name="report-generation",       work_units=3),
+        Task(priority=2, task_id=3, name="email-batch",             work_units=2),
+        Task(priority=1, task_id=4, name="security-scan",           work_units=4),
+        Task(priority=4, task_id=5, name="cache-warmup",            work_units=1),
+        Task(priority=2, task_id=6, name="data-export",             work_units=3),
+        Task(priority=3, task_id=7, name="index-rebuild",           work_units=2),
+    ]
+
+    for task in tasks:
+        await manager.submit(task)
+
+    # Cancel a low-priority task
+    manager.cancel(5)
+
+    print("\\n=== Processing ===")
+    await manager.run()
+
+    elapsed = time.time() - start
+    print(f"\\n=== Results ===")
+    print(f"Time elapsed: {elapsed:.2f}s")
+    print(f"Submitted:  {manager.stats['submitted']}")
+    print(f"Completed:  {manager.stats['completed']}")
+    print(f"Cancelled:  {manager.stats['cancelled']}")
+    print(f"Completion order: {[t.name for t in manager.completed]}")
+
+asyncio.run(main())
+`} height={500} title="Async Task Manager with Priority Queue" />
+
+## Key Takeaways
+
+- The GIL prevents parallel bytecode execution in threads — use multiprocessing for CPU-bound Python code
+- Threading is ideal for I/O-bound work: the GIL is released during I/O, enabling true concurrency
+- `ThreadPoolExecutor` and `ProcessPoolExecutor` share the `concurrent.futures` API — switching between them is one line
+- `asyncio` uses cooperative multitasking: a coroutine yields control with `await`, not OS thread switches
+- `asyncio.gather()` runs coroutines concurrently; `asyncio.create_task()` schedules them without waiting
+- Use `asyncio.Semaphore` to cap concurrent connections; `asyncio.wait_for` to enforce timeouts
+- `queue.Queue` (threading) and `asyncio.Queue` are the canonical inter-worker communication patterns
+- Profile before choosing: the "best" model depends on your bottleneck, not on what sounds sophisticated

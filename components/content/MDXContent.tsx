@@ -1,6 +1,7 @@
 import { MDXRemote } from "next-mdx-remote/rsc";
 import { highlight } from "@/lib/shiki";
 import { Copy } from "lucide-react";
+import { PythonPlayground } from "@/components/content/PythonPlayground";
 
 // Server-side Shiki code block
 async function CodeBlock({
@@ -163,6 +164,7 @@ export const MDXComponents = {
   ),
   // Custom components available in MDX
   Callout,
+  PythonPlayground,
 };
 
 export function MDXContent({ source }: { source: string }) {

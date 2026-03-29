@@ -1,0 +1,945 @@
+---
+title: "Building AI Applications — LLMs, RAG & Agents"
+description: "The capstone lesson: connect everything to build production AI applications. LLM API integration with Groq, streaming responses, RAG pipeline from scratch, and a tool-using agent. Run a working AI coding assistant."
+duration: 34
+order: 18
+---
+
+## LLM Fundamentals
+
+Large Language Models are probability distributions over token sequences. Given a prefix, they predict the most likely continuation — sampled rather than deterministic, which is why they can be creative.
+
+**Key parameters you control:**
+
+| Parameter | Effect | Typical range |
+|---|---|---|
+| `temperature` | Randomness. 0 = deterministic, 2 = chaotic | 0.0 – 1.0 |
+| `top_p` | Nucleus sampling: only consider top-p probability mass | 0.9 – 1.0 |
+| `max_tokens` | Hard cap on output length | 100 – 8192 |
+| `stop` | Stop sequences — model halts when it generates these | e.g. `["\n\n"]` |
+
+**Tokens are not words.** The rule of thumb: 1 token ≈ 0.75 English words, or roughly 4 characters. The word "tokenization" is typically 3-4 tokens. Code is denser — more tokens per character.
+
+**Context window** is the maximum combined length of prompt + response. Models cannot access information outside their context window during inference. For `llama-3.3-70b-versatile` on Groq: 128K tokens.
+
+## Groq API Integration
+
+Groq uses the OpenAI-compatible SDK. Your existing OpenAI code runs against Groq with two line changes:
+
+```python
+from groq import Groq
+
+client = Groq(api_key="your-groq-api-key")   # or reads GROQ_API_KEY from env
+
+# Basic completion
+response = client.chat.completions.create(
+    model="llama-3.3-70b-versatile",
+    messages=[
+        {"role": "system", "content": "You are an expert Python engineer."},
+        {"role": "user",   "content": "Explain Python's GIL in 3 sentences."},
+    ],
+    temperature=0.7,
+    max_tokens=500,
+)
+print(response.choices[0].message.content)
+print(f"Tokens used: {response.usage.total_tokens}")
+```
+
+## Streaming Responses
+
+For long responses, streaming dramatically improves perceived latency — the user sees text appear token-by-token instead of waiting for the full response:
+
+```python
+from groq import Groq
+
+client = Groq()
+
+def stream_completion(prompt: str, system: str = "You are a helpful assistant."):
+    stream = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user",   "content": prompt},
+        ],
+        stream=True,        # Key change: enable streaming
+        temperature=0.7,
+    )
+
+    full_response = ""
+    for chunk in stream:
+        delta = chunk.choices[0].delta
+        if delta.content:
+            print(delta.content, end="", flush=True)   # Print as it arrives
+            full_response += delta.content
+
+    print()   # Newline at end
+    return full_response
+
+# FastAPI streaming endpoint with Server-Sent Events
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+import asyncio
+
+app = FastAPI()
+
+async def generate_stream(prompt: str):
+    """Async generator that yields SSE-formatted events."""
+    stream = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        stream=True,
+    )
+    for chunk in stream:
+        content = chunk.choices[0].delta.content or ""
+        if content:
+            yield f"data: {content}\n\n"
+    yield "data: [DONE]\n\n"
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    return StreamingResponse(
+        generate_stream(request.message),
+        media_type="text/event-stream",
+    )
+```
+
+## Prompt Engineering Patterns
+
+**System prompt** — establishes the model's role, constraints, and output format:
+
+```python
+SYSTEM_PROMPT = """You are a Python code reviewer. When given code:
+1. Identify bugs (critical issues first)
+2. Suggest improvements with specific code examples
+3. Rate overall quality: poor / fair / good / excellent
+
+Format your response as JSON:
+{
+  "quality": "good",
+  "bugs": ["description1", "description2"],
+  "improvements": ["improvement1 with code example"]
+}"""
+```
+
+**Few-shot** — examples train the model to follow a specific format without fine-tuning:
+
+```python
+messages = [
+    {"role": "system", "content": "Classify Python errors."},
+    {"role": "user",   "content": "NameError: name 'pd' is not defined"},
+    {"role": "assistant", "content": "IMPORT_ERROR: pandas not imported. Fix: import pandas as pd"},
+    {"role": "user",   "content": "IndexError: list index out of range"},
+    {"role": "assistant", "content": "INDEX_ERROR: accessing index beyond list length. Fix: check len() before indexing"},
+    {"role": "user",   "content": "RecursionError: maximum recursion depth exceeded"},  # New query
+]
+```
+
+**Chain-of-thought** — prompting the model to reason step-by-step before answering improves accuracy on complex tasks:
+
+```python
+cot_prompt = """
+<problem>
+Estimate the number of tokens in a Python module that's 400 lines long
+with typical line length of 50 characters.
+</problem>
+<thinking>
+Walk through the calculation step by step before giving a final answer.
+</thinking>
+"""
+```
+
+## RAG Architecture
+
+Retrieval-Augmented Generation solves LLMs' core limitation: knowledge cutoff. Instead of relying on training data, RAG retrieves relevant documents at query time:
+
+```
+Document corpus
+    ↓ Chunking
+Text chunks (512 tokens each, 50-token overlap)
+    ↓ Embedding model
+Vector store (FAISS, Pinecone, Chroma, pgvector)
+    ↓
+At query time:
+Query → Embed → k-NN search → Top-k chunks → Format context → LLM → Answer
+```
+
+The retrieval quality determines the answer quality. Garbage in, garbage out.
+
+## Text Chunking Algorithm
+
+<PythonPlayground code={String.raw`import numpy as np
+import re
+
+def chunk_text(text, chunk_size=200, overlap=40):
+    """
+    Split text into overlapping windows of roughly chunk_size words.
+    Overlap allows context to span chunk boundaries.
+    """
+    # Split into sentences first (respect sentence boundaries)
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    chunks = []
+    current_chunk = []
+    current_size = 0
+
+    for sentence in sentences:
+        words = sentence.split()
+        sentence_size = len(words)
+
+        if current_size + sentence_size > chunk_size and current_chunk:
+            # Finalize this chunk
+            chunks.append(" ".join(current_chunk))
+            # Keep overlap: retain last N words
+            overlap_words = current_chunk[-overlap:]
+            current_chunk = overlap_words + words
+            current_size = len(current_chunk)
+        else:
+            current_chunk.extend(words)
+            current_size += sentence_size
+
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+
+    return chunks
+
+# ── Demo ──────────────────────────────────────────────────────────────────────
+DOCUMENT = """
+Python is a high-level, general-purpose programming language. Its design
+philosophy emphasizes code readability with the use of significant indentation.
+Python is dynamically typed and garbage-collected. It supports multiple
+programming paradigms, including structured, object-oriented and functional
+programming.
+
+The Python interpreter has been ported to many platforms. Python consistently
+ranks as one of the most popular programming languages. It was conceived in
+the late 1980s by Guido van Rossum and was first released as Python 0.9.0 in
+1991. Python 2.0 was released in 2000. Python 3.0 was released in 2008.
+
+Python's large standard library is commonly cited as one of its greatest
+strengths, providing tools suited to many tasks. Standard library modules
+include email, json, re, datetime, sqlite3, and urllib. NumPy and SciPy are
+widely used libraries for scientific computing. Django and FastAPI are popular
+web frameworks. Machine learning frameworks include scikit-learn and PyTorch.
+""".strip()
+
+chunks = chunk_text(DOCUMENT, chunk_size=80, overlap=15)
+
+print(f"Original: {len(DOCUMENT.split())} words")
+print(f"Chunks:   {len(chunks)}")
+print()
+for i, chunk in enumerate(chunks):
+    words = chunk.split()
+    print(f"Chunk {i} ({len(words)} words):")
+    print(f"  Start: {' '.join(words[:8])}...")
+    print(f"  End:   ...{' '.join(words[-8:])}")
+
+# Check overlap
+if len(chunks) >= 2:
+    words0 = chunks[0].split()
+    words1 = chunks[1].split()
+    overlap_actual = [w for w in words0[-20:] if w in words1[:20]]
+    print(f"\\nOverlap between chunk 0 and 1: {overlap_actual[:5]}...")
+`} packages={["numpy"]} height={440} title="Text Chunking with Overlap" />
+
+## TF-IDF Retrieval System
+
+<PythonPlayground code={String.raw`import numpy as np
+import re
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+class RAGRetriever:
+    """
+    TF-IDF based retrieval — same architecture as embedding-based RAG
+    but uses sparse vectors instead of dense embeddings.
+    """
+    def __init__(self, chunk_size=100, overlap=20):
+        self.chunk_size = chunk_size
+        self.overlap = overlap
+        self.vectorizer = TfidfVectorizer(
+            ngram_range=(1, 2),
+            min_df=1,
+            sublinear_tf=True,
+        )
+        self.chunks = []
+        self.chunk_matrix = None
+        self.metadata = []
+
+    def chunk_text(self, text, doc_id):
+        sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+        chunks, current, size = [], [], 0
+        for sent in sentences:
+            words = sent.split()
+            if size + len(words) > self.chunk_size and current:
+                chunks.append((" ".join(current), {"doc_id": doc_id, "pos": len(chunks)}))
+                current = current[-self.overlap:] + words
+                size = len(current)
+            else:
+                current.extend(words)
+                size += len(words)
+        if current:
+            chunks.append((" ".join(current), {"doc_id": doc_id, "pos": len(chunks)}))
+        return chunks
+
+    def index(self, documents: dict[str, str]):
+        """Build the TF-IDF index from a dict of {doc_id: text}."""
+        all_chunks = []
+        for doc_id, text in documents.items():
+            for chunk_text, meta in self.chunk_text(text, doc_id):
+                all_chunks.append((chunk_text, meta))
+
+        self.chunks = [c[0] for c in all_chunks]
+        self.metadata = [c[1] for c in all_chunks]
+        self.chunk_matrix = self.vectorizer.fit_transform(self.chunks)
+        print(f"Indexed {len(documents)} docs → {len(self.chunks)} chunks")
+        return self
+
+    def retrieve(self, query: str, k: int = 3, min_score: float = 0.05):
+        """Return top-k chunks most relevant to the query."""
+        q_vec = self.vectorizer.transform([query])
+        scores = cosine_similarity(q_vec, self.chunk_matrix)[0]
+
+        top_k = np.argsort(scores)[-k:][::-1]
+        results = []
+        for idx in top_k:
+            if scores[idx] >= min_score:
+                results.append({
+                    "chunk": self.chunks[idx],
+                    "score": float(scores[idx]),
+                    "doc_id": self.metadata[idx]["doc_id"],
+                    "position": self.metadata[idx]["pos"],
+                })
+        return results
+
+    def format_context(self, results):
+        """Format retrieved chunks into a context string for the LLM."""
+        parts = []
+        for i, r in enumerate(results):
+            parts.append(f"[Source: {r['doc_id']}, relevance: {r['score']:.3f}]")
+            parts.append(r["chunk"])
+            parts.append("")
+        return "\n".join(parts)
+
+
+# ── Demo ──────────────────────────────────────────────────────────────────────
+docs = {
+    "python_guide": """Python is a high-level programming language. Python uses indentation
+    for code blocks instead of braces. Python is dynamically typed. Lists are mutable
+    sequences. Dictionaries store key-value pairs. Python supports object-oriented
+    and functional programming. The for loop iterates over any iterable object.
+    List comprehensions provide a concise way to create lists. Generators use yield
+    to produce values lazily, saving memory for large sequences.""",
+
+    "ml_guide": """Machine learning uses algorithms to learn patterns from data.
+    Supervised learning requires labeled training examples. Unsupervised learning
+    finds patterns without labels. Neural networks are layers of connected neurons.
+    Gradient descent minimizes the loss function. Overfitting occurs when the model
+    memorizes training data. Regularization techniques include L1, L2, and dropout.
+    Cross-validation evaluates model performance on unseen data. scikit-learn
+    provides a consistent API for machine learning models.""",
+
+    "async_guide": """Asyncio enables concurrent programming in Python using coroutines.
+    The async and await keywords define and pause coroutines. The event loop schedules
+    coroutines. asyncio.gather runs multiple coroutines concurrently. asyncio.Queue
+    provides thread-safe producer consumer communication. Semaphores limit concurrent
+    access to resources. asyncio is ideal for I/O-bound tasks. Threading uses OS threads
+    and works with blocking code. Multiprocessing bypasses the GIL for CPU-bound work.""",
+}
+
+retriever = RAGRetriever(chunk_size=60, overlap=10)
+retriever.index(docs)
+
+queries = [
+    "how do generators work in Python",
+    "what is gradient descent and overfitting",
+    "concurrency asyncio event loop",
+    "how to avoid memory issues with large data",
+]
+
+print()
+for query in queries:
+    results = retriever.retrieve(query, k=2)
+    print(f"Query: '{query}'")
+    for r in results:
+        print(f"  [{r['doc_id']} score={r['score']:.3f}] {r['chunk'][:80]}...")
+    print()
+`} packages={["numpy", "scikit-learn"]} height={560} title="TF-IDF RAG Retrieval System" />
+
+## Tool Use and Function Calling
+
+```python
+import json
+from groq import Groq
+
+client = Groq()
+
+# Define tools as JSON schema
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_python",
+            "description": "Execute Python code and return the output",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python code to execute",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds",
+                        "default": 30,
+                    },
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_docs",
+            "description": "Search the documentation for a topic",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "top_k": {"type": "integer", "default": 3},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
+
+# Tool implementations
+def execute_python(code: str, timeout: int = 30) -> str:
+    import subprocess, sys
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, timeout=timeout
+    )
+    if result.returncode == 0:
+        return result.stdout
+    return f"Error: {result.stderr}"
+
+def search_docs(query: str, top_k: int = 3) -> str:
+    results = retriever.retrieve(query, k=top_k)
+    return retriever.format_context(results)
+
+TOOL_MAP = {"execute_python": execute_python, "search_docs": search_docs}
+```
+
+## The Agent Loop
+
+```python
+def run_agent(user_message: str, max_iterations: int = 10) -> str:
+    """
+    Agent loop:
+    1. LLM decides action (tool call or final answer)
+    2. Execute tool
+    3. Return result to LLM
+    4. Repeat until LLM produces final answer
+    """
+    messages = [
+        {"role": "system", "content": "You are a Python coding assistant. Use tools to answer questions."},
+        {"role": "user",   "content": user_message},
+    ]
+
+    for iteration in range(max_iterations):
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",     # Let model decide when to use tools
+        )
+
+        message = response.choices[0].message
+        messages.append({"role": "assistant", "content": message.content,
+                         "tool_calls": message.tool_calls})
+
+        # If no tool calls: model is done
+        if not message.tool_calls:
+            return message.content
+
+        # Execute all requested tool calls
+        for tool_call in message.tool_calls:
+            fn_name = tool_call.function.name
+            fn_args = json.loads(tool_call.function.arguments)
+
+            print(f"[Agent] Calling {fn_name}({fn_args})")
+            result = TOOL_MAP[fn_name](**fn_args)
+            print(f"[Agent] Result: {result[:100]}...")
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": result,
+            })
+
+    return "Max iterations reached"
+
+# Usage
+answer = run_agent("What's the sum of prime numbers below 100? Show me the code.")
+```
+
+## Agent Loop Simulation (In Browser)
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# Simulate an agent loop without an actual LLM
+# Shows the exact data structures and control flow
+
+class SimulatedLLM:
+    """Deterministic LLM simulator for demonstration."""
+    def __init__(self):
+        self.call_count = 0
+        # Pre-scripted responses: (tool_call or None, text)
+        self.script = [
+            # Turn 1: decide to search
+            ({"name": "search", "args": {"query": "prime numbers algorithm"}}, None),
+            # Turn 2: decide to compute
+            ({"name": "compute", "args": {"code": "sieve_primes(100)"}}, None),
+            # Turn 3: final answer
+            (None, "The sum of prime numbers below 100 is 1060."),
+        ]
+
+    def respond(self, messages):
+        idx = min(self.call_count, len(self.script)-1)
+        self.call_count += 1
+        tool_call, text = self.script[idx]
+        return {"tool_call": tool_call, "content": text}
+
+def sieve_of_eratosthenes(n):
+    """Return all primes less than n."""
+    is_prime = [True] * n
+    is_prime[0] = is_prime[1] = False
+    for i in range(2, int(n**0.5) + 1):
+        if is_prime[i]:
+            for j in range(i*i, n, i):
+                is_prime[j] = False
+    return [i for i, p in enumerate(is_prime) if p]
+
+def search_tool(query):
+    """Simulated document search."""
+    docs = {
+        "prime": "Sieve of Eratosthenes: mark composite numbers iteratively. O(n log log n).",
+        "algorithm": "An algorithm is a step-by-step procedure for solving a problem.",
+    }
+    for kw, doc in docs.items():
+        if kw in query.lower():
+            return doc
+    return "No relevant documentation found."
+
+def compute_tool(code):
+    """Simulated code execution."""
+    if "sieve_primes" in code:
+        primes = sieve_of_eratosthenes(100)
+        return f"Primes below 100: {primes}\\nSum: {sum(primes)}"
+    return "Unknown function"
+
+TOOLS = {"search": search_tool, "compute": compute_tool}
+
+def run_agent_loop(user_query, max_iterations=10):
+    llm = SimulatedLLM()
+    messages = [
+        {"role": "system",  "content": "You are a math assistant with tools."},
+        {"role": "user",    "content": user_query},
+    ]
+
+    print(f"User: {user_query}")
+    print("=" * 60)
+
+    for i in range(max_iterations):
+        print(f"\\n--- Iteration {i+1} ---")
+        response = llm.respond(messages)
+
+        # Final answer?
+        if response["content"] and not response["tool_call"]:
+            print(f"[LLM] Final answer: {response['content']}")
+            messages.append({"role": "assistant", "content": response["content"]})
+            return response["content"]
+
+        # Tool call
+        tool_call = response["tool_call"]
+        print(f"[LLM] Calling tool: {tool_call['name']}({tool_call['args']})")
+        messages.append({"role": "assistant", "tool_call": tool_call, "content": None})
+
+        # Execute tool
+        fn = TOOLS.get(tool_call["name"])
+        if fn:
+            result = fn(**tool_call["args"])
+            print(f"[Tool] Result: {result}")
+            messages.append({"role": "tool", "result": result})
+        else:
+            messages.append({"role": "tool", "result": f"Unknown tool: {tool_call['name']}"})
+
+    return "Max iterations reached"
+
+result = run_agent_loop("What is the sum of all prime numbers below 100?")
+print(f"\\nFinal answer: {result}")
+print(f"\\nVerification: {sum(sieve_of_eratosthenes(100))}")
+`} packages={["numpy"]} height={480} title="Agent Loop Simulation" />
+
+## Token Counter and Cost Estimation
+
+<PythonPlayground code={String.raw`import numpy as np
+import re
+
+def count_tokens_approximate(text: str) -> int:
+    """
+    Approximate token count without a tokenizer.
+    Rule: ~0.75 words per token, or ~4 chars per token.
+    BPE tokenizers produce ~1.3 tokens per word on average for English.
+    """
+    # Method 1: character-based
+    char_estimate = len(text) / 4.0
+
+    # Method 2: word-based
+    words = re.findall(r"\S+", text)
+    word_estimate = len(words) * 1.3
+
+    # Method 3: punctuation-aware (closer to actual BPE)
+    # Count word pieces: split on whitespace + punctuation boundaries
+    pieces = re.findall(r"[a-zA-Z]+|[0-9]+|[^a-zA-Z0-9\s]", text)
+    piece_estimate = len(pieces) * 1.1   # BPE merges common pairs
+
+    # Average of estimates
+    avg = (char_estimate + word_estimate + piece_estimate) / 3
+    return round(avg)
+
+# Cost calculator
+MODEL_COSTS = {
+    # Model: (input $/1M tokens, output $/1M tokens)
+    "gpt-4o":             (2.50,  10.00),
+    "gpt-4o-mini":        (0.15,   0.60),
+    "claude-3-5-sonnet":  (3.00,  15.00),
+    "llama-3.3-70b":      (0.59,   0.79),  # Groq pricing
+    "llama-3.1-8b":       (0.05,   0.08),  # Groq pricing
+}
+
+def estimate_cost(prompt: str, response_tokens: int, model: str) -> dict:
+    input_tokens = count_tokens_approximate(prompt)
+    if model not in MODEL_COSTS:
+        return {"error": f"Unknown model: {model}"}
+    in_price, out_price = MODEL_COSTS[model]
+    input_cost  = input_tokens  / 1_000_000 * in_price
+    output_cost = response_tokens / 1_000_000 * out_price
+    return {
+        "model":          model,
+        "input_tokens":   input_tokens,
+        "output_tokens":  response_tokens,
+        "input_cost_usd": round(input_cost, 6),
+        "output_cost_usd":round(output_cost, 6),
+        "total_cost_usd": round(input_cost + output_cost, 6),
+    }
+
+# ── Demo ──────────────────────────────────────────────────────────────────────
+test_texts = [
+    ("Short prompt", "Explain Python decorators."),
+    ("System prompt", "You are an expert Python engineer with 15 years of experience. " * 10),
+    ("RAG context",  "Based on the following documentation:\n" + "Python documentation text. " * 100),
+    ("Code snippet",  "def fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)\n" * 5),
+]
+
+print("=== Token Count Estimates ===")
+for name, text in test_texts:
+    tokens = count_tokens_approximate(text)
+    print(f"  {name:15s}: {len(text):6d} chars → ~{tokens:5d} tokens ({tokens/len(text)*100:.1f}% of chars)")
+
+print()
+
+# Cost comparison for a RAG pipeline call
+rag_prompt = "You are a helpful assistant.\n\n" + "[Context]\\n" + "Python documentation. " * 200 + "\\n\\n[Question]\\nHow do generators work?"
+print("=== Cost Comparison: RAG Query ===")
+print(f"Prompt length: {count_tokens_approximate(rag_prompt)} tokens")
+print()
+for model in MODEL_COSTS:
+    cost = estimate_cost(rag_prompt, response_tokens=500, model=model)
+    print(f"  {model:25s}: {chr(36)}{cost['total_cost_usd']:.6f} ({cost['input_tokens']}+{cost['output_tokens']} tokens)")
+
+# Cost at scale
+print("\\n=== Cost at Scale (1M queries/month) ===")
+per_query = estimate_cost("Summarize this article: " + "word " * 500, 200, "llama-3.3-70b")
+monthly = per_query["total_cost_usd"] * 1_000_000
+print(f"  llama-3.3-70b: {chr(36)}{monthly:,.2f}/month for 1M queries")
+per_query_gpt4 = estimate_cost("Summarize this article: " + "word " * 500, 200, "gpt-4o")
+monthly_gpt4 = per_query_gpt4["total_cost_usd"] * 1_000_000
+print(f"  gpt-4o:        {chr(36)}{monthly_gpt4:,.2f}/month for 1M queries")
+print(f"  Cost ratio:    {monthly_gpt4/monthly:.0f}x more expensive")
+`} packages={["numpy"]} height={500} title="Token Counter and Cost Estimator" />
+
+## Complete Groq Streaming Chat
+
+```python
+# app/api/ai/chat/route.py (Next.js API Route using Python backend)
+
+# Python FastAPI endpoint that proxies to Groq with streaming
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from groq import Groq
+import json
+
+app = FastAPI()
+client = Groq()
+
+class Message(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    messages: list[Message]
+    model: str = "llama-3.3-70b-versatile"
+    temperature: float = 0.7
+    max_tokens: int = 1024
+
+async def stream_chat(request: ChatRequest):
+    stream = client.chat.completions.create(
+        model=request.model,
+        messages=[m.model_dump() for m in request.messages],
+        temperature=request.temperature,
+        max_tokens=request.max_tokens,
+        stream=True,
+    )
+
+    for chunk in stream:
+        content = chunk.choices[0].delta.content or ""
+        finish = chunk.choices[0].finish_reason
+
+        if content:
+            # OpenAI-compatible SSE format
+            data = json.dumps({"choices": [{"delta": {"content": content}}]})
+            yield f"data: {data}\n\n"
+
+        if finish == "stop":
+            yield "data: [DONE]\n\n"
+            return
+
+@app.post("/api/chat")
+async def chat_endpoint(request: ChatRequest):
+    return StreamingResponse(
+        stream_chat(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",    # Disable Nginx buffering
+        },
+    )
+```
+
+## PROJECT: Mini RAG System
+
+<PythonPlayground code={String.raw`import numpy as np
+import re
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+# ── The knowledge base: a long technical document ─────────────────────────────
+DOCUMENT = """
+Python Memory Management and Garbage Collection.
+Python uses reference counting as its primary memory management mechanism.
+Every object has a reference count that tracks how many names or data structures
+point to it. When the reference count drops to zero, the object is immediately
+deallocated. This makes most allocations and deallocations fast and deterministic.
+
+Reference counting alone cannot handle circular references, where object A
+references object B and object B references object A. Both objects would have
+non-zero reference counts even when no external references exist. Python's cyclic
+garbage collector detects and collects these cycles. The gc module provides
+access to the garbage collector. You can call gc.collect() to force a collection
+or gc.disable() to turn it off for performance-sensitive code.
+
+The __del__ method is called when an object is about to be destroyed. However,
+objects with __del__ methods cannot be part of reference cycles handled by the
+cyclic garbage collector. Avoid __del__ in most cases and use context managers
+with the with statement instead. The contextlib module provides the
+contextmanager decorator for creating simple context managers from generators.
+
+Python uses a private heap to store all objects and internal data structures.
+The memory manager handles allocation on this heap. Small objects under 512
+bytes are handled by the Python memory allocator using fixed-size pools called
+arenas. This reduces fragmentation and speeds up allocation for common small
+objects like integers and short strings.
+
+Integer caching is a performance optimization. CPython caches small integers
+from -5 to 256, so all references to these values point to the same object.
+This means id(1) == id(1) is always True, but id(1000) == id(1000) may not
+be. String interning works similarly for string literals. The sys.intern
+function can force a string to be interned. Interned strings can be compared
+with is instead of == which is faster.
+
+The tracemalloc module traces memory allocations in Python code. Call
+tracemalloc.start() to begin tracing, then tracemalloc.take_snapshot() to
+capture allocation statistics. This helps identify memory leaks and high-memory
+code paths. The memory_profiler package provides line-by-line memory profiling
+with the @profile decorator. For production profiling, consider using
+Memray, which is faster than memory_profiler and produces detailed reports.
+
+Generators are memory-efficient because they produce values lazily. A generator
+expression uses parentheses instead of brackets. The yield keyword turns a
+function into a generator. yield from delegates to a sub-generator. Generators
+are essential for processing large files or datasets that do not fit in memory.
+The itertools module provides generator-based functions for combinatorial
+operations, infinite sequences, and sequence manipulation.
+
+numpy arrays store data in contiguous C arrays, which is why they are far
+more memory-efficient than Python lists for numeric data. A Python list of
+one million integers uses about 8 MB for the list structure plus 28 bytes
+per integer object, totaling roughly 35 MB. A numpy array of one million
+int64 values uses exactly 8 MB. This difference compounds for large datasets.
+"""
+
+# ── Build RAG system ──────────────────────────────────────────────────────────
+def chunk_text(text, chunk_size=80, overlap=15):
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    chunks, current, size = [], [], 0
+    for sent in sentences:
+        words = sent.split()
+        if size + len(words) > chunk_size and current:
+            chunks.append(" ".join(current))
+            current = current[-overlap:] + words
+            size = len(current)
+        else:
+            current.extend(words)
+            size += len(words)
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
+
+chunks = chunk_text(DOCUMENT, chunk_size=70, overlap=15)
+print(f"Document: {len(DOCUMENT.split())} words → {len(chunks)} chunks")
+
+# Build TF-IDF index
+vectorizer = TfidfVectorizer(ngram_range=(1,2), min_df=1, sublinear_tf=True)
+chunk_matrix = vectorizer.fit_transform(chunks)
+
+def retrieve(query, k=3):
+    q_vec = vectorizer.transform([query])
+    scores = cosine_similarity(q_vec, chunk_matrix)[0]
+    top_k = np.argsort(scores)[-k:][::-1]
+    return [(chunks[i], float(scores[i])) for i in top_k if scores[i] > 0.05]
+
+def answer_template(query, results):
+    """Generate an answer template (in real system, LLM would fill this)."""
+    context = "\n".join([f"[{i+1}] {chunk[:120]}..." for i, (chunk, _) in enumerate(results)])
+    return f"""QUERY: {query}
+
+RETRIEVED CONTEXT:
+{context}
+
+SIMULATED ANSWER STRUCTURE:
+Based on {len(results)} retrieved passages, the answer covers:
+{chr(10).join([f"  - From passage {i+1} (relevance: {score:.3f}): {chunk.split('.')[0][:80]}" for i, (chunk, score) in enumerate(results)])}
+"""
+
+# ── Answer 5 questions ────────────────────────────────────────────────────────
+questions = [
+    "How does Python handle circular references in garbage collection?",
+    "What is integer caching and how does it work?",
+    "How do generators save memory compared to lists?",
+    "What is the difference between memory usage of numpy arrays and Python lists?",
+    "How can I profile memory usage in Python production code?",
+]
+
+print()
+for i, question in enumerate(questions, 1):
+    print(f"{'='*60}")
+    print(f"Q{i}: {question}")
+    results = retrieve(question, k=2)
+    if results:
+        print(f"Retrieved {len(results)} chunks:")
+        for chunk, score in results:
+            print(f"  [score={score:.3f}] {chunk[:100]}...")
+        print()
+        answer = answer_template(question, results)
+        print(answer[:300])
+    else:
+        print("  No relevant chunks found.")
+    print()
+`} packages={["numpy", "scikit-learn"]} height={600} title="Mini RAG System — Full Project" />
+
+## Guardrails
+
+```python
+import re
+from pydantic import BaseModel, validator
+
+class GuardrailedChat(BaseModel):
+    message: str
+    user_id: str
+
+    @validator("message")
+    def check_length(cls, v):
+        if len(v) > 10000:
+            raise ValueError("Message too long")
+        return v
+
+# PII detection (basic — use presidio or similar in production)
+PII_PATTERNS = {
+    "email":       r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+    "phone":       r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b",
+    "ssn":         r"\b\d{3}-\d{2}-\d{4}\b",
+    "credit_card": r"\b(?:\d{4}[-\s]?){3}\d{4}\b",
+}
+
+def detect_pii(text: str) -> dict[str, list[str]]:
+    found = {}
+    for pii_type, pattern in PII_PATTERNS.items():
+        matches = re.findall(pattern, text)
+        if matches:
+            found[pii_type] = matches
+    return found
+
+def sanitize_pii(text: str) -> str:
+    for pii_type, pattern in PII_PATTERNS.items():
+        replacement = f"[REDACTED_{pii_type.upper()}]"
+        text = re.sub(pattern, replacement, text)
+    return text
+
+# Output validation
+def validate_json_output(text: str, required_keys: list[str]) -> bool:
+    import json
+    try:
+        data = json.loads(text)
+        return all(k in data for k in required_keys)
+    except json.JSONDecodeError:
+        return False
+```
+
+## What to Build Next
+
+You now have the foundation to build serious AI-powered applications. Here are high-value projects that cement this knowledge:
+
+**Beginner-to-intermediate:**
+- **AI code reviewer**: FastAPI endpoint + Groq + streaming. Review Python files, identify bugs, suggest improvements. Add a VS Code extension as the frontend.
+- **Document Q&A**: RAG pipeline over your own PDF library. PyMuPDF for extraction, sentence-transformers for embeddings, FAISS for vector search.
+- **Semantic search engine**: Replace keyword search on any dataset with embedding-based search. Build a demo on the scikit-learn dataset docs.
+
+**Intermediate-to-advanced:**
+- **Auto-grading system**: Upload homework, grade against a rubric, provide feedback. Use structured outputs (JSON mode) for deterministic grading.
+- **AI data analyst**: Upload a CSV, ask questions in natural language, the agent writes and executes Pandas code, returns visualizations.
+- **Multi-agent pipeline**: Research agent gathers information, writing agent synthesizes it, critic agent reviews and requests revisions.
+
+**Learning path:**
+- **LangChain / LlamaIndex**: Higher-level RAG frameworks. Learn after you understand the primitives (which you now do).
+- **DSPy**: Programmatic LLM optimization — replaces hand-written prompts with optimized ones.
+- **vLLM / Ollama**: Run models locally. Critical for privacy-sensitive applications.
+- **RLHF and fine-tuning**: Once you have labeled data, fine-tuning beats prompt engineering for specialized tasks.
+- **Evals**: Learn to evaluate LLM outputs systematically. RAGAS for RAG, custom harnesses for structured tasks.
+
+## Key Takeaways
+
+- LLMs predict token probabilities — temperature controls randomness, top-p limits the candidate pool, and neither makes the model more capable
+- Stream responses for all user-facing applications — time to first token matters more than total latency
+- RAG quality depends on chunking and retrieval — embed multiple strategies (semantic + keyword) and rerank results
+- The agent loop is simple: LLM responds → if tool call, execute and return result → repeat; complexity comes from error handling and state management
+- Token counting before making API calls prevents budget surprises — estimate with the 4-chars-per-token rule
+- Guardrails (input validation, PII detection, output schema enforcement) belong in every production AI application
+- Structured outputs (JSON mode + Pydantic validation) make LLM responses reliable enough to parse programmatically
+- Cost optimization order: smaller model first, then caching, then prompt compression, then fine-tuning — never start with fine-tuning
+- RAG beats fine-tuning for knowledge that changes; fine-tuning beats RAG for style, format, and domain-specific behavior
+- The skills from this course — data structures, OOP, async, ML, profiling, API design — are the foundation every AI engineer needs

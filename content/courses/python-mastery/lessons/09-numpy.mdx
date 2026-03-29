@@ -1,0 +1,510 @@
+---
+title: "NumPy — Arrays, Broadcasting & Linear Algebra"
+description: "NumPy from first principles: why it's fast, how vectorization eliminates loops, and the broadcasting rules that make array operations work. Build a matrix operations benchmark and a neural network forward pass from scratch."
+duration: 28
+order: 9
+---
+
+## Why NumPy Exists: The Python Performance Problem
+
+Python lists are flexible — they can hold any object, any size, any type. But that flexibility has a cost. A Python list is an array of *pointers*, each pointing to a separate heap-allocated Python object. When you sum a list of integers, Python must:
+
+1. Follow a pointer to each integer object
+2. Unbox the C integer from the Python wrapper
+3. Add it
+4. Box the result into a new Python wrapper
+5. Manage garbage collection
+
+NumPy sidesteps all of this. A NumPy array stores values as a **contiguous block of raw C memory** — 64-bit floats packed one after another, no pointers, no Python object overhead. Operations on this memory:
+
+- Are implemented in C (and Fortran for linear algebra)
+- Use **SIMD** (Single Instruction, Multiple Data) CPU instructions to process multiple elements simultaneously
+- Avoid the Python GIL for computation (only the coordination layer is Python)
+
+The result: NumPy operations are typically 50–500x faster than equivalent Python loops.
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# A NumPy array vs a Python list
+py_list = list(range(1_000_000))
+np_array = np.arange(1_000_000)
+
+print("Python list:")
+print(f"  type: {type(py_list)}")
+print(f"  element type: {type(py_list[0])}")
+
+print()
+print("NumPy array:")
+print(f"  type: {type(np_array)}")
+print(f"  dtype: {np_array.dtype}")
+print(f"  shape: {np_array.shape}")
+print(f"  ndim: {np_array.ndim}")
+print(f"  size: {np_array.size:,}")
+print(f"  itemsize: {np_array.itemsize} bytes per element")
+print(f"  total memory: {np_array.nbytes / 1024:.1f} KB")
+`} packages={["numpy"]} />
+
+## Creating Arrays
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# From Python sequences
+a1 = np.array([1, 2, 3, 4, 5])
+a2 = np.array([[1, 2, 3], [4, 5, 6]])          # 2D
+a3 = np.array([[[1,2],[3,4]], [[5,6],[7,8]]])   # 3D
+
+print("1D:", a1, "shape:", a1.shape)
+print("2D:\n", a2, "\nshape:", a2.shape)
+print("3D shape:", a3.shape, "ndim:", a3.ndim)
+print()
+
+# Factory functions
+print("zeros (3x4):\n", np.zeros((3, 4)))
+print()
+print("ones (2x3) float32:\n", np.ones((2, 3), dtype=np.float32))
+print()
+print("identity 4x4:\n", np.eye(4))
+print()
+
+# Range and linspace
+print("arange(0, 1, 0.2):  ", np.arange(0, 1, 0.2))
+print("linspace(0, 1, 6):  ", np.linspace(0, 1, 6))
+print("logspace(0, 3, 4):  ", np.logspace(0, 3, 4))  # 10^0 to 10^3
+print()
+
+# Random arrays
+rng = np.random.default_rng(seed=42)  # modern API — reproducible
+print("random uniform (2x3):\n", rng.random((2, 3)).round(4))
+print("random normal (2x3):\n",  rng.standard_normal((2, 3)).round(4))
+print("random integers 0-9 (2x4):\n", rng.integers(0, 10, (2, 4)))
+`} packages={["numpy"]} />
+
+## Indexing, Slicing, and Fancy Indexing
+
+<PythonPlayground code={String.raw`import numpy as np
+
+rng = np.random.default_rng(7)
+arr = rng.integers(10, 100, (4, 5))
+print("Original array:\n", arr)
+print()
+
+# Basic slicing — like Python, but multi-dimensional
+print("Row 0:         ", arr[0])
+print("Col 2:         ", arr[:, 2])
+print("Rows 1-2:      \n", arr[1:3])
+print("Top-left 2x2:  \n", arr[:2, :2])
+print("Every other row:\n", arr[::2])
+print()
+
+# Fancy indexing — index with arrays of integers
+rows = np.array([0, 2, 3])
+print("Rows 0, 2, 3:\n", arr[rows])
+
+# Select specific elements by (row, col) pairs
+row_idx = np.array([0, 1, 2])
+col_idx = np.array([0, 2, 4])
+print("Diagonal-ish elements:", arr[row_idx, col_idx])
+print()
+
+# Boolean indexing — the most useful form
+print("Elements > 50:")
+mask = arr > 50
+print("Mask:\n", mask)
+print("Selected:", arr[mask])
+print()
+
+# Modify using boolean mask
+arr_copy = arr.copy()
+arr_copy[arr_copy > 70] = 0
+print("Zeroed out > 70:\n", arr_copy)
+`} packages={["numpy"]} />
+
+## Universal Functions and Axis Operations
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# ufuncs operate element-wise, extremely fast
+x = np.array([1.0, 4.0, 9.0, 16.0, 25.0])
+print("sqrt:  ", np.sqrt(x))
+print("log:   ", np.log(x).round(4))
+print("exp:   ", np.exp(np.array([0, 1, 2])).round(4))
+print()
+
+# Reduction ufuncs + the axis parameter
+matrix = np.array([
+    [1, 2, 3],
+    [4, 5, 6],
+    [7, 8, 9],
+])
+print("Matrix:\n", matrix)
+print()
+
+# axis=None (default): reduce everything → scalar
+print(f"sum(all):         {np.sum(matrix)}")
+print(f"mean(all):        {np.mean(matrix):.2f}")
+print()
+
+# axis=0: reduce along rows → result shape is (3,) = one value per column
+print(f"sum(axis=0):      {np.sum(matrix, axis=0)}   ← sum each column")
+print(f"max(axis=0):      {np.max(matrix, axis=0)}   ← max of each column")
+print()
+
+# axis=1: reduce along columns → result shape is (3,) = one value per row
+print(f"sum(axis=1):      {np.sum(matrix, axis=1)}   ← sum each row")
+print(f"mean(axis=1):     {np.mean(matrix, axis=1)}  ← mean of each row")
+print()
+
+# keepdims — preserve the reduced axis as size-1
+print(f"sum(axis=1, keepdims=True):\n{np.sum(matrix, axis=1, keepdims=True)}")
+print(f"shape: {np.sum(matrix, axis=1, keepdims=True).shape}")
+`} packages={["numpy"]} />
+
+## Broadcasting: The Most Powerful (and Confusing) Feature
+
+Broadcasting is the mechanism that lets NumPy operate on arrays of *different shapes*. Understanding it is essential for writing concise, loop-free NumPy code.
+
+**The Broadcasting Rules:**
+1. If the arrays have different number of dimensions, pad the smaller shape on the **left** with 1s
+2. Dimensions of size 1 are **stretched** to match the other array's size in that dimension
+3. If shapes still don't match after stretching, raise an error
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# Rule 1: scalar broadcasts to any shape
+a = np.array([1, 2, 3, 4])
+print(f"array + 10: {a + 10}")  # 10 treated as shape (1,) → (4,)
+print()
+
+# Rule 2: (3,1) broadcasts with (3,) → (1,3)
+# Let's visualize this with column/row vectors
+col = np.array([[1], [2], [3]])   # shape (3, 1)
+row = np.array([10, 20, 30, 40]) # shape (4,) → treated as (1, 4)
+
+print("Column vector (3,1):")
+print(col)
+print("\nRow vector (1,4) [shown as 1D]:")
+print(row)
+print("\nOuter sum via broadcasting (3,4):")
+result = col + row
+print(result)
+print(f"Shape: {result.shape}")
+print()
+
+# Practical: center each column of a matrix (subtract column mean)
+rng = np.random.default_rng(42)
+data = rng.integers(10, 100, (4, 3)).astype(float)
+print("Original data:\n", data)
+
+col_means = data.mean(axis=0)  # shape (3,) — one mean per column
+print(f"\nColumn means: {col_means}")
+
+centered = data - col_means    # (4,3) - (3,) → broadcasts to (4,3)
+print("\nCentered (each column has mean ~0):\n", centered)
+print(f"New column means: {centered.mean(axis=0).round(10)}")
+print()
+
+# Practical: pairwise distances (broadcasting over 2 axes)
+points = np.array([[0, 0], [3, 4], [1, 1]])  # shape (3, 2)
+# diff[i,j,:] = points[i] - points[j]
+diff = points[:, np.newaxis, :] - points[np.newaxis, :, :]  # (3,3,2)
+distances = np.sqrt((diff**2).sum(axis=-1))  # (3,3)
+print("Pairwise distances:")
+print(distances.round(3))
+`} packages={["numpy"]} />
+
+## Reshaping and Stacking
+
+<PythonPlayground code={String.raw`import numpy as np
+
+a = np.arange(24)
+print("Original (24,):", a)
+print()
+
+# reshape — total elements must stay the same
+b = a.reshape(4, 6)
+print("reshape(4,6):\n", b)
+
+c = a.reshape(2, 3, 4)
+print(f"\nreshape(2,3,4): shape={c.shape}")
+
+# -1 lets NumPy infer one dimension
+d = a.reshape(6, -1)   # 24/6 = 4
+print(f"\nreshape(6,-1): shape={d.shape}")
+print(d)
+print()
+
+# ravel vs flatten
+# ravel: returns a VIEW when possible (no copy)
+# flatten: always returns a COPY
+e = b.ravel()
+print(f"ravel shape: {e.shape}, shares memory: {np.shares_memory(b, e)}")
+f = b.flatten()
+print(f"flatten shape: {f.shape}, shares memory: {np.shares_memory(b, f)}")
+print()
+
+# newaxis — add a dimension of size 1
+v = np.array([1, 2, 3])
+col_v = v[:, np.newaxis]   # (3,) → (3,1)
+row_v = v[np.newaxis, :]   # (3,) → (1,3)
+print(f"v shape: {v.shape}")
+print(f"col_v shape: {col_v.shape}")
+print(f"row_v shape: {row_v.shape}")
+print()
+
+# Stacking
+a1 = np.array([1, 2, 3])
+a2 = np.array([4, 5, 6])
+print("vstack:\n", np.vstack([a1, a2]))
+print("hstack:", np.hstack([a1, a2]))
+print("stack(axis=0):\n", np.stack([a1, a2], axis=0))
+print("stack(axis=1):\n", np.stack([a1, a2], axis=1))
+
+m1 = np.ones((2, 3))
+m2 = np.zeros((2, 3))
+print("\nconcatenate axis=0 (stack rows):\n", np.concatenate([m1, m2], axis=0))
+print("concatenate axis=1 (stack cols):\n", np.concatenate([m1, m2], axis=1))
+`} packages={["numpy"]} />
+
+## Linear Algebra
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# Matrix multiplication
+A = np.array([[1, 2], [3, 4]])
+B = np.array([[5, 6], [7, 8]])
+
+print("A:\n", A)
+print("B:\n", B)
+print()
+print("A @ B (matrix multiply):\n", A @ B)
+print("np.dot(A, B):\n", np.dot(A, B))  # same thing
+print()
+
+# Transpose
+print("A.T:\n", A.T)
+print()
+
+# Determinant and inverse
+det_A = np.linalg.det(A)
+inv_A = np.linalg.inv(A)
+print(f"det(A) = {det_A:.1f}")
+print(f"inv(A):\n{inv_A}")
+print(f"A @ inv(A) (should be identity):\n{(A @ inv_A).round(10)}")
+print()
+
+# Solving linear systems: Ax = b
+# System: 2x + y = 5, x + 3y = 10
+A_sys = np.array([[2, 1], [1, 3]], dtype=float)
+b_sys = np.array([5, 10], dtype=float)
+x = np.linalg.solve(A_sys, b_sys)
+print(f"Solving 2x+y=5, x+3y=10:")
+print(f"x = {x}")
+print(f"Verify A@x = {A_sys @ x}")
+print()
+
+# Eigenvalues and eigenvectors
+eigenvalues, eigenvectors = np.linalg.eig(A)
+print(f"Eigenvalues of A: {eigenvalues}")
+print(f"Eigenvectors of A:\n{eigenvectors}")
+print()
+
+# SVD — the workhorse of ML
+rng = np.random.default_rng(42)
+M = rng.standard_normal((4, 3))
+U, S, Vt = np.linalg.svd(M)
+print(f"SVD of (4,3) matrix:")
+print(f"  U shape: {U.shape}")
+print(f"  S (singular values): {S.round(4)}")
+print(f"  Vt shape: {Vt.shape}")
+`} packages={["numpy"]} />
+
+## Performance: Vectorized vs Loop Benchmark
+
+<PythonPlayground code={String.raw`import numpy as np
+import time
+
+N = 1_000_000
+
+# Create data
+data = np.random.default_rng(42).standard_normal(N)
+
+# --- Python loop ---
+start = time.perf_counter()
+total_py = 0.0
+for x in data.tolist():  # convert to Python list for fair comparison
+    total_py += x * x
+loop_time = time.perf_counter() - start
+
+# --- NumPy vectorized ---
+start = time.perf_counter()
+total_np = np.sum(data ** 2)
+numpy_time = time.perf_counter() - start
+
+print(f"Task: sum of squares for {N:,} floats")
+print()
+print(f"Python loop: {loop_time*1000:.1f}ms  → result: {total_py:.4f}")
+print(f"NumPy:       {numpy_time*1000:.1f}ms  → result: {total_np:.4f}")
+print()
+speedup = loop_time / numpy_time if numpy_time > 0 else float('inf')
+print(f"NumPy is ~{speedup:.0f}x faster")
+print()
+
+# More operations comparison
+ops = {
+    "sum": (lambda lst: sum(lst), lambda arr: np.sum(arr)),
+    "max": (lambda lst: max(lst), lambda arr: np.max(arr)),
+    "mean": (lambda lst: sum(lst)/len(lst), lambda arr: np.mean(arr)),
+}
+
+py_list = data.tolist()
+for op_name, (py_fn, np_fn) in ops.items():
+    t0 = time.perf_counter(); py_fn(py_list); py_t = time.perf_counter() - t0
+    t0 = time.perf_counter(); np_fn(data);    np_t = time.perf_counter() - t0
+    ratio = py_t / np_t if np_t > 0 else float('inf')
+    print(f"{op_name:>6}: Python={py_t*1000:.1f}ms  NumPy={np_t*1000:.1f}ms  "
+          f"({ratio:.0f}x speedup)")
+`} packages={["numpy"]} />
+
+## PROJECT: Neural Network Forward Pass from Scratch
+
+A neural network is just a sequence of matrix multiplications and non-linear functions. NumPy is all you need to implement one:
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# --- Activation functions ---
+
+def relu(x):
+    """ReLU: max(0, x) — sets negatives to 0, preserves positives."""
+    return np.maximum(0, x)
+
+def sigmoid(x):
+    """Sigmoid: maps any real number to (0, 1)."""
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
+
+def softmax(x):
+    """
+    Softmax: converts logits to probabilities that sum to 1.
+    Subtract max for numerical stability (avoids overflow in exp).
+    """
+    e_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
+    return e_x / e_x.sum(axis=-1, keepdims=True)
+
+def cross_entropy_loss(logits, targets):
+    """
+    Cross-entropy loss: measures prediction quality.
+    logits: (batch, classes), targets: (batch,) integer class indices
+    """
+    probs = softmax(logits)
+    batch_size = targets.shape[0]
+    # Select the probability the model assigned to the correct class
+    correct_probs = probs[np.arange(batch_size), targets]
+    # Negative log likelihood
+    return -np.mean(np.log(correct_probs + 1e-8))
+
+# --- Network definition ---
+
+class NeuralNetwork:
+    """
+    3-layer feedforward network:
+    Input (input_dim) → Hidden1 (256, ReLU) → Hidden2 (128, ReLU) → Output (n_classes, Softmax)
+    """
+    def __init__(self, input_dim, hidden1, hidden2, n_classes, rng=None):
+        if rng is None:
+            rng = np.random.default_rng(42)
+
+        # Xavier/Glorot initialization: variance = 2 / (fan_in + fan_out)
+        def xavier(fan_in, fan_out):
+            std = np.sqrt(2.0 / (fan_in + fan_out))
+            return rng.standard_normal((fan_in, fan_out)) * std
+
+        self.W1 = xavier(input_dim, hidden1)
+        self.b1 = np.zeros(hidden1)
+
+        self.W2 = xavier(hidden1, hidden2)
+        self.b2 = np.zeros(hidden2)
+
+        self.W3 = xavier(hidden2, n_classes)
+        self.b3 = np.zeros(n_classes)
+
+        print(f"Network architecture:")
+        print(f"  Input:   ({input_dim},)")
+        print(f"  Hidden1: ({hidden1},) [ReLU]  params: {self.W1.size + self.b1.size:,}")
+        print(f"  Hidden2: ({hidden2},) [ReLU]  params: {self.W2.size + self.b2.size:,}")
+        print(f"  Output:  ({n_classes},) [Softmax]  params: {self.W3.size + self.b3.size:,}")
+        total = sum(p.size for p in [self.W1,self.b1,self.W2,self.b2,self.W3,self.b3])
+        print(f"  Total parameters: {total:,}")
+
+    def forward(self, x):
+        """
+        Forward pass.
+        x: (batch_size, input_dim)
+        returns: (batch_size, n_classes) logits
+        """
+        # Layer 1: linear transform + ReLU
+        z1 = x @ self.W1 + self.b1          # (batch, hidden1)
+        a1 = relu(z1)
+
+        # Layer 2: linear transform + ReLU
+        z2 = a1 @ self.W2 + self.b2         # (batch, hidden2)
+        a2 = relu(z2)
+
+        # Output layer: linear transform (softmax applied in loss)
+        z3 = a2 @ self.W3 + self.b3         # (batch, n_classes)
+
+        # Store activations for inspection
+        self.activations = {"z1": z1, "a1": a1, "z2": z2, "a2": a2, "z3": z3}
+        return z3
+
+    def predict(self, x):
+        """Returns predicted class indices."""
+        logits = self.forward(x)
+        return np.argmax(softmax(logits), axis=1)
+
+# --- Run inference ---
+print("=" * 50)
+rng = np.random.default_rng(42)
+
+# Simulate image classification: 64-dimensional input, 10 classes
+net = NeuralNetwork(input_dim=64, hidden1=256, hidden2=128, n_classes=10)
+print()
+
+# Batch of 32 samples
+batch_size = 32
+x_batch = rng.standard_normal((batch_size, 64))
+true_labels = rng.integers(0, 10, batch_size)
+
+# Forward pass
+logits = net.forward(x_batch)
+probs = softmax(logits)
+predictions = net.predict(x_batch)
+loss = cross_entropy_loss(logits, true_labels)
+
+print(f"\nBatch inference ({batch_size} samples):")
+print(f"  Input shape:      {x_batch.shape}")
+print(f"  Logits shape:     {logits.shape}")
+print(f"  Probs shape:      {probs.shape}")
+print(f"  Probs sum check:  {probs.sum(axis=1).mean():.6f} (should be 1.0)")
+print(f"  Cross-entropy loss: {loss:.4f}")
+
+# Accuracy (random weights = ~10% for 10 classes)
+accuracy = np.mean(predictions == true_labels)
+print(f"  Accuracy: {accuracy:.0%} (random weights ≈ 10%)")
+
+print(f"\nActivation statistics:")
+for name, act in net.activations.items():
+    sparsity = np.mean(act == 0) if name.startswith("a") else 0.0
+    print(f"  {name}: shape={act.shape}, "
+          f"mean={act.mean():.3f}, std={act.std():.3f}"
+          + (f", ReLU sparsity={sparsity:.1%}" if sparsity > 0 else ""))
+`} packages={["numpy"]} />
+
+## Key Takeaways
+
+- **NumPy's speed comes from memory layout**: contiguous C arrays plus SIMD CPU instructions, not Python-level tricks — this is why copying to a list and back is expensive
+- **Slicing returns views, not copies**: `arr[0:5]` shares memory with `arr` — modifying it modifies the original; use `.copy()` when you need independence
+- **Boolean indexing is the most practical pattern**: `arr[arr > 0]` is cleaner and faster than any loop filter, and `arr[mask] = value` is the idiomatic way to conditionally set values
+- **Broadcasting follows three strict rules**: pad left with 1s, stretch size-1 dimensions, error on incompatible sizes — once internalized, it replaces most explicit loops
+- **`axis=0` reduces rows, `axis=1` reduces columns**: a (3, 4) array summed on `axis=0` gives shape (4,); summed on `axis=1` gives shape (3,) — think "collapse along this axis"
+- **`@` is matrix multiply, `*` is element-wise**: confusing them is the most common NumPy bug — always check shapes before and after
+- **`np.linalg.solve(A, b)` beats `inv(A) @ b`**: computing the inverse is slower and numerically less stable than solving directly; use `solve` for systems of equations
+- **Vectorization is a mindset shift**: instead of asking "how do I loop over elements?", ask "what array operation produces the result?" — the answer is almost always faster

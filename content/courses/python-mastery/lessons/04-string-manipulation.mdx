@@ -1,0 +1,490 @@
+---
+title: "String Manipulation, Regex & Text Processing"
+description: "Comprehensive string processing: all the methods, format specifications, and regular expressions you need for real data work. Build a log file parser and data extractor."
+duration: 24
+order: 4
+---
+
+## Strings as Immutable Sequences
+
+A Python string (`str`) is an **immutable sequence of Unicode code points**. Every string operation that appears to "modify" a string actually creates a new string object. This matters for performance: concatenating strings in a loop with `+=` is O(n²). Use `str.join()` instead.
+
+```python
+# O(n²) — don't do this in a loop
+result = ""
+for word in words:
+    result += word + " "
+
+# O(n) — correct
+result = " ".join(words)
+```
+
+Strings support all sequence operations — indexing, slicing, `len`, `in` — with the same semantics as tuples (immutable).
+
+<PythonPlayground code={String.raw`s = "Hello, Python!"
+
+# Indexing — O(1)
+print(s[0])       # H
+print(s[-1])      # !
+print(s[-7:])     # Python!
+
+# Slicing — returns a new str
+print(s[7:13])    # Python
+print(s[:5])      # Hello
+print(s[::2])     # Hlo yhn
+
+# Length and membership
+print(len(s))             # 14
+print("Python" in s)      # True
+print("Java" not in s)    # True
+
+# Iteration — iterate over Unicode code points
+for char in "abc":
+    print(char, end=" ")
+print()
+
+# Strings are immutable
+try:
+    s[0] = "h"
+except TypeError as e:
+    print(f"TypeError: {e}")
+
+# Efficient concatenation
+words = ["The", "quick", "brown", "fox"]
+sentence = " ".join(words)
+print(sentence)
+`} title="String indexing, slicing, immutability" />
+
+## Essential String Methods
+
+Python's `str` has over 40 methods. These are the ones you will use every day:
+
+<PythonPlayground code={String.raw`s = "  Hello, World!  "
+
+# Whitespace stripping
+print(repr(s.strip()))     # 'Hello, World!'
+print(repr(s.lstrip()))    # 'Hello, World!  '
+print(repr(s.rstrip()))    # '  Hello, World!'
+print(repr(s.strip("!")))  # strip specific chars
+
+# Case conversions
+text = "hello, WORLD!"
+print(text.upper())    # HELLO, WORLD!
+print(text.lower())    # hello, world!
+print(text.title())    # Hello, World!
+print(text.capitalize()) # Hello, world!
+print(text.swapcase()) # HELLO, world!
+
+# Checking
+print("hello123".isalpha())    # False (has digits)
+print("hello".isalpha())       # True
+print("123".isdigit())         # True
+print("Hello World".istitle()) # True
+
+# Search and replace
+s2 = "the cat sat on the mat"
+print(s2.count("at"))          # 3
+print(s2.find("cat"))          # 4  (-1 if not found)
+print(s2.index("sat"))         # 8  (raises ValueError if not found)
+print(s2.replace("at", "og"))  # the cog sog on the mog
+print(s2.replace("at", "og", 1))  # replace only first occurrence
+
+# Split and join
+csv_line = "Alice,30,Engineer,New York"
+parts = csv_line.split(",")
+print(parts)           # ['Alice', '30', 'Engineer', 'New York']
+print(",".join(parts)) # back to CSV
+
+lines = "line1\nline2\nline3"
+print(lines.splitlines())   # handles \n, \r\n, \r
+
+# Prefix/suffix checking
+url = "https://example.com/path"
+print(url.startswith("https"))
+print(url.endswith(".com/path"))
+
+# Padding and alignment
+print("42".zfill(5))          # 00042
+print("hi".center(10, "-"))   # ----hi----
+print("hi".ljust(10, "."))    # hi........
+print("hi".rjust(10, "."))    # ........hi
+`} title="Key string methods" />
+
+## Format Specifications in f-strings
+
+Python's f-string mini-language lets you control exactly how values are displayed. The format spec goes after the colon: `f"{value:spec}"`.
+
+<PythonPlayground code={String.raw`# Width and alignment
+name = "Alice"
+score = 92.5
+print(f"{'Name':<15} {'Score':>8}")        # header
+print(f"{'Alice':<15} {92.5:>8.1f}")
+print(f"{'Bob':<15} {85.0:>8.1f}")
+
+# Number formatting
+pi = 3.14159265358979
+large = 1_234_567.89
+
+print(f"Fixed:       {pi:.4f}")           # 3.1416
+print(f"Scientific:  {pi:.3e}")           # 3.142e+00
+print(f"Percentage:  {0.1234:.1%}")       # 12.3%
+print(f"Thousands:   {large:,.2f}")       # 1,234,567.89
+print(f"Signed:      {pi:+.3f}")          # +3.142
+print(f"Zero-padded: {42:010d}")          # 0000000042
+
+# Integer bases
+n = 255
+print(f"Decimal: {n:d}")    # 255
+print(f"Hex:     {n:x}")    # ff
+print(f"Hex cap: {n:X}")    # FF
+print(f"Hex 0x:  {n:#x}")   # 0xff
+print(f"Octal:   {n:o}")    # 377
+print(f"Binary:  {n:b}")    # 11111111
+print(f"Bin 0b:  {n:#b}")   # 0b11111111
+
+# Dynamic width/precision
+for value in [1, 100, 9999]:
+    print(f"{value:{10}d}")   # width from variable
+
+# Fill character with alignment
+print(f"{'TITLE':*^30}")      # ***********TITLE***********
+`} title="f-string format specifications" />
+
+## Special String Literals
+
+<PythonPlayground code={String.raw`# Multi-line strings — preserve newlines and indentation
+haiku = """
+An old silent pond
+A frog jumps into the pond
+Splash! Silence again
+""".strip()
+print(haiku)
+print(f"Lines: {haiku.count(chr(10)) + 1}")
+
+# Raw strings — backslashes are literal (essential for regex and Windows paths)
+normal = "C:\\Users\\Alice\\Documents"  # need to escape backslashes
+raw    = r"C:\Users\Alice\Documents"    # r-prefix: backslash is literal
+print(normal)
+print(raw)
+print(normal == raw)  # True
+
+regex_pattern = r"\d{4}-\d{2}-\d{2}"   # raw string for regex
+print(f"Pattern: {regex_pattern}")
+
+# Byte strings — sequence of integers 0-255, not Unicode
+b = b"Hello"
+print(type(b))
+print(b[0])         # 72 (ASCII code of 'H')
+print(len(b))       # 5
+
+# Encoding and decoding
+text = "Caf\u00e9"  # café with Unicode
+encoded = text.encode("utf-8")
+print(f"Text: {text!r}")
+print(f"UTF-8 bytes: {encoded!r}")
+print(f"Decoded: {encoded.decode('utf-8')!r}")
+
+# Always specify encoding — never rely on platform default
+# Open files with: open("file.txt", encoding="utf-8")
+`} title="Multi-line, raw, and byte strings" />
+
+## Regular Expressions
+
+A regular expression (regex) is a pattern that describes a set of strings. Python's `re` module implements a full regex engine. The key insight: **write patterns that match the structure of your data**, not just the specific example in front of you.
+
+<PythonPlayground code={String.raw`import re
+
+# The five most important re functions:
+# re.match(pattern, string)   — match at beginning of string
+# re.search(pattern, string)  — match anywhere in string
+# re.findall(pattern, string) — list of all matches
+# re.finditer(pattern, string) — iterator of match objects
+# re.sub(pattern, repl, string) — replace matches
+
+text = "Call us at 555-123-4567 or 800-555-9876. Fax: 555.123.0000"
+
+# findall — simple but gives only strings
+phones = re.findall(r'\d{3}[-\.]\d{3}[-\.]\d{4}', text)
+print("Phones found:", phones)
+
+# finditer — gives Match objects with position info
+for match in re.finditer(r'\d{3}[-\.]\d{3}[-\.]\d{4}', text):
+    print(f"  Found {match.group()!r} at position {match.start()}-{match.end()}")
+
+# sub — replacement
+normalized = re.sub(r'(\d{3})[-\.](\d{3})[-\.](\d{4})', r'(\1) \2-\3', text)
+print("Normalized:", normalized)
+
+# Compile patterns you reuse — avoids recompiling on every call
+PHONE_RE = re.compile(r'\d{3}[-\.]\d{3}[-\.]\d{4}')
+print("Compiled match:", bool(PHONE_RE.search(text)))
+`} title="re module basics" />
+
+### Groups and Named Groups
+
+<PythonPlayground code={String.raw`import re
+
+# Groups with ()
+log_line = '192.168.1.1 - - [01/Jan/2025:10:30:00 +0000] "GET /api/v1/users HTTP/1.1" 200 1234'
+
+# Named groups with (?P<name>...)
+LOG_PATTERN = re.compile(
+    r'(?P<ip>\d+\.\d+\.\d+\.\d+)'          # IP address
+    r' - - '
+    r'\[(?P<timestamp>[^\]]+)\]'             # timestamp
+    r' "(?P<method>\w+) (?P<path>\S+) '     # method and path
+    r'(?P<protocol>[^"]+)"'                  # protocol
+    r' (?P<status>\d{3})'                    # status code
+    r' (?P<size>\d+)'                        # response size
+)
+
+m = LOG_PATTERN.match(log_line)
+if m:
+    print("All groups:", m.groups())
+    print()
+    print("Named groups:")
+    for name, value in m.groupdict().items():
+        print(f"  {name:<12}: {value}")
+
+# Non-capturing group (?:...) — group without capturing
+dates = "2025-01-15, 2024-12-31, 2025-06-01"
+year_month = re.findall(r'(\d{4})-(\d{2})-\d{2}', dates)
+print("\nYear-month pairs:", year_month)
+
+# Lookahead (?=...) and lookbehind (?<=...)
+prices = "USD 10.99, EUR 8.50, GBP 12.00"
+amounts = re.findall(r'(?<=[A-Z]{3} )\d+\.\d{2}', prices)
+print("Amounts:", amounts)
+`} title="Groups and named groups" />
+
+### Common Patterns
+
+<PythonPlayground code={String.raw`import re
+
+# Pattern library
+PATTERNS = {
+    "email":   r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b',
+    "url":     r'https?://[^\s<>"{}|\\^\[\]]+',
+    "ipv4":    r'\b(?:\d{1,3}\.){3}\d{1,3}\b',
+    "date_iso": r'\b\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b',
+    "phone_us": r'\b(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',
+}
+
+test_cases = {
+    "email":    "Contact alice@example.com or bob.smith+tag@co.uk for info.",
+    "url":      "Visit https://python.org or http://docs.python.org/3/ today.",
+    "ipv4":     "Servers at 192.168.1.1 and 10.0.0.254 are unreachable.",
+    "date_iso": "Events on 2025-01-15, 2025-12-31, and 2026-03-01.",
+    "phone_us": "Call +1-555-123-4567 or (800) 555.9876 or 212 555 1234.",
+}
+
+for name, text in test_cases.items():
+    pattern = PATTERNS[name]
+    matches = re.findall(pattern, text)
+    print(f"{name}: {matches}")
+`} title="Common regex patterns" />
+
+## PROJECT: Log File Parser
+
+A full Apache/Nginx log parser that generates realistic log data and extracts actionable statistics.
+
+<PythonPlayground code={String.raw`import re
+import random
+from collections import Counter, defaultdict
+
+# --- Generate realistic log data ---
+random.seed(2025)
+
+IPS = ["192.168.1." + str(i) for i in range(1, 20)] + [
+    "10.0.0.5", "172.16.0.100", "203.0.113.42", "198.51.100.7"
+]
+PATHS = [
+    "/", "/index.html", "/api/v1/users", "/api/v1/products",
+    "/api/v1/orders", "/api/v2/search", "/static/app.js",
+    "/static/style.css", "/login", "/dashboard", "/404-missing",
+]
+METHODS = ["GET"] * 8 + ["POST"] * 3 + ["PUT"] + ["DELETE"]
+STATUS_WEIGHTS = {200: 60, 301: 5, 304: 8, 400: 4, 401: 3, 403: 2, 404: 10, 500: 8}
+STATUSES = []
+for code, weight in STATUS_WEIGHTS.items():
+    STATUSES.extend([code] * weight)
+
+def generate_log_line(i):
+    ip = random.choice(IPS)
+    day = random.randint(1, 28)
+    hour = random.randint(0, 23)
+    minute = random.randint(0, 59)
+    second = random.randint(0, 59)
+    timestamp = f"{day:02d}/Mar/2025:{hour:02d}:{minute:02d}:{second:02d} +0000"
+    method = random.choice(METHODS)
+    path = random.choice(PATHS)
+    status = random.choice(STATUSES)
+    size = random.randint(200, 50000) if status == 200 else random.randint(50, 500)
+    return f'{ip} - - [{timestamp}] "{method} {path} HTTP/1.1" {status} {size}'
+
+raw_logs = "\n".join(generate_log_line(i) for i in range(100))
+
+# --- Parser ---
+LOG_RE = re.compile(
+    r'(?P<ip>\d+\.\d+\.\d+\.\d+)'
+    r' - - '
+    r'\[(?P<timestamp>[^\]]+)\]'
+    r' "(?P<method>\w+) (?P<path>\S+) HTTP/[0-9.]+"'
+    r' (?P<status>\d{3})'
+    r' (?P<size>\d+)'
+)
+
+def parse_logs(raw):
+    entries = []
+    errors = []
+    for lineno, line in enumerate(raw.strip().splitlines(), 1):
+        m = LOG_RE.match(line)
+        if m:
+            d = m.groupdict()
+            d["status"] = int(d["status"])
+            d["size"] = int(d["size"])
+            entries.append(d)
+        else:
+            errors.append(lineno)
+    return entries, errors
+
+entries, parse_errors = parse_logs(raw_logs)
+
+# --- Analytics ---
+total = len(entries)
+ip_counter = Counter(e["ip"] for e in entries)
+status_counter = Counter(e["status"] for e in entries)
+path_counter = Counter(e["path"] for e in entries)
+error_entries = [e for e in entries if e["status"] >= 400]
+error_rate = len(error_entries) / total
+
+total_bytes = sum(e["size"] for e in entries)
+
+# Status code groups
+def status_group(code):
+    return f"{code // 100}xx"
+
+group_counter = Counter(status_group(e["status"]) for e in entries)
+
+# --- Report ---
+print(f"{'=' * 55}")
+print(f"  LOG ANALYSIS REPORT — {total} requests")
+print(f"{'=' * 55}")
+print(f"\nParse errors: {len(parse_errors)}")
+print(f"Error rate:   {error_rate:.1%}")
+print(f"Total bytes:  {total_bytes:,}")
+print(f"\nStatus code distribution:")
+for group in sorted(group_counter):
+    count = group_counter[group]
+    bar = '#' * (count // 2)
+    print(f"  {group}: {count:>4}  {bar}")
+
+print(f"\nTop 5 IPs by request count:")
+for ip, count in ip_counter.most_common(5):
+    print(f"  {ip:<18} {count:>4} requests")
+
+print(f"\nTop 5 paths:")
+for path, count in path_counter.most_common(5):
+    print(f"  {path:<30} {count:>4} requests")
+
+print(f"\nTop 5 error paths (4xx/5xx):")
+error_paths = Counter(e["path"] for e in error_entries)
+for path, count in error_paths.most_common(5):
+    print(f"  {path:<30} {count:>4} errors")
+`} title="PROJECT: Log File Parser" />
+
+## PROJECT: Data Extractor
+
+Extract structured data from unstructured text using a portfolio of regex patterns.
+
+<PythonPlayground code={String.raw`import re
+
+PATTERNS = {
+    "emails": re.compile(
+        r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b'
+    ),
+    "phones": re.compile(
+        r'\b(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b'
+    ),
+    "urls": re.compile(
+        r'https?://[^\s<>"{}|\\^\[\]]+'
+    ),
+    "ips": re.compile(
+        r'\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b'
+    ),
+    "dates": re.compile(
+        r'\b(?:\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|'
+        r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4})\b',
+        re.IGNORECASE
+    ),
+}
+
+def extract_all(text):
+    """Extract all pattern types from text. Returns dict of lists."""
+    return {name: list(dict.fromkeys(pattern.findall(text)))  # dedup, preserve order
+            for name, pattern in PATTERNS.items()}
+
+def normalize_phone(phone):
+    """Strip non-digits, then format as (XXX) XXX-XXXX."""
+    digits = re.sub(r'\D', '', phone)
+    if digits.startswith('1') and len(digits) == 11:
+        digits = digits[1:]
+    if len(digits) == 10:
+        return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    return phone   # return as-is if can't normalize
+
+# --- Demo ---
+messy_text = """
+Dear Team,
+
+Please update the deployment config at http://internal.company.com/configs/prod.json
+and http://staging.company.com/api/v2/settings before 2025-03-15.
+
+Contact alice.baker@company.com or bob.smith+ops@gmail.com for access.
+The on-call phone is (555) 123-4567 and the backup is 800.555.9876.
+
+Server IPs: 10.0.0.1, 192.168.100.50, and 203.0.113.0 need firewall rules updated.
+Old config backed up on January 15, 2025 and 12/31/2024.
+
+Regards,
+Dave (dave@ops.company.io, +1-415-555-0199)
+"""
+
+results = extract_all(messy_text)
+
+print("EXTRACTED DATA")
+print("=" * 50)
+for category, items in results.items():
+    if items:
+        print(f"\n{category.upper()} ({len(items)} found):")
+        for item in items:
+            if category == "phones":
+                print(f"  {item}  →  {normalize_phone(item)}")
+            else:
+                print(f"  {item}")
+`} title="PROJECT: Data Extractor" />
+
+## Challenge
+
+Sharpen your skills with these exercises:
+
+1. **Password validator** — write a regex that checks a password meets all of: at least 8 chars, at least one uppercase, at least one lowercase, at least one digit, at least one special character (`!@#$%^&*`). Return a list of unmet requirements.
+
+2. **Markdown link extractor** — write a function that extracts all links from Markdown text, returning a list of `(display_text, url)` tuples. Handle `[text](url)` and `[text][ref]` reference-style links.
+
+3. **CSV-to-dict parser** — without using the `csv` module, write a robust CSV parser using regex that handles quoted fields containing commas and newlines.
+
+4. **Format a table** — given a list of dicts (like database rows), write a `format_table(rows, headers=None)` function that outputs a properly aligned ASCII table using f-string format specifications. Column widths should auto-fit to content.
+
+5. **Log anonymizer** — write a function that takes a log string and replaces: all IPv4 addresses with `[IP_REDACTED]`, all email addresses with `[EMAIL_REDACTED]`, and all credit card numbers (16 digits, possibly space/dash-separated) with `[CC_REDACTED]`.
+
+## Key Takeaways
+
+- Strings are immutable Unicode sequences — concatenation in a loop is O(n²); use `str.join()` for O(n)
+- The format mini-language (`f"{val:spec}"`) handles width, alignment, precision, and numeric bases — master it to eliminate manual string formatting code
+- Raw strings (`r"..."`) are essential for regex patterns and Windows paths where backslash is literal
+- Compile regex patterns you reuse with `re.compile()` — the pattern is cached as a compiled finite automaton
+- Use named groups (`(?P&lt;name>...)`) in complex patterns; they make your code self-documenting and the match object easy to work with
+- `re.findall()` returns strings; `re.finditer()` returns Match objects with positional information — prefer `finditer` when you need position
+- `re.sub()` with a callable replacement function is one of the most powerful text transformation tools in Python
+- Encoding is not optional — always specify `encoding="utf-8"` when opening text files; never assume the platform default

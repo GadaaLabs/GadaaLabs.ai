@@ -1,0 +1,581 @@
+---
+title: "Deep Learning with PyTorch"
+description: "Build neural networks from first principles, then with PyTorch: tensors, autograd, custom layers, training loops, and CNNs. Implement a digit classifier and understand every line."
+duration: 34
+order: 15
+---
+
+## Why Neural Networks Work
+
+The **Universal Approximation Theorem** states that a neural network with a single hidden layer and enough neurons can approximate any continuous function to arbitrary precision. This is the mathematical guarantee that deep learning rests on.
+
+In practice: a network is a composition of differentiable operations. Because every operation has a known derivative, we can compute the gradient of the loss with respect to every parameter — then move parameters in the direction that decreases the loss. This is the entirety of deep learning, made feasible by GPUs and automatic differentiation.
+
+## Anatomy of a Neural Network
+
+```
+Input Layer → [Hidden Layer 1] → [Hidden Layer 2] → ... → Output Layer
+             (weights + bias)    (weights + bias)          (weights + bias)
+             + activation        + activation              + activation
+```
+
+Each layer computes:
+
+```
+output = activation(W @ input + b)
+```
+
+Where `W` is the weight matrix and `b` is the bias vector. The activation introduces nonlinearity — without it, stacking layers would collapse to a single linear transformation.
+
+**Common activations:**
+- **ReLU**: `max(0, x)` — fast, avoids vanishing gradients, default choice
+- **Sigmoid**: `1/(1+e^-x)` — outputs 0–1, used in binary classification output
+- **Tanh**: `(e^x - e^-x)/(e^x + e^-x)` — outputs -1–1, zero-centered
+- **Softmax**: normalizes to probability distribution, used in multi-class output
+
+## Loss Functions
+
+**Regression — Mean Squared Error:**
+
+```
+MSE = (1/n) * Σ(y_pred - y_true)²
+```
+
+**Binary Classification — Binary Cross-Entropy:**
+
+```
+BCE = -(1/n) * Σ[y*log(p) + (1-y)*log(1-p)]
+```
+
+**Multi-class — Categorical Cross-Entropy:**
+
+```
+CCE = -(1/n) * Σ Σ y_true[i,c] * log(p[i,c])
+```
+
+## Backpropagation — The Chain Rule
+
+Given a network `loss = L(f3(f2(f1(x))))`, the gradient of loss with respect to layer 1 weights is:
+
+```
+∂L/∂W1 = ∂L/∂f3 · ∂f3/∂f2 · ∂f2/∂f1 · ∂f1/∂W1
+```
+
+This is the chain rule applied repeatedly. Backpropagation is just an efficient algorithm that computes this by working backward from the output, reusing intermediate values.
+
+Every modern deep learning framework (PyTorch, JAX, TensorFlow) implements **automatic differentiation** — you define the forward pass, and gradients are computed for free.
+
+## Neural Network from Scratch with NumPy
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# ── Activation functions ──────────────────────────────────────────────────────
+def relu(x):
+    return np.maximum(0, x)
+
+def relu_grad(x):
+    return (x > 0).astype(float)
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-np.clip(x, -500, 500)))
+
+def sigmoid_grad(x):
+    s = sigmoid(x)
+    return s * (1 - s)
+
+# ── Loss ──────────────────────────────────────────────────────────────────────
+def binary_cross_entropy(y_pred, y_true):
+    eps = 1e-8
+    return -np.mean(y_true * np.log(y_pred + eps) + (1 - y_true) * np.log(1 - y_pred + eps))
+
+# ── Neural Network class ──────────────────────────────────────────────────────
+class NeuralNetwork:
+    def __init__(self, layer_sizes, lr=0.01):
+        """layer_sizes: e.g. [2, 8, 4, 1]"""
+        self.lr = lr
+        rng = np.random.default_rng(42)
+        self.weights = []
+        self.biases  = []
+        for i in range(len(layer_sizes) - 1):
+            fan_in = layer_sizes[i]
+            # He initialization for ReLU layers
+            scale = np.sqrt(2.0 / fan_in)
+            W = rng.normal(0, scale, (layer_sizes[i+1], layer_sizes[i]))
+            b = np.zeros((layer_sizes[i+1], 1))
+            self.weights.append(W)
+            self.biases.append(b)
+
+    def forward(self, X):
+        """X: (n_features, n_samples)"""
+        self.activations = [X]
+        self.pre_activations = []
+        A = X
+        for i, (W, b) in enumerate(zip(self.weights, self.biases)):
+            Z = W @ A + b
+            self.pre_activations.append(Z)
+            if i < len(self.weights) - 1:
+                A = relu(Z)
+            else:
+                A = sigmoid(Z)
+            self.activations.append(A)
+        return A
+
+    def backward(self, y_true):
+        m = y_true.shape[1]
+        dA = self.activations[-1] - y_true   # d(BCE)/d(output) combined with sigmoid grad
+
+        grad_W = []
+        grad_b = []
+        for i in reversed(range(len(self.weights))):
+            Z = self.pre_activations[i]
+            if i < len(self.weights) - 1:
+                dZ = dA * relu_grad(Z)
+            else:
+                dZ = dA   # BCE + sigmoid gradient cancels cleanly
+            dW = (dZ @ self.activations[i].T) / m
+            db = dZ.mean(axis=1, keepdims=True)
+            dA = self.weights[i].T @ dZ
+            grad_W.insert(0, dW)
+            grad_b.insert(0, db)
+
+        for i in range(len(self.weights)):
+            self.weights[i] -= self.lr * grad_W[i]
+            self.biases[i]  -= self.lr * grad_b[i]
+
+    def train(self, X, y, epochs=1000, verbose=True):
+        history = []
+        for epoch in range(epochs):
+            y_pred = self.forward(X)
+            loss = binary_cross_entropy(y_pred, y)
+            history.append(loss)
+            self.backward(y)
+            if verbose and epoch % 200 == 0:
+                preds = (y_pred > 0.5).astype(int)
+                acc = (preds == y).mean()
+                print(f"  Epoch {epoch:4d}: loss={loss:.4f}, acc={acc:.3f}")
+        return history
+
+# ── XOR problem: the classic 2-layer network demo ────────────────────────────
+X_xor = np.array([[0, 0, 1, 1],
+                   [0, 1, 0, 1]])   # shape (2, 4)
+y_xor = np.array([[0, 1, 1, 0]])    # XOR output
+
+print("XOR truth table:")
+for i in range(4):
+    print(f"  {int(X_xor[0,i])} XOR {int(X_xor[1,i])} = {int(y_xor[0,i])}")
+
+print("\\nTraining 3-layer network on XOR...")
+net = NeuralNetwork([2, 8, 4, 1], lr=0.05)
+history = net.train(X_xor, y_xor, epochs=1000, verbose=True)
+
+final_pred = net.forward(X_xor)
+print("\\nFinal predictions:")
+for i in range(4):
+    print(f"  {int(X_xor[0,i])} XOR {int(X_xor[1,i])}: pred={final_pred[0,i]:.4f}, correct={int(y_xor[0,i])}")
+print(f"\\nFinal loss: {history[-1]:.6f}")
+`} packages={["numpy"]} height={500} title="Neural Network from Scratch — XOR Problem" />
+
+## Gradient Descent Variants
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# Simulate a simple loss surface: L(w) = (w - 3)^2 + noise
+rng = np.random.default_rng(42)
+
+def loss(w, X, y):
+    pred = X * w
+    return np.mean((pred - y) ** 2)
+
+def grad(w, X, y):
+    pred = X * w
+    return 2 * np.mean((pred - y) * X)
+
+# Toy dataset: y = 3x + noise
+X = rng.normal(size=100)
+y = 3 * X + rng.normal(scale=0.5, size=100)
+
+def sgd(w_init, X, y, lr=0.1, epochs=50):
+    w = w_init
+    history = []
+    for e in range(epochs):
+        # Stochastic: use single random sample
+        idx = rng.integers(len(X))
+        g = grad(w, X[idx:idx+1], y[idx:idx+1])
+        w -= lr * g
+        history.append((loss(w, X, y), w))
+    return history
+
+def adam(w_init, X, y, lr=0.1, epochs=50, beta1=0.9, beta2=0.999, eps=1e-8):
+    w = w_init
+    m, v, t = 0.0, 0.0, 0
+    history = []
+    for e in range(epochs):
+        idx = rng.integers(len(X))
+        g = grad(w, X[idx:idx+1], y[idx:idx+1])
+        t += 1
+        m = beta1 * m + (1 - beta1) * g
+        v = beta2 * v + (1 - beta2) * g**2
+        m_hat = m / (1 - beta1**t)
+        v_hat = v / (1 - beta2**t)
+        w -= lr * m_hat / (np.sqrt(v_hat) + eps)
+        history.append((loss(w, X, y), w))
+    return history
+
+print("Optimizer comparison (target w=3.0):")
+print(f"{'Epoch':>6} {'SGD loss':>12} {'SGD w':>8} {'Adam loss':>12} {'Adam w':>8}")
+print("-" * 50)
+
+sgd_h  = sgd(0.0, X, y, lr=0.05, epochs=50)
+adam_h = adam(0.0, X, y, lr=0.3,  epochs=50)
+
+for epoch in [0, 9, 19, 29, 49]:
+    sl, sw = sgd_h[epoch]
+    al, aw = adam_h[epoch]
+    print(f"{epoch+1:6d} {sl:12.6f} {sw:8.4f} {al:12.6f} {aw:8.4f}")
+
+print(f"\\nSGD  final w={sgd_h[-1][1]:.4f} (target: 3.0000)")
+print(f"Adam final w={adam_h[-1][1]:.4f} (target: 3.0000)")
+print("Adam converges faster due to adaptive learning rates.")
+`} packages={["numpy"]} height={400} title="SGD vs Adam Optimizer" />
+
+## PyTorch: Tensors and Autograd
+
+```python
+import torch
+
+# Tensor creation
+x = torch.tensor([1.0, 2.0, 3.0])
+W = torch.randn(3, 4, requires_grad=True)   # Track gradients
+b = torch.zeros(4, requires_grad=True)
+
+# Forward pass
+out = x @ W + b
+loss = out.sum()
+
+# Backward pass — PyTorch computes all gradients automatically
+loss.backward()
+print(W.grad)    # dL/dW
+print(b.grad)    # dL/db
+
+# GPU support — just move tensors
+device = "cuda" if torch.cuda.is_available() else "cpu"
+x = x.to(device)
+W = W.to(device)
+```
+
+## Building Models with nn.Module
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class MLP(nn.Module):
+    def __init__(self, input_size, hidden_sizes, output_size, dropout=0.3):
+        super().__init__()
+        layers = []
+        prev_size = input_size
+        for h in hidden_sizes:
+            layers.extend([
+                nn.Linear(prev_size, h),
+                nn.BatchNorm1d(h),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+            ])
+            prev_size = h
+        layers.append(nn.Linear(prev_size, output_size))
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.network(x)
+
+model = MLP(input_size=784, hidden_sizes=[256, 128], output_size=10)
+print(model)
+print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
+```
+
+## The PyTorch Training Loop
+
+```python
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+
+def train_model(model, train_loader, val_loader, epochs=20, lr=1e-3):
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3)
+    criterion = nn.CrossEntropyLoss()
+    best_val_loss = float('inf')
+
+    for epoch in range(epochs):
+        # ── Training phase ──
+        model.train()
+        train_loss = 0.0
+        for X_batch, y_batch in train_loader:
+            optimizer.zero_grad()          # Clear gradients from previous step
+            outputs = model(X_batch)
+            loss = criterion(outputs, y_batch)
+            loss.backward()                # Compute gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()               # Update weights
+            train_loss += loss.item()
+
+        # ── Validation phase ──
+        model.eval()
+        val_loss = 0.0
+        correct = 0
+        with torch.no_grad():              # No gradient computation
+            for X_batch, y_batch in val_loader:
+                outputs = model(X_batch)
+                val_loss += criterion(outputs, y_batch).item()
+                correct += (outputs.argmax(1) == y_batch).sum().item()
+
+        val_loss /= len(val_loader)
+        scheduler.step(val_loss)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), "best_model.pt")   # Save best weights
+
+        if epoch % 5 == 0:
+            acc = correct / len(val_loader.dataset)
+            print(f"Epoch {epoch}: train={train_loss/len(train_loader):.4f}, "
+                  f"val={val_loss:.4f}, acc={acc:.3f}")
+
+    model.load_state_dict(torch.load("best_model.pt"))
+    return model
+```
+
+## CNN Architecture
+
+```python
+class CNN(nn.Module):
+    """Convolutional network for image classification."""
+    def __init__(self, n_classes=10):
+        super().__init__()
+        self.features = nn.Sequential(
+            # Block 1
+            nn.Conv2d(1, 32, kernel_size=3, padding=1),   # (1,28,28) -> (32,28,28)
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(2),                               # -> (32,14,14)
+
+            # Block 2
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),  # -> (64,14,14)
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2),                               # -> (64,7,7)
+
+            # Block 3
+            nn.Conv2d(64, 128, kernel_size=3, padding=1), # -> (128,7,7)
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+        )
+        self.classifier = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),                       # -> (128,1,1)
+            nn.Flatten(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(64, n_classes),
+        )
+
+    def forward(self, x):
+        return self.classifier(self.features(x))
+```
+
+## PROJECT: Neural Network from Scratch — Decision Boundary
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# ── Dataset: two interleaved spirals ─────────────────────────────────────────
+def make_spirals(n=300, noise=0.3, seed=42):
+    rng = np.random.default_rng(seed)
+    n_each = n // 2
+    theta = np.sqrt(rng.random(n_each)) * 4 * np.pi
+    X0 = np.column_stack([theta * np.cos(theta), theta * np.sin(theta)])
+    X1 = np.column_stack([-theta * np.cos(theta), -theta * np.sin(theta)])
+    X0 += rng.normal(0, noise, X0.shape)
+    X1 += rng.normal(0, noise, X1.shape)
+    X = np.vstack([X0, X1])
+    y = np.hstack([np.zeros(n_each), np.ones(n_each)])
+    return X, y
+
+# ── Vectorized Neural Network ─────────────────────────────────────────────────
+class Net:
+    def __init__(self, sizes, lr=0.005):
+        self.lr = lr
+        rng = np.random.default_rng(42)
+        self.W = []
+        self.b = []
+        for i in range(len(sizes)-1):
+            scale = np.sqrt(2.0 / sizes[i])
+            self.W.append(rng.normal(0, scale, (sizes[i], sizes[i+1])))
+            self.b.append(np.zeros(sizes[i+1]))
+
+    def relu(self, x): return np.maximum(0, x)
+    def sig(self, x):  return 1 / (1 + np.exp(-np.clip(x, -30, 30)))
+
+    def forward(self, X):
+        self._a = [X]
+        self._z = []
+        A = X
+        for i, (W, b) in enumerate(zip(self.W, self.b)):
+            Z = A @ W + b
+            self._z.append(Z)
+            A = self.relu(Z) if i < len(self.W)-1 else self.sig(Z)
+            self._a.append(A)
+        return A
+
+    def backward(self, y):
+        m = y.shape[0]
+        dA = self._a[-1] - y.reshape(-1,1)
+        for i in reversed(range(len(self.W))):
+            if i < len(self.W)-1:
+                dZ = dA * (self._z[i] > 0)
+            else:
+                dZ = dA
+            dW = self._a[i].T @ dZ / m
+            db = dZ.mean(0)
+            dA = dZ @ self.W[i].T
+            self.W[i] -= self.lr * dW
+            self.b[i]  -= self.lr * db
+
+    def train(self, X, y, epochs):
+        losses = []
+        for e in range(epochs):
+            pred = self.forward(X)
+            loss = -np.mean(y * np.log(pred[:,0]+1e-8) + (1-y)*np.log(1-pred[:,0]+1e-8))
+            losses.append(loss)
+            self.backward(y)
+        return losses
+
+    def predict(self, X):
+        return (self.forward(X)[:,0] > 0.5).astype(int)
+
+# ── Train ─────────────────────────────────────────────────────────────────────
+X, y = make_spirals(n=400, noise=0.2)
+X = (X - X.mean(0)) / X.std(0)   # Normalize
+
+net = Net([2, 32, 32, 16, 1], lr=0.01)
+losses = net.train(X, y, epochs=3000)
+
+final_preds = net.predict(X)
+accuracy = (final_preds == y).mean()
+
+# ── Results ───────────────────────────────────────────────────────────────────
+print(f"Training accuracy: {accuracy:.3%}")
+print(f"Final loss: {losses[-1]:.4f}")
+
+# Show loss curve in text
+print("\\nLoss curve (every 300 epochs):")
+print(f"{'Epoch':>8} {'Loss':>10}")
+print("-" * 20)
+for i in range(0, 3000, 300):
+    print(f"{i:8d} {losses[i]:10.4f}")
+
+# Decision boundary sample
+print("\\nDecision boundary check (4 quadrant samples):")
+test_pts = np.array([[-1,-1],[1,-1],[-1,1],[1,1]])
+test_preds = net.forward(test_pts)[:,0]
+for pt, prob in zip(test_pts, test_preds):
+    cls = "class 1" if prob > 0.5 else "class 0"
+    print(f"  {pt} -> prob={prob:.3f} ({cls})")
+`} packages={["numpy"]} height={500} title="Neural Net from Scratch — Spiral Classification" />
+
+## PyTorch Digit Classifier on MNIST
+
+This code runs in a Python environment with PyTorch installed, not in the browser playground:
+
+```python
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
+
+# Data
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.1307,), (0.3081,))
+])
+train_data = datasets.MNIST('.', train=True,  download=True, transform=transform)
+test_data  = datasets.MNIST('.', train=False, download=True, transform=transform)
+train_loader = DataLoader(train_data, batch_size=128, shuffle=True,  num_workers=4)
+test_loader  = DataLoader(test_data,  batch_size=256, shuffle=False, num_workers=4)
+
+# Model
+class DigitClassifier(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(),
+            nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(),
+            nn.AdaptiveAvgPool2d(4),
+        )
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(128*4*4, 256), nn.ReLU(), nn.Dropout(0.4),
+            nn.Linear(256, 10)
+        )
+    def forward(self, x): return self.fc(self.conv(x))
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = DigitClassifier().to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+criterion = nn.CrossEntropyLoss()
+
+# Training loop
+for epoch in range(10):
+    model.train()
+    for X, y in train_loader:
+        X, y = X.to(device), y.to(device)
+        optimizer.zero_grad()
+        loss = criterion(model(X), y)
+        loss.backward()
+        optimizer.step()
+
+    # Evaluate
+    model.eval()
+    correct = 0
+    with torch.no_grad():
+        for X, y in test_loader:
+            X, y = X.to(device), y.to(device)
+            correct += (model(X).argmax(1) == y).sum().item()
+    print(f"Epoch {epoch+1}: accuracy={correct/len(test_data):.4f}")
+# Typically reaches >99% accuracy in 10 epochs
+```
+
+## Debugging Neural Networks
+
+When training stalls or fails, work through this checklist:
+
+**Loss not decreasing:**
+- Check learning rate — too high causes oscillation, too low causes glacial progress
+- Check that `optimizer.zero_grad()` is called every step
+- Verify input normalization — unnormalized inputs slow convergence dramatically
+- Print the loss before calling `.backward()` to confirm the forward pass runs
+
+**Vanishing gradients** (deep networks):
+- Add `BatchNorm` after each layer
+- Use ReLU (or leaky ReLU) instead of sigmoid/tanh in hidden layers
+- Use residual connections (skip connections)
+- Gradient clipping: `torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)`
+
+**Overfitting:**
+- Add `Dropout(0.3-0.5)` after dense layers
+- L2 regularization: `weight_decay=1e-4` in optimizer
+- Reduce model capacity
+- Add data augmentation (images) or collect more data
+
+## Key Takeaways
+
+- Backpropagation is the chain rule applied recursively — every modern framework automates this
+- ReLU is the default activation; it avoids the vanishing gradient problem that plagued sigmoid/tanh networks
+- The training loop structure is always: `zero_grad → forward → loss → backward → step`
+- `BatchNorm` stabilizes training by normalizing layer inputs; add it after every linear/conv layer
+- Use `model.eval()` and `torch.no_grad()` during validation — these disable dropout and gradient tracking
+- Learning rate is the most important hyperparameter; use `ReduceLROnPlateau` or cosine annealing
+- Transfer learning: freeze pretrained feature layers, replace and train only the classification head
+- When debugging, simplify — overfit a single batch first to confirm the model and loss function are correct

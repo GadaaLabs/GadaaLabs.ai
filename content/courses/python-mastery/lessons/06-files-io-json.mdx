@@ -1,0 +1,710 @@
+---
+title: "File I/O, JSON, CSV & the pathlib API"
+description: "Reading, writing, and processing files in Python: text files, JSON configuration, CSV data, and pathlib for cross-platform path handling. Build a configuration manager and a CSV data pipeline."
+duration: 24
+order: 6
+---
+
+## The Context Manager: Always Use `with`
+
+When you open a file, the OS gives you a **file descriptor** — a limited system resource. If your program crashes or you forget to call `f.close()`, the descriptor leaks. The `with` statement guarantees the file is closed even if an exception is raised.
+
+```python
+# Wrong — close() may never be called if an exception occurs
+f = open("data.txt")
+data = f.read()
+f.close()
+
+# Correct — __exit__ is called no matter what
+with open("data.txt") as f:
+    data = f.read()
+```
+
+The `with` statement works with any **context manager** — objects implementing `__enter__` and `__exit__`. Files, database connections, locks, and temporary directories are all context managers.
+
+## Reading Modes
+
+| Mode | Meaning | Creates file? | Truncates? |
+|------|---------|--------------|-----------|
+| `r` | Read text (default) | No | No |
+| `w` | Write text | Yes | Yes |
+| `a` | Append text | Yes | No |
+| `r+` | Read + write text | No | No |
+| `rb` | Read binary | No | No |
+| `wb` | Write binary | Yes | Yes |
+| `x` | Exclusive create | Fails if exists | — |
+
+Use binary mode (`rb`, `wb`) for images, PDFs, archives, or any file that is not plain text. Use text mode with `encoding="utf-8"` for all text files.
+
+<PythonPlayground code={String.raw`import io
+
+# We simulate files with io.StringIO (in-memory string buffer)
+# This is exactly what you would do with real files —
+# just replace io.StringIO("content") with open("file.txt")
+
+# --- Writing ---
+buffer = io.StringIO()
+buffer.write("First line\n")
+buffer.write("Second line\n")
+buffer.write("Third line\n")
+content = buffer.getvalue()
+print("Written content:")
+print(repr(content))
+print()
+
+# --- Reading strategies ---
+source = io.StringIO("alpha\nbeta\ngamma\ndelta\n")
+
+# read() — read entire file at once
+source.seek(0)
+everything = source.read()
+print("read():", repr(everything[:20]))
+
+# readline() — one line at a time
+source.seek(0)
+first_line = source.readline()
+second_line = source.readline()
+print("readline():", repr(first_line), repr(second_line))
+
+# readlines() — all lines as a list
+source.seek(0)
+lines = source.readlines()
+print("readlines():", lines)
+
+# Iteration (best for large files — no full load into memory)
+source.seek(0)
+print("Line by line:")
+for i, line in enumerate(source):
+    print(f"  {i}: {line.rstrip()}")
+`} title="Context managers and reading strategies" />
+
+## Writing Files
+
+<PythonPlayground code={String.raw`import io
+
+# write() — write a string
+output = io.StringIO()
+chars_written = output.write("Hello, World!\n")
+print(f"write() returned: {chars_written} characters written")
+
+# writelines() — write a list of strings (no newlines added automatically!)
+lines = ["Line 1\n", "Line 2\n", "Line 3\n"]
+output.writelines(lines)
+print(output.getvalue())
+
+# print(file=) — use print's formatting power, redirect to file
+log_buffer = io.StringIO()
+print("Server started", file=log_buffer)
+print(f"PID: {12345}", file=log_buffer)
+print("-" * 30, file=log_buffer)
+print(log_buffer.getvalue())
+
+# Append mode simulation
+existing = io.StringIO("existing content\n")
+existing.seek(0, 2)   # seek to end (simulates append mode)
+existing.write("appended line\n")
+existing.seek(0)
+print("After append:")
+print(existing.read())
+`} title="Writing files" />
+
+## The pathlib API
+
+`pathlib.Path` is the modern, object-oriented way to handle file system paths. It is cross-platform (handles Windows vs POSIX separators), composable with `/`, and replaces `os.path` for most use cases.
+
+<PythonPlayground code={String.raw`from pathlib import Path, PurePosixPath
+
+# PurePath — path manipulation without filesystem access
+# (works the same in Pyodide as on any OS)
+p = PurePosixPath("/home/alice/projects/myapp/config.json")
+
+print(f"Path:      {p}")
+print(f"Parent:    {p.parent}")
+print(f"Parents:   {list(p.parents)}")
+print(f"Name:      {p.name}")      # config.json
+print(f"Stem:      {p.stem}")      # config
+print(f"Suffix:    {p.suffix}")    # .json
+print(f"Suffixes:  {p.suffixes}")  # ['.json']
+print(f"Parts:     {p.parts}")
+
+# Path composition with / operator
+base = PurePosixPath("/data")
+config_dir = base / "configs"
+file_path = config_dir / "prod.json"
+print(f"\nComposed: {file_path}")
+
+# Relative path resolution
+rel = PurePosixPath("src/utils.py")
+print(f"Relative: {rel}")
+print(f"With suffix: {rel.with_suffix('.pyc')}")
+print(f"With name:   {rel.with_name('helpers.py')}")
+
+# String operations
+print(f"\nIs absolute: {file_path.is_absolute()}")
+print(f"Match *.json: {file_path.match('*.json')}")
+
+# Path — also does filesystem operations (like exists(), mkdir(), glob())
+# In real code you would use:
+#   Path("config.json").exists()
+#   Path("logs/").mkdir(parents=True, exist_ok=True)
+#   list(Path(".").glob("**/*.py"))
+#   list(Path(".").rglob("*.txt"))
+`} title="pathlib.Path API" />
+
+## JSON: Encoding and Decoding
+
+JSON is the lingua franca of web APIs and configuration files. Python's `json` module converts between JSON strings and Python objects.
+
+| JSON | Python |
+|------|--------|
+| object | `dict` |
+| array | `list` |
+| string | `str` |
+| number | `int` or `float` |
+| `true`/`false` | `True`/`False` |
+| `null` | `None` |
+
+<PythonPlayground code={String.raw`import json
+from datetime import datetime, date
+
+# --- Basic encoding ---
+data = {
+    "name": "Alice",
+    "age": 30,
+    "active": True,
+    "scores": [95, 87, 92],
+    "address": {"city": "NYC", "zip": "10001"},
+    "notes": None,
+}
+
+# dumps — dict to JSON string
+json_str = json.dumps(data)
+print("Compact:", json_str[:60], "...")
+
+# Pretty printing
+pretty = json.dumps(data, indent=2, sort_keys=True)
+print("\nPretty:")
+print(pretty)
+
+# --- Decoding ---
+decoded = json.loads(json_str)
+print("\nRound-trip equal:", decoded == data)
+print("Type after decode:", type(decoded["age"]))
+
+# --- Custom encoders/decoders ---
+# Problem: datetime is not JSON-serializable by default
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return {"__type__": "datetime", "value": obj.isoformat()}
+        return super().default(obj)
+
+def datetime_decoder(dct):
+    if dct.get("__type__") == "datetime":
+        return datetime.fromisoformat(dct["value"])
+    return dct
+
+event = {"name": "Conference", "date": datetime(2025, 6, 15, 9, 0)}
+
+encoded = json.dumps(event, cls=DateTimeEncoder, indent=2)
+print("\nDatetime encoded:")
+print(encoded)
+
+decoded_event = json.loads(encoded, object_hook=datetime_decoder)
+print("\nDecoded date type:", type(decoded_event["date"]))
+print("Decoded date:     ", decoded_event["date"])
+
+# --- Simulating file I/O ---
+import io
+buf = io.StringIO()
+json.dump(data, buf, indent=2)
+buf.seek(0)
+loaded = json.load(buf)
+print("\nLoaded from StringIO:", loaded["name"])
+`} title="JSON encoding, decoding, custom serializer" />
+
+## CSV: Reading and Writing Tabular Data
+
+CSV (comma-separated values) is everywhere — databases, spreadsheets, data pipelines. Python's `csv` module handles quoting, escaping, and different dialects correctly.
+
+<PythonPlayground code={String.raw`import csv
+import io
+
+# --- csv.writer ---
+output = io.StringIO()
+writer = csv.writer(output)
+writer.writerow(["Name", "Age", "City", "Score"])  # header
+writer.writerows([
+    ["Alice", 30, "New York",     95.5],
+    ["Bob",   25, "Los Angeles",  87.0],
+    ["Carol", 35, 'San Francisco', 92.3],  # no escaping issues
+    ['Dave',  28, 'Chicago, IL',  78.5],   # comma in field — auto-quoted
+])
+csv_content = output.getvalue()
+print("Generated CSV:")
+print(csv_content)
+
+# --- csv.reader ---
+reader = csv.reader(io.StringIO(csv_content))
+header = next(reader)
+print(f"Headers: {header}")
+rows = list(reader)
+for row in rows:
+    print(f"  {row}")
+
+# --- csv.DictWriter / DictReader (most useful in practice) ---
+fieldnames = ["name", "department", "salary", "start_date"]
+buf2 = io.StringIO()
+
+dwriter = csv.DictWriter(buf2, fieldnames=fieldnames)
+dwriter.writeheader()
+dwriter.writerows([
+    {"name": "Alice Smith",  "department": "Engineering", "salary": 95000, "start_date": "2021-03-15"},
+    {"name": "Bob Jones",    "department": "Marketing",   "salary": 72000, "start_date": "2022-07-01"},
+    {"name": "Carol White",  "department": "Engineering", "salary": 105000, "start_date": "2020-01-10"},
+    {"name": "Dave Brown",   "department": "HR",          "salary": 68000, "start_date": "2023-02-20"},
+])
+
+buf2.seek(0)
+dreader = csv.DictReader(buf2)
+print("\nDict rows:")
+for row in dreader:
+    print(f"  {row['name']:<15} {row['department']:<15} {chr(36)}{int(row['salary']):>8,}")
+`} title="CSV reader, writer, DictReader, DictWriter" />
+
+## configparser and tempfile
+
+<PythonPlayground code={String.raw`import configparser
+import io
+import tempfile
+import os
+
+# --- configparser: read .ini style config files ---
+config_text = """
+[database]
+host = localhost
+port = 5432
+name = myapp_db
+pool_size = 10
+
+[redis]
+host = localhost
+port = 6379
+ttl = 3600
+
+[app]
+debug = false
+log_level = INFO
+allowed_hosts = localhost,127.0.0.1
+"""
+
+config = configparser.ConfigParser()
+config.read_string(config_text)
+
+print("Database host:", config["database"]["host"])
+print("DB port (int):", config.getint("database", "port"))
+print("App debug:    ", config.getboolean("app", "debug"))
+print("Log level:    ", config.get("app", "log_level"))
+
+# List all sections
+for section in config.sections():
+    print(f"\n[{section}]")
+    for key, value in config[section].items():
+        print(f"  {key} = {value}")
+
+# Write config to StringIO
+out = io.StringIO()
+config.write(out)
+print("\nConfigParser round-trip — first 200 chars:")
+print(out.getvalue()[:200])
+
+# --- tempfile: create temporary files safely ---
+# tempfile.NamedTemporaryFile and TemporaryDirectory are the common ones.
+# In Pyodide the /tmp directory is available.
+with tempfile.TemporaryDirectory() as tmpdir:
+    tmpfile = os.path.join(tmpdir, "test.txt")
+    with open(tmpfile, "w", encoding="utf-8") as f:
+        f.write("temporary content\n")
+    with open(tmpfile, encoding="utf-8") as f:
+        print("\nTemp file content:", f.read().strip())
+    print("Temp dir:", tmpdir)
+# tmpdir and its contents are automatically deleted here
+print("Temp dir cleaned up.")
+`} title="configparser and tempfile" />
+
+## PROJECT: Configuration Manager
+
+A production-quality config manager with JSON storage, defaults, nested dot-notation access, and validation.
+
+<PythonPlayground code={String.raw`import json
+import io
+import os
+from typing import Any, Dict, Optional
+
+class ConfigError(Exception):
+    pass
+
+class ConfigManager:
+    """
+    Hierarchical JSON configuration manager.
+
+    Features:
+    - Nested dot-notation access: config.get("db.host")
+    - Layered defaults + user config + environment overrides
+    - Validation against a schema dict
+    - Round-trip load/save via file or string
+    """
+
+    def __init__(self, defaults: Optional[Dict] = None):
+        self._data: Dict = {}
+        self._defaults: Dict = defaults or {}
+
+    # --- Loading ---
+    def load_string(self, json_str: str) -> "ConfigManager":
+        """Load config from a JSON string."""
+        try:
+            self._data = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            raise ConfigError(f"Invalid JSON: {e}") from e
+        return self
+
+    def load_file(self, path: str) -> "ConfigManager":
+        """Load config from a JSON file."""
+        with open(path, encoding="utf-8") as f:
+            return self.load_string(f.read())
+
+    # --- Saving ---
+    def dump_string(self, indent: int = 2) -> str:
+        """Serialize config to a JSON string."""
+        return json.dumps(self._data, indent=indent, sort_keys=True)
+
+    def save_file(self, path: str, indent: int = 2):
+        """Write config to a JSON file."""
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(self.dump_string(indent))
+
+    # --- Access ---
+    def _resolve(self, key: str, data: Dict) -> Any:
+        """Walk a dotted key through nested dicts."""
+        parts = key.split(".", 1)
+        head, *rest = parts
+        if head not in data:
+            return None, False
+        value = data[head]
+        if rest:
+            if not isinstance(value, dict):
+                return None, False
+            return self._resolve(rest[0], value)
+        return value, True
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get a value by dotted key. Checks env vars, user config, then defaults."""
+        # 1. Environment variable override (e.g. "db.host" -> "DB__HOST")
+        env_key = key.upper().replace(".", "__")
+        env_val = os.environ.get(env_key)
+        if env_val is not None:
+            return env_val
+
+        # 2. User config
+        value, found = self._resolve(key, self._data)
+        if found:
+            return value
+
+        # 3. Defaults
+        value, found = self._resolve(key, self._defaults)
+        if found:
+            return value
+
+        return default
+
+    def set(self, key: str, value: Any) -> "ConfigManager":
+        """Set a value by dotted key, creating intermediate dicts as needed."""
+        parts = key.split(".")
+        target = self._data
+        for part in parts[:-1]:
+            if part not in target or not isinstance(target[part], dict):
+                target[part] = {}
+            target = target[part]
+        target[parts[-1]] = value
+        return self
+
+    def has(self, key: str) -> bool:
+        _, found = self._resolve(key, self._data)
+        return found
+
+    # --- Validation ---
+    def validate(self, schema: Dict) -> list:
+        """
+        Validate config against a schema dict.
+        Schema: {dotted_key: type_or_tuple_of_types}
+        Returns list of error strings.
+        """
+        errors = []
+        for key, expected_type in schema.items():
+            value = self.get(key)
+            if value is None:
+                errors.append(f"Missing required key: {key!r}")
+            elif not isinstance(value, expected_type):
+                errors.append(
+                    f"Key {key!r}: expected {expected_type.__name__}, "
+                    f"got {type(value).__name__} ({value!r})"
+                )
+        return errors
+
+    def __repr__(self):
+        return f"ConfigManager({list(self._data.keys())})"
+
+
+# ========================================
+# DEMO
+# ========================================
+DEFAULTS = {
+    "app": {"debug": False, "log_level": "INFO", "port": 8000},
+    "db": {"host": "localhost", "port": 5432, "pool_size": 5},
+    "cache": {"ttl": 300, "max_size": 1000},
+}
+
+PROD_CONFIG = """
+{
+  "app": {
+    "port": 443,
+    "log_level": "WARNING",
+    "name": "MyApp"
+  },
+  "db": {
+    "host": "db.prod.example.com",
+    "port": 5432,
+    "name": "production_db",
+    "pool_size": 20,
+    "credentials": {
+      "user": "app_user",
+      "password": "s3cr3t"
+    }
+  },
+  "feature_flags": {
+    "new_ui": true,
+    "beta_api": false
+  }
+}
+"""
+
+config = ConfigManager(defaults=DEFAULTS)
+config.load_string(PROD_CONFIG)
+
+# Dot-notation access
+print("=== CONFIG ACCESS ===")
+print(f"app.port:                {config.get('app.port')}")
+print(f"app.debug:               {config.get('app.debug')}")      # from defaults
+print(f"app.log_level:           {config.get('app.log_level')}")
+print(f"db.host:                 {config.get('db.host')}")
+print(f"db.pool_size:            {config.get('db.pool_size')}")
+print(f"db.credentials.user:     {config.get('db.credentials.user')}")
+print(f"cache.ttl:               {config.get('cache.ttl')}")       # from defaults
+print(f"feature_flags.new_ui:    {config.get('feature_flags.new_ui')}")
+print(f"missing.key:             {config.get('missing.key', 'NOT FOUND')}")
+
+# Set values
+config.set("app.debug", False)
+config.set("monitoring.enabled", True)
+config.set("monitoring.interval", 60)
+print(f"\nmonitoring.enabled:  {config.get('monitoring.enabled')}")
+print(f"monitoring.interval: {config.get('monitoring.interval')}")
+
+# Validation
+SCHEMA = {
+    "app.port": int,
+    "db.host": str,
+    "db.pool_size": int,
+}
+errors = config.validate(SCHEMA)
+if errors:
+    print(f"\nValidation errors: {errors}")
+else:
+    print("\nConfig validation passed.")
+
+# Serialize
+print("\nConfig JSON (first 300 chars):")
+print(config.dump_string()[:300])
+`} title="PROJECT: Configuration Manager" />
+
+## PROJECT: CSV Data Pipeline
+
+A data pipeline that validates, transforms, and cleans CSV data — a pattern that appears in virtually every data engineering task.
+
+<PythonPlayground code={String.raw`import csv
+import io
+import re
+from datetime import datetime
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
+
+# --- Schema definition ---
+@dataclass
+class ValidationError:
+    row_number: int
+    field: str
+    value: str
+    message: str
+
+@dataclass
+class PipelineResult:
+    total_rows: int
+    valid_rows: int
+    invalid_rows: int
+    errors: List[ValidationError] = field(default_factory=list)
+    output_csv: str = ""
+
+def normalize_name(name: str) -> str:
+    """Title-case a name, handling extra spaces."""
+    return " ".join(word.capitalize() for word in name.strip().split())
+
+def parse_date(date_str: str) -> Optional[str]:
+    """Try several date formats, return ISO format or None."""
+    formats = ["%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%B %d, %Y", "%b %d, %Y"]
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str.strip(), fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+def validate_email(email: str) -> bool:
+    return bool(re.match(r'\S+@\S+\.\S+', email.strip()))
+
+def validate_row(row: dict, row_num: int) -> Tuple[Optional[dict], List[ValidationError]]:
+    """Validate and transform a single row. Returns (clean_row, errors)."""
+    errors = []
+
+    # Normalize name
+    name = normalize_name(row.get("name", ""))
+    if len(name) < 2:
+        errors.append(ValidationError(row_num, "name", row.get("name", ""), "Name too short"))
+
+    # Validate email
+    email = row.get("email", "").strip().lower()
+    if not validate_email(email):
+        errors.append(ValidationError(row_num, "email", email, "Invalid email format"))
+
+    # Parse and normalize date
+    raw_date = row.get("join_date", "")
+    iso_date = parse_date(raw_date)
+    if not iso_date:
+        errors.append(ValidationError(row_num, "join_date", raw_date,
+                                       "Unrecognized date format"))
+
+    # Validate and coerce age
+    try:
+        age = int(row.get("age", ""))
+        if not (16 <= age <= 120):
+            raise ValueError("out of range")
+    except (ValueError, TypeError):
+        age = None
+        errors.append(ValidationError(row_num, "age", row.get("age", ""),
+                                       "Age must be an integer between 16 and 120"))
+
+    # Validate department
+    valid_depts = {"engineering", "marketing", "hr", "finance", "product", "sales"}
+    dept = row.get("department", "").strip().lower()
+    if dept not in valid_depts:
+        errors.append(ValidationError(row_num, "department", dept,
+                                       f"Invalid dept. Must be one of: {sorted(valid_depts)}"))
+
+    if errors:
+        return None, errors
+
+    clean = {
+        "name": name,
+        "email": email,
+        "join_date": iso_date,
+        "age": age,
+        "department": dept.title(),
+    }
+    return clean, []
+
+
+def run_pipeline(raw_csv: str) -> PipelineResult:
+    """Read, validate, transform, and write cleaned CSV data."""
+    reader = csv.DictReader(io.StringIO(raw_csv))
+    all_errors: List[ValidationError] = []
+    clean_rows: List[dict] = []
+
+    for row_num, row in enumerate(reader, start=2):  # row 1 is header
+        clean, errors = validate_row(row, row_num)
+        if clean:
+            clean_rows.append(clean)
+        else:
+            all_errors.extend(errors)
+
+    # Write cleaned output
+    fieldnames = ["name", "email", "join_date", "age", "department"]
+    out_buf = io.StringIO()
+    writer = csv.DictWriter(out_buf, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(clean_rows)
+
+    return PipelineResult(
+        total_rows=row_num - 1,
+        valid_rows=len(clean_rows),
+        invalid_rows=row_num - 1 - len(clean_rows),
+        errors=all_errors,
+        output_csv=out_buf.getvalue(),
+    )
+
+
+# --- Sample input with intentional errors ---
+RAW_DATA = """name,email,join_date,age,department
+alice smith,alice@example.com,2021-03-15,30,engineering
+BOB JONES,bob@example.com,07/01/2022,25,Marketing
+carol white,not-an-email,January 10 2020,35,Engineering
+dave brown,dave@example.com,2023-02-20,999,HR
+eve wilson,eve@example.com,15/06/2021,28,Sales
+frank miller,frank@corp.io,2020-12-01,42,Finance
+g,gary@test.com,2022-09-01,31,Product
+hannah,hannah@company.com,not-a-date,29,engineering
+ivan petrov,ivan@co.uk,2021-07-04,27,Unknown
+julia chen,julia@example.com,March 5, 2022,33,product
+"""
+
+result = run_pipeline(RAW_DATA)
+
+print("=" * 55)
+print("  CSV DATA PIPELINE RESULTS")
+print("=" * 55)
+print(f"  Total rows:   {result.total_rows}")
+print(f"  Valid rows:   {result.valid_rows}")
+print(f"  Invalid rows: {result.invalid_rows}")
+print(f"  Error count:  {len(result.errors)}")
+
+if result.errors:
+    print(f"\nValidation errors:")
+    for err in result.errors:
+        print(f"  Row {err.row_number} | {err.field:<12} | {err.value!r:<25} | {err.message}")
+
+print(f"\nCleaned CSV output:")
+print(result.output_csv)
+`} title="PROJECT: CSV Data Pipeline" />
+
+## Challenge
+
+Push further with these exercises:
+
+1. **Recursive directory scanner** — write a function `scan_directory(path, extensions=None)` using `pathlib.Path.rglob()` that returns a dict mapping each extension to a list of matching file paths. Exclude hidden files (starting with `.`).
+
+2. **JSON diff** — write `json_diff(a_str, b_str)` that compares two JSON objects and returns a dict describing changes: added keys, removed keys, changed values (with old and new). Handle nested dicts recursively.
+
+3. **CSV streaming aggregator** — write a function that reads a very large CSV (simulate with a 10,000-row StringIO) without loading it all into memory. Compute: row count, sum and mean of a numeric column, value counts for a categorical column. Use a single pass.
+
+4. **Config merger** — extend `ConfigManager` with a `merge(other: ConfigManager)` method that deep-merges two configs, with the other config winning on conflicts. Write tests that verify nested dict merging.
+
+5. **NDJSON writer/reader** — implement a `NDJSONWriter` and `NDJSONReader` class for newline-delimited JSON (one JSON object per line, used in log streaming). The writer should accept a datetime encoder. The reader should yield decoded objects lazily.
+
+## Key Takeaways
+
+- Always use the `with` statement for file I/O — it guarantees cleanup via `__exit__` even when exceptions occur
+- Text mode with `encoding="utf-8"` is the safe default; only use binary mode when dealing with non-text data
+- `pathlib.Path` replaces `os.path` — it is composable with `/`, self-documenting, and cross-platform
+- `json.dumps/loads` and `json.dump/load` (with file) are the two patterns you use 99% of the time; custom encoders handle non-serializable types like `datetime`
+- `csv.DictReader` and `csv.DictWriter` are almost always better than the plain reader/writer — named fields prevent index bugs
+- Iterate over large files line by line (or row by row with DictReader) — never load a multi-GB file with `read()` or `readlines()`
+- `io.StringIO` and `io.BytesIO` are your best friends for testing file I/O code without touching the real filesystem
+- `configparser` is perfect for `.ini`-style human-editable configs; use JSON for programmatically generated or deeply nested configs

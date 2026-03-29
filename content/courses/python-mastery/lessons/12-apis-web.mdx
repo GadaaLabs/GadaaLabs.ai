@@ -1,0 +1,921 @@
+---
+title: "APIs, Web Scraping & Async HTTP"
+description: "Consume REST APIs, scrape web data, and make concurrent HTTP requests with asyncio. Build a weather data aggregator and a multi-source data collector."
+duration: 26
+order: 12
+---
+
+## HTTP Fundamentals
+
+Every web API interaction is an HTTP message exchange. Understanding the protocol makes debugging trivial and error handling natural.
+
+**HTTP Methods** — each has a semantic contract:
+
+| Method | Semantic | Body? | Idempotent? |
+|--------|----------|-------|-------------|
+| GET | Read a resource | No | Yes |
+| POST | Create a resource | Yes | No |
+| PUT | Replace a resource entirely | Yes | Yes |
+| PATCH | Partially update a resource | Yes | No |
+| DELETE | Remove a resource | No | Yes |
+
+Idempotent means calling it N times has the same effect as calling it once. A GET on `/users/42` always returns the same user (assuming no concurrent writes). A POST to `/orders` creates a new order each time.
+
+**Status Code Groups:**
+
+- `1xx` — Informational (rarely seen in REST APIs)
+- `2xx` — Success: `200 OK`, `201 Created`, `204 No Content`
+- `3xx` — Redirection: `301 Permanent`, `302 Temporary`
+- `4xx` — Client error: `400 Bad Request`, `401 Unauthorized`, `403 Forbidden`, `404 Not Found`, `422 Unprocessable Entity`, `429 Too Many Requests`
+- `5xx` — Server error: `500 Internal Server Error`, `503 Service Unavailable`
+
+**Key Headers:**
+
+```
+Request Headers:
+  Authorization: Bearer <token>       ← authentication
+  Content-Type: application/json      ← body format
+  Accept: application/json            ← preferred response format
+  User-Agent: MyApp/1.0               ← identifies your client
+
+Response Headers:
+  Content-Type: application/json      ← body format of response
+  X-RateLimit-Remaining: 42           ← rate limit info
+  Retry-After: 60                     ← seconds to wait before retrying
+```
+
+## urllib: The Standard Library HTTP Client
+
+Pyodide (which runs Python in your browser) doesn't include the `requests` library, but `urllib` is part of the standard library and always available. In practice, you'd use `requests` or `httpx` in real projects — they have better ergonomics — but `urllib` teaches the underlying mechanics clearly.
+
+<PythonPlayground code={String.raw`import urllib.request
+import urllib.parse
+import urllib.error
+import json
+
+# Simulate API responses (can't make real network calls in Pyodide)
+# In a real project: urllib.request.urlopen(url)
+
+def mock_request(url, method="GET", headers=None, data=None):
+    """Simulate HTTP requests so we can demonstrate parsing logic."""
+    responses = {
+        "https://api.example.com/users/1": {
+            "status": 200,
+            "body": {"id": 1, "name": "Alice", "email": "alice@example.com",
+                     "role": "admin", "created_at": "2024-01-15"}
+        },
+        "https://api.example.com/users/999": {
+            "status": 404,
+            "body": {"error": "User not found", "code": "USER_NOT_FOUND"}
+        },
+        "https://api.example.com/users": {
+            "status": 200,
+            "body": {
+                "data": [
+                    {"id": 1, "name": "Alice"},
+                    {"id": 2, "name": "Bob"},
+                    {"id": 3, "name": "Carol"},
+                ],
+                "page": 1, "per_page": 3, "total": 47
+            }
+        },
+    }
+
+    if url in responses:
+        return responses[url]
+    return {"status": 500, "body": {"error": "Internal Server Error"}}
+
+# --- Robust HTTP client wrapper ---
+
+class APIError(Exception):
+    def __init__(self, status_code, message, body=None):
+        super().__init__(f"HTTP {status_code}: {message}")
+        self.status_code = status_code
+        self.body = body or {}
+
+class APIClient:
+    def __init__(self, base_url, api_key=None):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.session_headers = {"Content-Type": "application/json",
+                                "Accept": "application/json"}
+        if api_key:
+            self.session_headers["Authorization"] = f"Bearer {api_key}"
+
+    def _request(self, method, path, params=None, data=None):
+        """Build URL, make request, handle errors."""
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        if params:
+            url += "?" + urllib.parse.urlencode(params)
+
+        # In real code: urllib.request.urlopen(req) with Request object
+        # Here: our mock
+        response = mock_request(url, method=method, headers=self.session_headers, data=data)
+        status = response["status"]
+        body = response["body"]
+
+        if status == 404:
+            raise APIError(404, "Resource not found", body)
+        if status == 401:
+            raise APIError(401, "Authentication required", body)
+        if status == 429:
+            raise APIError(429, "Rate limit exceeded", body)
+        if status >= 500:
+            raise APIError(status, "Server error", body)
+        if status >= 400:
+            raise APIError(status, body.get("error", "Client error"), body)
+
+        return body
+
+    def get(self, path, params=None):
+        return self._request("GET", path, params=params)
+
+    def post(self, path, data):
+        return self._request("POST", path, data=data)
+
+# Use the client
+client = APIClient("https://api.example.com", api_key="sk-demo-key-123")
+
+print("--- GET /users/1 ---")
+user = client.get("users/1")
+print(json.dumps(user, indent=2))
+
+print("\n--- GET /users (paginated) ---")
+users = client.get("users", params={"page": 1, "per_page": 3})
+print(f"Page {users['page']}, showing {len(users['data'])}/{users['total']} users")
+for u in users["data"]:
+    print(f"  #{u['id']}: {u['name']}")
+
+print("\n--- GET /users/999 (not found) ---")
+try:
+    client.get("users/999")
+except APIError as e:
+    print(f"Caught: {e}")
+    print(f"Error body: {e.body}")
+`} />
+
+## JSON APIs: Parsing and Authentication
+
+<PythonPlayground code={String.raw`import json
+import urllib.parse
+from datetime import datetime
+
+# Simulated API responses — realistic JSON structures you'll encounter
+
+GITHUB_USER = json.loads("""
+{
+  "login": "torvalds",
+  "id": 1024025,
+  "name": "Linus Torvalds",
+  "company": "Linux Foundation",
+  "blog": "https://github.com/torvalds",
+  "public_repos": 8,
+  "public_gists": 0,
+  "followers": 218000,
+  "following": 0,
+  "created_at": "2011-09-03T15:26:36Z",
+  "updated_at": "2024-01-10T08:30:00Z"
+}
+""")
+
+GITHUB_REPOS = json.loads("""
+[
+  {"name": "linux", "stargazers_count": 175000, "language": "C",
+   "description": "Linux kernel source tree", "fork": false,
+   "updated_at": "2024-01-15T12:00:00Z"},
+  {"name": "subsurface-for-dirk", "stargazers_count": 890, "language": "C++",
+   "description": "A divelog program", "fork": false,
+   "updated_at": "2023-11-01T08:00:00Z"},
+  {"name": "test-tlpi", "stargazers_count": 340, "language": "C",
+   "description": "Test repo", "fork": true,
+   "updated_at": "2022-05-01T00:00:00Z"}
+]
+""")
+
+# Parse the responses
+print(f"=== GitHub User: {GITHUB_USER['login']} ===")
+print(f"  Name:         {GITHUB_USER['name']}")
+print(f"  Company:      {GITHUB_USER['company']}")
+print(f"  Followers:    {GITHUB_USER['followers']:,}")
+print(f"  Public repos: {GITHUB_USER['public_repos']}")
+
+# Parse ISO 8601 timestamps
+created = datetime.fromisoformat(GITHUB_USER["created_at"].replace("Z", "+00:00"))
+print(f"  Account age:  {(datetime(2024, 1, 1) - created.replace(tzinfo=None)).days // 365} years")
+
+print()
+print(f"=== Repositories ===")
+# Sort by stars, filter out forks
+own_repos = [r for r in GITHUB_REPOS if not r["fork"]]
+own_repos.sort(key=lambda r: r["stargazers_count"], reverse=True)
+
+for repo in own_repos:
+    lang = repo.get("language") or "Unknown"
+    print(f"  {repo['name']:<35} ⭐ {repo['stargazers_count']:>7,}  [{lang}]")
+
+# Build query strings (URL parameter encoding)
+print()
+print("=== URL Parameter Encoding ===")
+params = {
+    "q": "machine learning python",
+    "language": "python",
+    "sort": "stars",
+    "order": "desc",
+    "per_page": 10,
+}
+query_string = urllib.parse.urlencode(params)
+full_url = f"https://api.github.com/search/repositories?{query_string}"
+print(f"URL: {full_url}")
+
+# Decode query strings
+parsed = urllib.parse.parse_qs(query_string)
+print(f"\nParsed params: {dict((k, v[0]) for k,v in parsed.items())}")
+`} />
+
+## Error Handling for HTTP: Retries, Timeouts, and Circuit Breakers
+
+<PythonPlayground code={String.raw`import time
+import random
+
+# Simulated HTTP client with realistic failure modes
+
+class HTTPResponse:
+    def __init__(self, status_code, body, headers=None):
+        self.status_code = status_code
+        self.body = body
+        self.headers = headers or {}
+
+    def json(self):
+        return self.body
+
+    def __repr__(self):
+        return f"HTTPResponse({self.status_code})"
+
+class RetryableError(Exception): pass
+class FatalError(Exception): pass
+
+def classify_error(status_code):
+    """Determine if an error should be retried."""
+    if status_code in (429, 503, 502, 504):
+        return "retryable"
+    if status_code in (400, 401, 403, 404, 422):
+        return "fatal"
+    if status_code >= 500:
+        return "retryable"
+    return "ok"
+
+def exponential_backoff(attempt, base=0.1, max_delay=30.0):
+    """Exponential backoff with full jitter — avoids thundering herd."""
+    delay = min(base * (2 ** attempt), max_delay)
+    # Full jitter: sleep a random fraction of the max delay
+    return random.uniform(0, delay)
+
+# Simulation: request that fails a few times then succeeds
+_sim_call_count = [0]
+_sim_fail_until = [3]  # fail first 3 calls
+
+def simulated_api_call(endpoint):
+    _sim_call_count[0] += 1
+    call_num = _sim_call_count[0]
+
+    if call_num <= _sim_fail_until[0]:
+        # Simulate rate limit or temporary server error
+        status = 429 if call_num == 1 else 503
+        headers = {"Retry-After": "2"} if status == 429 else {}
+        return HTTPResponse(status, {"error": "Service unavailable"}, headers)
+
+    return HTTPResponse(200, {"data": f"Result from {endpoint}", "call": call_num})
+
+def http_get_with_retry(endpoint, max_retries=5):
+    """
+    Production-grade HTTP GET with:
+    - Retry on transient errors (429, 5xx)
+    - Respect Retry-After header
+    - Exponential backoff with jitter
+    - No retry on fatal errors (4xx except 429)
+    """
+    for attempt in range(max_retries + 1):
+        response = simulated_api_call(endpoint)
+        error_type = classify_error(response.status_code)
+
+        if error_type == "ok":
+            return response.json()
+
+        if error_type == "fatal":
+            raise FatalError(f"HTTP {response.status_code}: {response.body}")
+
+        # Retryable error
+        if attempt == max_retries:
+            raise RetryableError(f"Max retries exceeded after {max_retries} attempts")
+
+        # Respect Retry-After header if present
+        retry_after = float(response.headers.get("Retry-After", 0))
+        delay = max(retry_after, exponential_backoff(attempt))
+
+        print(f"  Attempt {attempt+1}: HTTP {response.status_code} — "
+              f"retrying in {delay:.2f}s (simulated)")
+        # time.sleep(delay)  ← would sleep in real code; skipped for demo speed
+
+    return None
+
+print("Making API call with retry logic...")
+_sim_call_count[0] = 0  # reset simulation counter
+result = http_get_with_retry("/api/data", max_retries=5)
+print(f"Final result: {result}")
+print()
+
+# Fatal error — no retry
+print("Fatal error (404) — no retry:")
+_sim_fail_until[0] = 999  # always fail
+_sim_call_count[0] = 0
+# Use 404 simulation
+def sim_404(endpoint):
+    return HTTPResponse(404, {"error": "Not found"})
+
+try:
+    resp = sim_404("/api/missing")
+    error_type = classify_error(resp.status_code)
+    if error_type == "fatal":
+        raise FatalError(f"HTTP {resp.status_code}")
+except FatalError as e:
+    print(f"  Caught FatalError: {e} (not retried)")
+`} />
+
+## Web Scraping Concepts & HTML Parsing
+
+Web scraping extracts structured data from HTML pages. In a browser-based environment we can't make network requests, but we can demonstrate full parsing logic with mock HTML:
+
+<PythonPlayground code={String.raw`from html.parser import HTMLParser
+import re
+
+# Simulate HTML you'd get from urllib.request.urlopen(url).read().decode()
+MOCK_HTML = """
+<!DOCTYPE html>
+<html>
+<head><title>Python Jobs Board</title></head>
+<body>
+  <h1>Latest Python Jobs</h1>
+  <div class="job-listing" data-id="1">
+    <h2 class="job-title">Senior Python Engineer</h2>
+    <span class="company">Acme Corp</span>
+    <span class="location">Remote</span>
+    <span class="salary">$150,000 - $180,000</span>
+    <p class="description">Build scalable backend services with FastAPI and PostgreSQL.</p>
+  </div>
+  <div class="job-listing" data-id="2">
+    <h2 class="job-title">Data Engineer</h2>
+    <span class="company">DataFlow Inc</span>
+    <span class="location">New York, NY</span>
+    <span class="salary">$130,000 - $160,000</span>
+    <p class="description">Design ETL pipelines with PySpark and Airflow.</p>
+  </div>
+  <div class="job-listing" data-id="3">
+    <h2 class="job-title">ML Engineer</h2>
+    <span class="company">AI Labs</span>
+    <span class="location">San Francisco, CA</span>
+    <span class="salary">$170,000 - $220,000</span>
+    <p class="description">Train and deploy ML models with PyTorch and Kubernetes.</p>
+  </div>
+</body>
+</html>
+"""
+
+class JobScraper(HTMLParser):
+    """Parses job listings from HTML."""
+
+    def __init__(self):
+        super().__init__()
+        self.jobs = []
+        self._current_job = None
+        self._current_tag = None
+        self._current_class = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs_dict = dict(attrs)
+        css_class = attrs_dict.get("class", "")
+
+        if tag == "div" and "job-listing" in css_class:
+            self._current_job = {
+                "id": attrs_dict.get("data-id"),
+                "title": None,
+                "company": None,
+                "location": None,
+                "salary": None,
+                "description": None,
+            }
+
+        self._current_tag = tag
+        self._current_class = css_class
+
+    def handle_endtag(self, tag):
+        if tag == "div" and self._current_job:
+            # Check if all fields are populated (we've exited a job listing)
+            if self._current_job.get("title"):
+                self.jobs.append(self._current_job)
+                self._current_job = None
+        self._current_tag = None
+        self._current_class = None
+
+    def handle_data(self, data):
+        data = data.strip()
+        if not data or not self._current_job:
+            return
+
+        css = self._current_class or ""
+
+        if "job-title" in css:
+            self._current_job["title"] = data
+        elif "company" in css:
+            self._current_job["company"] = data
+        elif "location" in css:
+            self._current_job["location"] = data
+        elif "salary" in css:
+            self._current_job["salary"] = data
+        elif "description" in css:
+            self._current_job["description"] = data
+
+# Parse
+scraper = JobScraper()
+scraper.feed(MOCK_HTML)
+
+print(f"Found {len(scraper.jobs)} job listings:\n")
+for job in scraper.jobs:
+    print(f"[#{job['id']}] {job['title']}")
+    print(f"     Company:  {job['company']}")
+    print(f"     Location: {job['location']}")
+    print(f"     Salary:   {job['salary']}")
+    print(f"     Desc:     {job['description'][:60]}...")
+    print()
+
+# Extract salary ranges with regex
+print("=== Salary Analysis ===")
+salary_pattern = re.compile(r'\$([0-9,]+)\s*-\s*\$([0-9,]+)')
+for job in scraper.jobs:
+    match = salary_pattern.search(job["salary"])
+    if match:
+        low  = int(match.group(1).replace(",", ""))
+        high = int(match.group(2).replace(",", ""))
+        mid  = (low + high) // 2
+        print(f"  {job['title']:<30} mid: {chr(36)}{mid:,}")
+`} />
+
+## Async HTTP with asyncio
+
+Synchronous HTTP is simple but wasteful. When making 10 API calls to 10 different servers, synchronous code waits for each one to complete before starting the next. With I/O-bound work, `asyncio` lets you start all 10 requests, then collect results as they arrive — the total time becomes roughly equal to the slowest single request, not the sum of all.
+
+```python
+# Real async HTTP with aiohttp (install with pip install aiohttp)
+import asyncio
+import aiohttp
+
+async def fetch(session, url):
+    async with session.get(url) as response:
+        return await response.json()
+
+async def fetch_all(urls):
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch(session, url) for url in urls]
+        return await asyncio.gather(*tasks)
+
+# All requests run concurrently
+results = asyncio.run(fetch_all([
+    "https://api.example.com/data/1",
+    "https://api.example.com/data/2",
+    "https://api.example.com/data/3",
+]))
+```
+
+The key concept: `await` suspends *this coroutine* and gives control back to the event loop, which can run other coroutines while we wait for I/O. No threads, no locks — just cooperative multitasking.
+
+<PythonPlayground code={String.raw`import asyncio
+import time
+
+# Simulate async HTTP requests using asyncio.sleep
+# (In real code: aiohttp.ClientSession().get(url))
+
+async def fetch_weather(city, delay):
+    """Simulates an API call that takes 'delay' seconds."""
+    print(f"  [START] Fetching weather for {city}...")
+    await asyncio.sleep(delay)  # simulates network I/O
+    # Simulated response
+    temperatures = {
+        "London":   {"temp": 12, "condition": "Cloudy"},
+        "Tokyo":    {"temp": 8,  "condition": "Clear"},
+        "New York": {"temp": 5,  "condition": "Snowy"},
+        "Sydney":   {"temp": 28, "condition": "Sunny"},
+        "Berlin":   {"temp": -2, "condition": "Foggy"},
+    }
+    result = {"city": city, **temperatures.get(city, {"temp": 20, "condition": "Unknown"})}
+    print(f"  [DONE]  Got weather for {city} (took {delay}s)")
+    return result
+
+async def fetch_all_concurrent(cities_delays):
+    """Fetch all cities concurrently using asyncio.gather."""
+    tasks = [fetch_weather(city, delay) for city, delay in cities_delays]
+    return await asyncio.gather(*tasks)
+
+async def fetch_all_sequential(cities_delays):
+    """Fetch cities one at a time for comparison."""
+    results = []
+    for city, delay in cities_delays:
+        result = await fetch_weather(city, delay)
+        results.append(result)
+    return results
+
+# Data: (city_name, simulated_response_time_seconds)
+city_requests = [
+    ("London",   0.3),
+    ("Tokyo",    0.5),
+    ("New York", 0.2),
+    ("Sydney",   0.4),
+    ("Berlin",   0.3),
+]
+
+print("=== Sequential (one at a time) ===")
+start = time.perf_counter()
+results_seq = asyncio.run(fetch_all_sequential(city_requests))
+seq_time = time.perf_counter() - start
+print(f"Sequential time: {seq_time:.2f}s\n")
+
+print("=== Concurrent (asyncio.gather) ===")
+start = time.perf_counter()
+results_con = asyncio.run(fetch_all_concurrent(city_requests))
+con_time = time.perf_counter() - start
+print(f"Concurrent time: {con_time:.2f}s\n")
+
+print(f"Speedup: {seq_time/con_time:.1f}x faster\n")
+print("=== Results ===")
+for r in results_con:
+    print(f"  {r['city']:<12} {r['temp']:>3}°C  {r['condition']}")
+`} />
+
+## httpx: Modern HTTP for Sync and Async
+
+`httpx` is the modern successor to `requests`. It has an almost identical API for synchronous use, but also supports async:
+
+```python
+import httpx
+
+# Synchronous (drop-in replacement for requests)
+with httpx.Client(base_url="https://api.example.com",
+                  headers={"Authorization": "Bearer token"},
+                  timeout=10.0) as client:
+    response = client.get("/users/1")
+    response.raise_for_status()  # raises HTTPStatusError for 4xx/5xx
+    user = response.json()
+
+# Async
+import asyncio
+
+async def fetch_async():
+    async with httpx.AsyncClient(base_url="https://api.example.com") as client:
+        response = await client.get("/users/1")
+        return response.json()
+
+result = asyncio.run(fetch_async())
+```
+
+Key advantages over `requests`:
+- Built-in async support with `httpx.AsyncClient`
+- HTTP/2 support
+- `raise_for_status()` is clean and standard
+- Connection pooling via context managers
+- Timeouts configurable per-operation or per-client
+
+## PROJECT: Weather Data Aggregator
+
+<PythonPlayground code={String.raw`import json
+from datetime import datetime
+
+# Mock weather API responses for 5 cities
+# In production: fetch from OpenWeatherMap, WeatherAPI, etc.
+
+MOCK_WEATHER_DATA = {
+    "London": {
+        "city": "London", "country": "GB",
+        "temperature": {"current": 12.3, "min": 9.1, "max": 14.8, "feels_like": 10.1},
+        "humidity": 78, "wind_speed": 18.5, "wind_direction": "SW",
+        "condition": "Overcast", "visibility_km": 8,
+        "forecast": [
+            {"day": "Tomorrow", "high": 13, "low": 8, "condition": "Rain"},
+            {"day": "Day 2",    "high": 11, "low": 7, "condition": "Showers"},
+            {"day": "Day 3",    "high": 15, "low": 9, "condition": "Partly cloudy"},
+        ]
+    },
+    "Tokyo": {
+        "city": "Tokyo", "country": "JP",
+        "temperature": {"current": 8.7, "min": 5.2, "max": 11.3, "feels_like": 6.5},
+        "humidity": 55, "wind_speed": 8.2, "wind_direction": "NW",
+        "condition": "Clear", "visibility_km": 20,
+        "forecast": [
+            {"day": "Tomorrow", "high": 10, "low": 4, "condition": "Sunny"},
+            {"day": "Day 2",    "high": 12, "low": 5, "condition": "Clear"},
+            {"day": "Day 3",    "high": 9,  "low": 3, "condition": "Cloudy"},
+        ]
+    },
+    "New York": {
+        "city": "New York", "country": "US",
+        "temperature": {"current": 5.1, "min": 2.0, "max": 7.4, "feels_like": 1.8},
+        "humidity": 82, "wind_speed": 25.3, "wind_direction": "N",
+        "condition": "Snow", "visibility_km": 3,
+        "forecast": [
+            {"day": "Tomorrow", "high": 3,  "low": -1, "condition": "Snow"},
+            {"day": "Day 2",    "high": 6,  "low": 1,  "condition": "Cloudy"},
+            {"day": "Day 3",    "high": 8,  "low": 3,  "condition": "Clear"},
+        ]
+    },
+    "Sydney": {
+        "city": "Sydney", "country": "AU",
+        "temperature": {"current": 28.4, "min": 22.1, "max": 31.0, "feels_like": 30.2},
+        "humidity": 65, "wind_speed": 12.1, "wind_direction": "NE",
+        "condition": "Sunny", "visibility_km": 25,
+        "forecast": [
+            {"day": "Tomorrow", "high": 30, "low": 21, "condition": "Sunny"},
+            {"day": "Day 2",    "high": 27, "low": 20, "condition": "Partly cloudy"},
+            {"day": "Day 3",    "high": 25, "low": 19, "condition": "Showers"},
+        ]
+    },
+    "Berlin": {
+        "city": "Berlin", "country": "DE",
+        "temperature": {"current": -2.1, "min": -5.0, "max": 1.3, "feels_like": -6.8},
+        "humidity": 88, "wind_speed": 14.7, "wind_direction": "E",
+        "condition": "Freezing Fog", "visibility_km": 1,
+        "forecast": [
+            {"day": "Tomorrow", "high": 0,  "low": -4, "condition": "Ice"},
+            {"day": "Day 2",    "high": 2,  "low": -2, "condition": "Cloudy"},
+            {"day": "Day 3",    "high": 4,  "low": 0,  "condition": "Clear"},
+        ]
+    },
+}
+
+class WeatherAggregator:
+    def __init__(self):
+        self.data = {}
+        self.errors = []
+
+    def load(self, city_data):
+        """Parse and validate weather data."""
+        for city, payload in city_data.items():
+            try:
+                self._validate(payload)
+                self.data[city] = payload
+            except (KeyError, TypeError) as e:
+                self.errors.append(f"{city}: {e}")
+
+    def _validate(self, payload):
+        required_fields = ["city", "country", "temperature", "humidity",
+                           "wind_speed", "condition"]
+        for field in required_fields:
+            if field not in payload:
+                raise KeyError(f"Missing required field: {field!r}")
+        temp = payload["temperature"]
+        for t_field in ["current", "min", "max"]:
+            if t_field not in temp:
+                raise KeyError(f"Missing temperature field: {t_field!r}")
+
+    def hottest(self, n=3):
+        return sorted(self.data.values(),
+                      key=lambda d: d["temperature"]["current"],
+                      reverse=True)[:n]
+
+    def coldest(self, n=3):
+        return sorted(self.data.values(),
+                      key=lambda d: d["temperature"]["current"])[:n]
+
+    def average_temperature(self):
+        if not self.data:
+            return None
+        temps = [d["temperature"]["current"] for d in self.data.values()]
+        return sum(temps) / len(temps)
+
+    def by_condition(self):
+        """Group cities by weather condition."""
+        groups = {}
+        for city, data in self.data.items():
+            cond = data["condition"]
+            groups.setdefault(cond, []).append(city)
+        return groups
+
+    def generate_report(self):
+        print("=" * 60)
+        print("   GLOBAL WEATHER REPORT")
+        print(f"   {len(self.data)} cities  |  Generated now")
+        print("=" * 60)
+
+        print(f"\n{'City':<14} {'Temp':>6} {'Feels':>7} {'Humidity':>9} {'Wind':>8}  Condition")
+        print("-" * 60)
+        for city in sorted(self.data, key=lambda c: self.data[c]["temperature"]["current"], reverse=True):
+            d = self.data[city]
+            t = d["temperature"]
+            print(f"{city:<14} {t['current']:>5.1f}°C {t['feels_like']:>5.1f}°C "
+                  f"{d['humidity']:>7}%  {d['wind_speed']:>5.1f}km/h  {d['condition']}")
+
+        avg = self.average_temperature()
+        print(f"\nGlobal average: {avg:.1f}°C")
+
+        print("\n--- Hottest Cities ---")
+        for d in self.hottest(3):
+            t = d["temperature"]["current"]
+            print(f"  {d['city']}: {t:.1f}°C ({d['condition']})")
+
+        print("\n--- Coldest Cities ---")
+        for d in self.coldest(3):
+            t = d["temperature"]["current"]
+            print(f"  {d['city']}: {t:.1f}°C ({d['condition']})")
+
+        print("\n--- Conditions ---")
+        for condition, cities in self.by_condition().items():
+            print(f"  {condition:<20}: {', '.join(cities)}")
+
+        print("\n--- 3-Day Forecasts ---")
+        for city, d in self.data.items():
+            forecast_str = " | ".join(
+                f"{f['day']}: {f['high']}/{f['low']}°C {f['condition']}"
+                for f in d["forecast"]
+            )
+            print(f"  {city:<12}: {forecast_str}")
+
+        if self.errors:
+            print(f"\n--- {len(self.errors)} Errors ---")
+            for err in self.errors:
+                print(f"  {err}")
+
+# Run
+aggregator = WeatherAggregator()
+aggregator.load(MOCK_WEATHER_DATA)
+aggregator.generate_report()
+`} />
+
+## PROJECT: Async URL Processor
+
+<PythonPlayground code={String.raw`import asyncio
+import time
+import json
+
+# Simulated data sources — in real code these would be live URLs
+SOURCES = [
+    {"url": "https://api.coinmarket.com/crypto/prices",   "delay": 0.4, "name": "Crypto"},
+    {"url": "https://api.stocks.com/market/summary",      "delay": 0.6, "name": "Stocks"},
+    {"url": "https://api.weather.com/global/conditions",  "delay": 0.3, "name": "Weather"},
+    {"url": "https://api.news.com/tech/headlines",        "delay": 0.7, "name": "News"},
+    {"url": "https://api.forex.com/exchange/rates",       "delay": 0.2, "name": "Forex"},
+    {"url": "https://api.commodities.com/gold/price",     "delay": 0.5, "name": "Gold"},
+]
+
+MOCK_RESPONSES = {
+    "Crypto":  {"BTC": 62341.50, "ETH": 3241.80, "SOL": 185.30},
+    "Stocks":  {"SPY": 492.10, "QQQ": 431.80, "VTI": 248.90},
+    "Weather": {"avg_temp_c": 14.2, "cities_monitored": 5, "alerts": 1},
+    "News":    {"headlines": ["AI beats human at coding", "Python 4.0 announced"], "count": 47},
+    "Forex":   {"EUR/USD": 1.0842, "GBP/USD": 1.2631, "USD/JPY": 148.72},
+    "Gold":    {"price_usd_per_oz": 2041.30, "change_24h": "+0.8%"},
+}
+
+# --- Sequential approach ---
+async def fetch_sequential(sources):
+    results = []
+    for source in sources:
+        print(f"  Fetching {source['name']}...")
+        await asyncio.sleep(source["delay"])
+        results.append({
+            "name": source["name"],
+            "data": MOCK_RESPONSES[source["name"]],
+            "status": "ok"
+        })
+    return results
+
+# --- Concurrent approach ---
+async def fetch_one(source):
+    await asyncio.sleep(source["delay"])  # simulates network I/O
+    return {
+        "name": source["name"],
+        "data": MOCK_RESPONSES[source["name"]],
+        "status": "ok"
+    }
+
+async def fetch_concurrent(sources):
+    """All requests in flight simultaneously."""
+    tasks = [fetch_one(source) for source in sources]
+    return await asyncio.gather(*tasks)
+
+# --- With error handling ---
+async def fetch_one_safe(source):
+    """Handles individual failures gracefully."""
+    try:
+        await asyncio.sleep(source["delay"])
+        if source["name"] == "News":
+            # Simulate an occasional failure
+            if source["delay"] > 0.5:
+                raise ConnectionError("API temporarily unavailable")
+        return {"name": source["name"], "data": MOCK_RESPONSES[source["name"]], "status": "ok"}
+    except Exception as e:
+        return {"name": source["name"], "data": None, "status": "error", "error": str(e)}
+
+async def fetch_concurrent_safe(sources):
+    """Concurrent fetch that handles individual failures."""
+    tasks = [fetch_one_safe(source) for source in sources]
+    return await asyncio.gather(*tasks)  # gather catches exceptions if return_exceptions=True
+
+# Run comparison
+print("=" * 55)
+print("ASYNC HTTP: Sequential vs Concurrent")
+print("=" * 55)
+
+print(f"\n--- Sequential ({len(SOURCES)} requests, one at a time) ---")
+start = time.perf_counter()
+sequential_results = asyncio.run(fetch_sequential(SOURCES))
+seq_time = time.perf_counter() - start
+print(f"Total time: {seq_time:.2f}s  (≈ sum of all delays)")
+
+print(f"\n--- Concurrent (asyncio.gather, all in parallel) ---")
+start = time.perf_counter()
+concurrent_results = asyncio.run(fetch_concurrent(SOURCES))
+con_time = time.perf_counter() - start
+print(f"Total time: {con_time:.2f}s  (≈ slowest single delay)")
+
+print(f"\nSpeedup: {seq_time/con_time:.1f}x faster")
+print(f"Theoretical max speedup: {sum(s['delay'] for s in SOURCES)/max(s['delay'] for s in SOURCES):.1f}x")
+
+print(f"\n--- Results ---")
+for r in concurrent_results:
+    data_preview = json.dumps(r["data"])[:50]
+    print(f"  {r['name']:<10} [{r['status']}] {data_preview}...")
+`} />
+
+## Rate Limiting and Being a Good API Citizen
+
+<PythonPlayground code={String.raw`import time
+import collections
+
+class RateLimiter:
+    """
+    Token bucket rate limiter.
+    Tokens are added at a fixed rate; each request consumes one token.
+    Burst capacity is the bucket size.
+    """
+    def __init__(self, rate_per_second, burst=None):
+        self.rate = rate_per_second
+        self.burst = burst or rate_per_second
+        self.tokens = float(self.burst)
+        self.last_refill = time.perf_counter()
+
+    def _refill(self):
+        now = time.perf_counter()
+        elapsed = now - self.last_refill
+        self.tokens = min(self.burst, self.tokens + elapsed * self.rate)
+        self.last_refill = now
+
+    def acquire(self):
+        """Returns True if request allowed, False if rate limit exceeded."""
+        self._refill()
+        if self.tokens >= 1.0:
+            self.tokens -= 1.0
+            return True
+        return False
+
+    def wait_time(self):
+        """How long to wait before next token is available."""
+        self._refill()
+        if self.tokens >= 1.0:
+            return 0.0
+        return (1.0 - self.tokens) / self.rate
+
+# Good API practices
+print("=== Rate Limiter Demo ===")
+limiter = RateLimiter(rate_per_second=3, burst=5)  # 3 req/sec, burst of 5
+
+for i in range(10):
+    if limiter.acquire():
+        print(f"  Request {i+1:2d}: ALLOWED  (tokens remaining: {limiter.tokens:.2f})")
+    else:
+        wait = limiter.wait_time()
+        print(f"  Request {i+1:2d}: BLOCKED  (wait {wait:.3f}s)")
+
+print()
+print("=== Best Practices for API Consumers ===")
+practices = [
+    ("Always read the docs", "Check rate limits, authentication, and terms of service before starting"),
+    ("Use conditional requests", "Send If-None-Match/If-Modified-Since headers to avoid redundant data"),
+    ("Cache aggressively", "Cache responses for their full TTL; don't re-fetch data that hasn't changed"),
+    ("Respect Retry-After", "When you get 429, wait exactly as long as the API tells you"),
+    ("Use exponential backoff", "On server errors (5xx), wait 1s, 2s, 4s, 8s... with jitter"),
+    ("Send User-Agent", "Identify your app so API operators can contact you if there's an issue"),
+    ("Handle pagination", "Never assume you got all results; check total/page/next fields"),
+    ("Don't scrape if API exists", "Use the official API — it's faster, more stable, and legal"),
+]
+for name, detail in practices:
+    print(f"  [{name}]")
+    print(f"    {detail}")
+    print()
+`} />
+
+## Key Takeaways
+
+- **HTTP methods carry semantic contracts**: GET is safe and idempotent, POST creates resources, PUT replaces, PATCH partially updates — using the wrong verb breaks caching and causes unexpected client behavior
+- **`4xx` = client's fault, `5xx` = server's fault**: only `5xx` and `429` should trigger retries; retrying on `400`/`404` is wasteful and masks bugs in your code
+- **Exponential backoff with jitter prevents thundering herds**: when many clients retry simultaneously, random jitter spreads the load; full jitter (`random(0, cap)`) is better than equal-interval retries
+- **`urllib.request` is stdlib; `requests`/`httpx` are ergonomic wrappers**: in constrained environments `urllib` works everywhere; in real projects `httpx` adds HTTP/2, async support, and cleaner error handling
+- **Async HTTP is O(1) in memory and O(max_latency) in time**: `asyncio.gather(task1, task2, ..., task10)` sends all requests at once and waits for the slowest — not the sum of all latencies
+- **`asyncio.gather` with `return_exceptions=True` prevents one failure from aborting the rest**: without it, a single failed request in a batch cancels all others; use it when partial results are useful
+- **Rate limiting is your responsibility as an API consumer**: implement token-bucket or leaky-bucket limiting client-side, respect `Retry-After` headers, and cache aggressively
+- **Parse and validate API responses defensively**: use `.get()` with defaults, check for missing fields, and handle API version changes — remote data is untrusted data

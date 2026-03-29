@@ -1,0 +1,562 @@
+---
+title: "Production Python — FastAPI, Packaging & Profiling"
+description: "Take Python code to production: build a FastAPI ML serving endpoint, package a library, profile and optimize performance, and structure a professional Python project."
+duration: 30
+order: 17
+---
+
+## Project Structure
+
+Two dominant layouts for Python projects:
+
+**Flat layout** — simple, good for applications:
+```
+my_project/
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   ├── models.py
+│   └── api/
+├── tests/
+├── pyproject.toml
+└── README.md
+```
+
+**src layout** — recommended for libraries (prevents accidental imports from the project root):
+```
+my_library/
+├── src/
+│   └── my_library/
+│       ├── __init__.py
+│       ├── core.py
+│       └── utils.py
+├── tests/
+├── pyproject.toml
+└── README.md
+```
+
+Use **src layout** when publishing to PyPI. Use **flat layout** for web applications and scripts. The key difference: with src layout, you can only import your package if it's installed, which catches packaging bugs early.
+
+## pyproject.toml — The Modern Standard
+
+`pyproject.toml` replaces `setup.py`, `setup.cfg`, `requirements.txt`, and `MANIFEST.in`:
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ml-serving"
+version = "0.1.0"
+description = "FastAPI-based ML model serving"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.7.0",
+    "scikit-learn>=1.4.0",
+    "numpy>=1.26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",    # For FastAPI TestClient
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+[project.scripts]
+serve = "ml_serving.main:start"
+
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "I", "N", "UP"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+```
+
+Install in development mode: `pip install -e ".[dev]"`. The `-e` flag installs a symlink to your source, so edits take effect immediately without reinstalling.
+
+## FastAPI — Async ML Serving
+
+FastAPI generates OpenAPI docs automatically, validates requests via Pydantic, and handles async operations natively:
+
+```python
+# app/main.py
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel, Field, field_validator
+import numpy as np
+import pickle
+import logging
+
+logger = logging.getLogger(__name__)
+
+# ── Lifespan: load model on startup, clean up on shutdown ─────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Loading model...")
+    app.state.model = pickle.load(open("model.pkl", "rb"))
+    app.state.scaler = pickle.load(open("scaler.pkl", "rb"))
+    logger.info("Model loaded successfully")
+    yield
+    # Shutdown
+    logger.info("Shutting down")
+
+app = FastAPI(
+    title="ML Model API",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# ── Pydantic models define the API contract ────────────────────────────────────
+class PredictRequest(BaseModel):
+    tenure: int = Field(..., ge=1, le=72, description="Customer tenure in months")
+    monthly_charges: float = Field(..., gt=0, le=500)
+    contract_type: str = Field(..., pattern="^(month-to-month|one_year|two_year)$")
+    num_products: int = Field(..., ge=1, le=10)
+
+    @field_validator("monthly_charges")
+    @classmethod
+    def validate_charges(cls, v):
+        if v < 20:
+            raise ValueError("Monthly charges seem too low")
+        return round(v, 2)
+
+class PredictResponse(BaseModel):
+    churn_probability: float
+    churn_prediction: bool
+    confidence: str
+    model_version: str = "1.0.0"
+
+class HealthResponse(BaseModel):
+    status: str
+    model_loaded: bool
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+@app.get("/health", response_model=HealthResponse)
+async def health():
+    return {
+        "status": "healthy",
+        "model_loaded": hasattr(app.state, "model"),
+    }
+
+@app.post("/predict", response_model=PredictResponse)
+async def predict(request: PredictRequest):
+    try:
+        features = np.array([[
+            request.tenure,
+            request.monthly_charges,
+            1 if request.contract_type == "month-to-month" else 0,
+            request.num_products,
+        ]])
+        features_scaled = app.state.scaler.transform(features)
+        proba = app.state.model.predict_proba(features_scaled)[0, 1]
+        confidence = "high" if abs(proba - 0.5) > 0.3 else "medium" if abs(proba - 0.5) > 0.1 else "low"
+
+        logger.info(f"Prediction: proba={proba:.3f}, tenure={request.tenure}")
+        return PredictResponse(
+            churn_probability=round(float(proba), 4),
+            churn_prediction=proba > 0.5,
+            confidence=confidence,
+        )
+    except Exception as e:
+        logger.error(f"Prediction failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+
+@app.get("/model/info")
+async def model_info():
+    return {
+        "model_type": type(app.state.model).__name__,
+        "features": ["tenure", "monthly_charges", "contract_type", "num_products"],
+        "output": "churn_probability [0, 1]",
+    }
+```
+
+## Pydantic v2
+
+Pydantic v2 (released 2023) is 5-50x faster than v1 due to a Rust core:
+
+```python
+from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Optional
+from datetime import datetime
+
+class MLExperiment(BaseModel):
+    model_config = {"str_strip_whitespace": True, "frozen": True}
+
+    name: str = Field(..., min_length=3, max_length=100)
+    accuracy: float = Field(..., ge=0.0, le=1.0)
+    parameters: dict[str, float | int | str]
+    tags: list[str] = []
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    parent_run_id: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def no_spaces_in_name(cls, v: str) -> str:
+        return v.replace(" ", "_").lower()
+
+    @model_validator(mode="after")
+    def check_high_accuracy_has_tag(self) -> "MLExperiment":
+        if self.accuracy > 0.95 and "validated" not in self.tags:
+            raise ValueError("High-accuracy models must include 'validated' tag")
+        return self
+
+# Serialization
+exp = MLExperiment(name="churn model v2", accuracy=0.88, parameters={"n_estimators": 100})
+print(exp.model_dump())
+print(exp.model_dump_json(indent=2))
+
+# Parsing from dict/JSON
+data = {"name": "test", "accuracy": 0.75, "parameters": {"lr": 0.01}}
+exp2 = MLExperiment.model_validate(data)
+```
+
+## Structured Logging
+
+Production logging should be machine-parseable. Never use `print()` in production:
+
+```python
+import logging
+import json
+import sys
+import uuid
+from contextvars import ContextVar
+
+# Correlation ID for tracing requests across logs
+correlation_id: ContextVar[str] = ContextVar("correlation_id", default="")
+
+class JSONFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        log_obj = {
+            "timestamp":      self.formatTime(record),
+            "level":          record.levelname,
+            "logger":         record.name,
+            "message":        record.getMessage(),
+            "module":         record.module,
+            "correlation_id": correlation_id.get(""),
+        }
+        if record.exc_info:
+            log_obj["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_obj)
+
+def setup_logging(level: str = "INFO") -> None:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JSONFormatter())
+    root = logging.getLogger()
+    root.setLevel(getattr(logging, level.upper()))
+    root.addHandler(handler)
+
+# FastAPI middleware to inject correlation IDs
+from fastapi import Request
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class CorrelationIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        cid = request.headers.get("X-Correlation-ID", str(uuid.uuid4())[:8])
+        token = correlation_id.set(cid)
+        try:
+            response = await call_next(request)
+            response.headers["X-Correlation-ID"] = cid
+            return response
+        finally:
+            correlation_id.reset(token)
+```
+
+## Profiling
+
+<PythonPlayground code={String.raw`import time
+import tracemalloc
+import cProfile
+import pstats
+import io
+import numpy as np
+
+# ── tracemalloc: memory profiling ─────────────────────────────────────────────
+def memory_hungry():
+    result = []
+    for i in range(10000):
+        result.append(list(range(i % 100)))  # Creates many small lists
+    return result
+
+def memory_efficient():
+    def gen():
+        for i in range(10000):
+            yield list(range(i % 100))
+    return list(gen())  # Generator vs direct list
+
+tracemalloc.start()
+memory_hungry()
+snapshot1 = tracemalloc.take_snapshot()
+tracemalloc.clear_traces()
+
+tracemalloc.start()
+memory_efficient()
+snapshot2 = tracemalloc.take_snapshot()
+tracemalloc.stop()
+
+stats1 = snapshot1.statistics("lineno")
+stats2 = snapshot2.statistics("lineno")
+print("=== Memory Usage ===")
+print(f"memory_hungry:    {sum(s.size for s in stats1) / 1024:.1f} KB")
+print(f"memory_efficient: {sum(s.size for s in stats2) / 1024:.1f} KB")
+
+# ── cProfile: CPU profiling ───────────────────────────────────────────────────
+def slow_sum(n):
+    """Intentionally slow: Python loop."""
+    total = 0
+    for i in range(n):
+        total += i * i
+    return total
+
+def fast_sum(n):
+    """Vectorized with NumPy."""
+    return int(np.arange(n, dtype=np.int64).dot(np.arange(n, dtype=np.int64)))
+
+pr = cProfile.Profile()
+pr.enable()
+slow_sum(100000)
+pr.disable()
+
+stream = io.StringIO()
+ps = pstats.Stats(pr, stream=stream).sort_stats("cumulative")
+ps.print_stats(5)
+profile_output = stream.getvalue()
+print("\\n=== cProfile Output (slow_sum) ===")
+for line in profile_output.split("\\n")[4:10]:
+    if line.strip():
+        print(line)
+
+# ── timeit comparison ─────────────────────────────────────────────────────────
+import timeit
+
+n = 100000
+t_slow = timeit.timeit(lambda: slow_sum(n), number=10) / 10
+t_fast = timeit.timeit(lambda: fast_sum(n), number=100) / 100
+
+print(f"\\n=== Benchmarks (n={n:,}) ===")
+print(f"slow_sum (Python loop): {t_slow*1000:.2f} ms")
+print(f"fast_sum (NumPy):       {t_fast*1000:.3f} ms")
+print(f"Speedup: {t_slow/t_fast:.0f}x")
+`} packages={["numpy"]} height={440} title="Profiling: Memory and CPU" />
+
+<PythonPlayground code={String.raw`import numpy as np
+import time
+
+# ── 5 implementations of the same algorithm: sum of squares ──────────────────
+def impl_1_pure_loop(arr):
+    """Pure Python loop."""
+    total = 0
+    for x in arr:
+        total += x * x
+    return total
+
+def impl_2_list_comp(arr):
+    """List comprehension."""
+    return sum(x*x for x in arr)
+
+def impl_3_map(arr):
+    """map() function."""
+    return sum(map(lambda x: x*x, arr))
+
+def impl_4_numpy(arr):
+    """NumPy vectorized."""
+    a = np.asarray(arr)
+    return int((a * a).sum())
+
+def impl_5_numpy_dot(arr):
+    """NumPy dot product (most efficient)."""
+    a = np.asarray(arr)
+    return int(np.dot(a, a))
+
+import timeit
+import tracemalloc
+
+n = 50000
+data = list(range(n))
+data_arr = np.array(data, dtype=np.int64)
+REPEAT = 20
+
+implementations = [
+    ("Pure loop",      lambda: impl_1_pure_loop(data)),
+    ("List comp/gen",  lambda: impl_2_list_comp(data)),
+    ("map(lambda)",    lambda: impl_3_map(data)),
+    ("NumPy .sum()",   lambda: impl_4_numpy(data_arr)),
+    ("NumPy dot()",    lambda: impl_5_numpy_dot(data_arr)),
+]
+
+print(f"=== Performance Profiler: sum of squares (n={n:,}) ===")
+print(f"{'Implementation':20s} {'Time (ms)':>10} {'Speedup':>10} {'Correct':>8}")
+print("-" * 55)
+
+baseline = None
+expected = impl_5_numpy_dot(data_arr)
+
+for name, fn in implementations:
+    t = timeit.timeit(fn, number=REPEAT) / REPEAT * 1000
+    if baseline is None:
+        baseline = t
+    speedup = baseline / t
+    correct = "YES" if fn() == expected else "NO"
+    bar = "█" * min(int(speedup * 2), 40)
+    print(f"{name:20s} {t:10.3f} {speedup:9.1f}x {correct:>8}  {bar}")
+
+print("\\n=== Memory Usage ===")
+for name, fn in implementations:
+    tracemalloc.start()
+    fn()
+    snap = tracemalloc.take_snapshot()
+    tracemalloc.stop()
+    mem = sum(s.size for s in snap.statistics("lineno")) / 1024
+    print(f"  {name:20s}: {mem:6.1f} KB")
+
+print("\\n=== Recommendation ===")
+print("NumPy dot() wins: vectorized C loop, no Python overhead, cache-friendly.")
+print("Use NumPy whenever operating on numeric arrays.")
+`} packages={["numpy"]} height={460} title="Performance Profiler — 5 Implementations" />
+
+## Concurrency in FastAPI
+
+```python
+from fastapi import FastAPI, BackgroundTasks
+import asyncio
+
+app = FastAPI()
+
+# Async endpoints: release event loop during I/O waits
+@app.post("/predict/async")
+async def predict_async(request: PredictRequest):
+    # Non-blocking: event loop handles other requests while waiting
+    result = await run_prediction_in_thread(request)
+    return result
+
+# CPU-bound: offload to thread pool to avoid blocking event loop
+from fastapi.concurrency import run_in_threadpool
+
+@app.post("/predict/cpu")
+async def predict_cpu(request: PredictRequest):
+    # run_in_threadpool runs blocking code in a thread pool
+    result = await run_in_threadpool(blocking_predict, request)
+    return result
+
+# Background tasks: return immediately, work continues after response
+@app.post("/train")
+async def trigger_training(background_tasks: BackgroundTasks):
+    background_tasks.add_task(retrain_model_job, dataset_path="data/new.csv")
+    return {"status": "training started"}
+
+async def retrain_model_job(dataset_path: str):
+    """Runs after the response is sent."""
+    await asyncio.sleep(0)   # Yield once to allow response to flush
+    # ... long training job ...
+```
+
+## Testing a FastAPI App
+
+```python
+# tests/test_api.py
+import pytest
+from fastapi.testclient import TestClient
+from unittest.mock import MagicMock, patch
+from app.main import app
+
+@pytest.fixture
+def client():
+    with TestClient(app) as c:
+        yield c
+
+@pytest.fixture
+def mock_model():
+    model = MagicMock()
+    model.predict_proba.return_value = [[0.3, 0.7]]   # 70% churn probability
+    return model
+
+def test_health(client):
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["status"] == "healthy"
+
+def test_predict_valid(client, mock_model):
+    with patch.object(app.state, "model", mock_model):
+        response = client.post("/predict", json={
+            "tenure": 12,
+            "monthly_charges": 65.0,
+            "contract_type": "month-to-month",
+            "num_products": 2,
+        })
+    assert response.status_code == 200
+    data = response.json()
+    assert 0 <= data["churn_probability"] <= 1
+    assert data["churn_prediction"] is True   # 70% > 50%
+
+def test_predict_invalid_contract(client):
+    response = client.post("/predict", json={
+        "tenure": 12,
+        "monthly_charges": 65.0,
+        "contract_type": "invalid",   # Should fail validation
+        "num_products": 2,
+    })
+    assert response.status_code == 422   # Pydantic validation error
+```
+
+## Docker for Python
+
+```dockerfile
+# Dockerfile
+FROM python:3.11-slim AS base
+WORKDIR /app
+
+# Dependencies layer (cached separately from code)
+COPY pyproject.toml .
+RUN pip install --no-cache-dir -e ".[prod]"
+
+# Code layer
+COPY src/ src/
+COPY app/ app/
+
+# Non-root user for security
+RUN useradd --create-home appuser
+USER appuser
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+```
+
+```dockerfile
+# Multi-stage build to reduce image size
+FROM python:3.11-slim AS builder
+WORKDIR /build
+COPY pyproject.toml .
+RUN pip install --no-cache-dir build && python -m build
+
+FROM python:3.11-slim AS runtime
+WORKDIR /app
+COPY --from=builder /build/dist/*.whl .
+RUN pip install --no-cache-dir *.whl && rm *.whl
+CMD ["uvicorn", "ml_serving.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+Layer caching matters: put slowly-changing content (dependencies) before rapidly-changing content (code). The `COPY pyproject.toml` + `RUN pip install` layer is cached unless `pyproject.toml` changes.
+
+## Key Takeaways
+
+- Use `src/` layout for libraries, flat layout for applications — this prevents silent import bugs in packaging
+- `pyproject.toml` is the single source of truth for project metadata, dependencies, and tool configuration
+- FastAPI's lifespan context manager is the correct place to load ML models — not module-level globals
+- Pydantic v2 validators (`@field_validator`, `@model_validator`) are the first line of defense against bad input
+- Never use `print()` in production — structured JSON logs are queryable by log aggregation systems
+- Profile with `cProfile` for CPU, `tracemalloc` for memory — never optimize without measuring first
+- NumPy vectorization can be 100x faster than Python loops; use `np.dot()` for sum-of-products patterns
+- Docker layer order is a performance decision: `COPY requirements` before `COPY source` maximizes cache hits

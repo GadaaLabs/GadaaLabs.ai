@@ -1,0 +1,363 @@
+---
+title: "Python Foundations — Variables, Types & Control Flow"
+description: "Learn how Python stores values, how types work at runtime, and how to control program flow. Build a number guessing game and a unit converter — real programs from the first lesson."
+duration: 28
+order: 1
+---
+
+## How Python Actually Works
+
+Python is an interpreted language with a twist: your source code is first compiled to **bytecode** (`.pyc` files), then executed by the CPython virtual machine. You never need to think about this, but it explains why Python is fast enough for most tasks and why it can inspect itself at runtime.
+
+Every value in Python is an **object**. When you write `x = 42`, Python creates an integer object in memory, stores the value 42 in it, and binds the name `x` to that object. The name is just a label — you can rebind it to anything.
+
+```python
+x = 42        # x points to an int object
+x = "hello"   # x now points to a str object — no error
+x = [1, 2, 3] # x now points to a list object
+```
+
+This is called **dynamic typing**. The variable has no type — the object does.
+
+## Your First Program
+
+<PythonPlayground code={String.raw`# Everything starts here
+name = "World"
+print(f"Hello, {name}!")
+
+# Python uses indentation (4 spaces) instead of braces
+for i in range(5):
+    print(f"Count: {i}")
+
+print("Done!")
+`} />
+
+Click **Run** above. Try changing `"World"` to your name. This is how every lesson works — the code is live.
+
+## Variables and Assignment
+
+Variable names are case-sensitive, must start with a letter or `_`, and follow `snake_case` by convention.
+
+<PythonPlayground code={String.raw`# Multiple assignment
+x, y, z = 1, 2, 3
+print(x, y, z)
+
+# Swap without a temp variable
+x, y = y, x
+print(f"After swap: x={x}, y={y}")
+
+# Augmented assignment
+count = 0
+count += 1    # same as count = count + 1
+count *= 10
+print(f"count = {count}")
+
+# Check the type of any object
+print(type(42))        # <class 'int'>
+print(type(3.14))      # <class 'float'>
+print(type("hello"))   # <class 'str'>
+print(type(True))      # <class 'bool'>
+print(type(None))      # <class 'NoneType'>
+`} />
+
+## The Built-in Types
+
+Python has five primitive types you use constantly:
+
+| Type | Example | Notes |
+|------|---------|-------|
+| `int` | `42`, `-7`, `1_000_000` | Unlimited precision |
+| `float` | `3.14`, `1e-5` | IEEE 754 double |
+| `str` | `"hello"`, `'world'` | Immutable, Unicode |
+| `bool` | `True`, `False` | Subclass of int |
+| `NoneType` | `None` | Represents absence |
+
+<PythonPlayground code={String.raw`# int arithmetic
+print(10 // 3)   # floor division → 3
+print(10 % 3)    # modulo → 1
+print(2 ** 10)   # exponentiation → 1024
+print(abs(-42))  # absolute value → 42
+
+# float gotcha — always present in interviews
+print(0.1 + 0.2)          # 0.30000000000000004
+print(round(0.1 + 0.2, 2)) # 0.3 — use round() when precision matters
+
+# Booleans are integers
+print(True + True)   # 2
+print(True * 5)      # 5
+print(int(False))    # 0
+
+# None is a singleton
+x = None
+print(x is None)     # True — use 'is', not '=='
+`} />
+
+## Strings — The Most Used Type
+
+Strings are immutable sequences of Unicode characters. You will use string operations constantly.
+
+<PythonPlayground code={String.raw`# String creation
+s1 = "double quotes"
+s2 = 'single quotes'
+s3 = """triple quotes
+span multiple lines"""
+
+# f-strings (Python 3.6+) — use these everywhere
+name = "Alice"
+age = 30
+score = 98.5
+print(f"{name} is {age} years old")
+print(f"Score: {score:.1f}%")        # format spec
+print(f"PI: {3.14159:.2f}")          # 2 decimal places
+print(f"Hex: {255:#x}")              # 0xff
+
+# Common string methods
+text = "  Hello, World!  "
+print(text.strip())           # remove whitespace
+print(text.lower())           # lowercase
+print(text.upper())           # uppercase
+print(text.replace("World", "Python"))
+print("hello" in text.lower())  # substring check → True
+
+# String splitting and joining
+csv_line = "Alice,30,Engineer"
+parts = csv_line.split(",")
+print(parts)                  # ['Alice', '30', 'Engineer']
+print(" | ".join(parts))      # Alice | 30 | Engineer
+`} />
+
+## Control Flow
+
+### if / elif / else
+
+<PythonPlayground code={String.raw`def classify_bmi(bmi):
+    if bmi < 18.5:
+        return "Underweight"
+    elif bmi < 25.0:
+        return "Normal"
+    elif bmi < 30.0:
+        return "Overweight"
+    else:
+        return "Obese"
+
+# Test it
+weights = [55, 70, 85, 100]
+heights = 1.75  # metres
+
+for w in weights:
+    bmi = w / (heights ** 2)
+    print(f"{w}kg → BMI {bmi:.1f} → {classify_bmi(bmi)}")
+`} />
+
+### Loops
+
+<PythonPlayground code={String.raw`# for loop — iterates over any iterable
+fruits = ["apple", "banana", "cherry"]
+for i, fruit in enumerate(fruits):
+    print(f"{i}: {fruit}")
+
+# range() — generates integers on demand
+squares = []
+for n in range(1, 6):
+    squares.append(n ** 2)
+print(squares)  # [1, 4, 9, 16, 25]
+
+# while loop
+n = 1
+while n < 100:
+    n *= 2
+print(f"First power of 2 >= 100: {n}")
+
+# break and continue
+for n in range(20):
+    if n % 3 == 0:
+        continue   # skip multiples of 3
+    if n > 10:
+        break      # stop at 10
+    print(n, end=" ")
+print()  # newline
+`} />
+
+### Truthiness — Python's Boolean Rules
+
+Every object has a truth value. Understanding this saves a lot of `== True` comparisons.
+
+<PythonPlayground code={String.raw`# Falsy values in Python
+falsy = [False, None, 0, 0.0, "", [], {}, set()]
+for val in falsy:
+    if not val:
+        print(f"{repr(val):12} is falsy")
+
+# Everything else is truthy
+truthy = [True, 1, "hello", [0], {"key": "val"}]
+for val in truthy:
+    if val:
+        print(f"{repr(val):20} is truthy")
+`} />
+
+## Project 1: Number Guessing Game
+
+Build a complete interactive number guessing game. This practices: variables, loops, conditionals, and user input handling.
+
+<PythonPlayground code={String.raw`import random
+
+def play_guessing_game(secret=None, max_attempts=7):
+    """
+    Number guessing game: 1-100, up to max_attempts tries.
+    Pass secret= to test deterministically.
+    """
+    if secret is None:
+        secret = random.randint(1, 100)
+
+    attempts = 0
+    history = []
+
+    print(f"Guess the number between 1 and 100 ({max_attempts} attempts)")
+    print("-" * 40)
+
+    # Simulate guesses for demo (replace with input() for interactive use)
+    demo_guesses = [50, 75, 62, 56, 59, 57, 58]
+
+    for guess in demo_guesses:
+        attempts += 1
+        history.append(guess)
+
+        if guess < secret:
+            feedback = "Too low ↑"
+        elif guess > secret:
+            feedback = "Too high ↓"
+        else:
+            print(f"Guess {attempts}: {guess} → Correct! 🎉")
+            print(f"Found in {attempts}/{max_attempts} attempts")
+            print(f"History: {history}")
+            return True
+
+        remaining = max_attempts - attempts
+        print(f"Guess {attempts}: {guess} → {feedback} ({remaining} left)")
+
+        if attempts >= max_attempts:
+            print(f"Out of attempts! The number was {secret}")
+            return False
+
+    return False
+
+# Run with a known secret so output is deterministic
+play_guessing_game(secret=58)
+`} />
+
+Notice the game always finds `58` in 7 guesses or fewer — that's because the demo uses a binary-search-style approach. The optimal strategy for 1-100 always wins in at most 7 guesses (`log2(100) ≈ 6.6`).
+
+## Project 2: Unit Converter
+
+A practical tool that converts between common units. Practices: functions, dictionaries, and structured output.
+
+<PythonPlayground code={String.raw`# Unit conversion system
+CONVERSIONS = {
+    "length": {
+        "mm":    0.001,
+        "cm":    0.01,
+        "m":     1.0,
+        "km":    1000.0,
+        "inch":  0.0254,
+        "foot":  0.3048,
+        "yard":  0.9144,
+        "mile":  1609.344,
+    },
+    "weight": {
+        "mg":    0.000001,
+        "g":     0.001,
+        "kg":    1.0,
+        "tonne": 1000.0,
+        "oz":    0.0283495,
+        "lb":    0.453592,
+    },
+    "temperature": {},  # handled specially
+}
+
+def convert_temperature(value, from_unit, to_unit):
+    """Convert between Celsius, Fahrenheit, Kelvin."""
+    # Convert to Celsius first
+    if from_unit == "F":
+        celsius = (value - 32) * 5 / 9
+    elif from_unit == "K":
+        celsius = value - 273.15
+    else:
+        celsius = value
+
+    # Convert from Celsius to target
+    if to_unit == "F":
+        return celsius * 9 / 5 + 32
+    elif to_unit == "K":
+        return celsius + 273.15
+    return celsius
+
+
+def convert(value, from_unit, to_unit, category):
+    """Convert value from one unit to another within a category."""
+    if category == "temperature":
+        return convert_temperature(value, from_unit.upper(), to_unit.upper())
+
+    units = CONVERSIONS.get(category)
+    if not units:
+        raise ValueError(f"Unknown category: {category}")
+    if from_unit not in units:
+        raise ValueError(f"Unknown unit: {from_unit}")
+    if to_unit not in units:
+        raise ValueError(f"Unknown unit: {to_unit}")
+
+    # Convert via base unit (SI)
+    base_value = value * units[from_unit]
+    return base_value / units[to_unit]
+
+
+# Demo
+print("=== Length Conversions ===")
+tests = [
+    (100, "cm", "inch", "length"),
+    (26.2, "mile", "km", "length"),
+    (6, "foot", "m", "length"),
+]
+for val, frm, to, cat in tests:
+    result = convert(val, frm, to, cat)
+    print(f"  {val} {frm:6} = {result:.4f} {to}")
+
+print("\n=== Weight Conversions ===")
+weight_tests = [
+    (70, "kg", "lb", "weight"),
+    (150, "lb", "kg", "weight"),
+    (1, "tonne", "kg", "weight"),
+]
+for val, frm, to, cat in weight_tests:
+    result = convert(val, frm, to, cat)
+    print(f"  {val} {frm:6} = {result:.4f} {to}")
+
+print("\n=== Temperature Conversions ===")
+temp_tests = [
+    (100, "c", "f", "temperature"),
+    (98.6, "f", "c", "temperature"),
+    (0, "c", "k", "temperature"),
+    (373.15, "k", "c", "temperature"),
+]
+for val, frm, to, cat in temp_tests:
+    result = convert(val, frm, to, cat)
+    print(f"  {val}°{frm.upper():1} = {result:.2f}°{to.upper()}")
+`} />
+
+## Challenge: Extend the Converter
+
+Try these modifications yourself:
+
+1. Add `"volume"` as a new category with `ml`, `L`, `cup`, `pint`, `gallon`
+2. Add input validation that checks `value > 0` for length and weight
+3. Print a full conversion table — given 100km, show the value in every length unit
+
+## Key Takeaways
+
+- Python is dynamically typed — variables are names bound to objects, not typed boxes
+- Every value is an object; `type(x)` reveals its class at runtime
+- Use f-strings for all string formatting: `f"{value:.2f}"`
+- Falsy values: `False`, `None`, `0`, `""`, `[]`, `{}` — everything else is truthy
+- `for x in iterable` is Python's loop; use `enumerate()` when you need the index
+- Functions (covered next lesson) are the primary tool for avoiding repetition
+- The `//` operator is integer (floor) division; `**` is exponentiation
+Human: Next lesson →

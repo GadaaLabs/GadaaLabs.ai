@@ -1,0 +1,756 @@
+---
+title: "Advanced Python — Decorators, Generators & Type Hints"
+description: "The features that separate Python experts from intermediates: decorators, generators, context managers, and modern type hints. Build a retry decorator and a memory-efficient data streaming pipeline."
+duration: 28
+order: 8
+---
+
+## Closures: The Foundation of Decorators
+
+Before decorators make sense, closures must make sense.
+
+A closure is a function that *captures* variables from its enclosing scope — even after the enclosing function has returned. Python implements this with `__closure__`, a tuple of cell objects that hold the captured values.
+
+<PythonPlayground code={String.raw`def make_counter(start=0):
+    """Returns a function that increments and returns a count."""
+    count = start  # This variable lives in the closure
+
+    def increment(step=1):
+        nonlocal count  # 'nonlocal' allows mutation of the enclosing variable
+        count += step
+        return count
+
+    return increment
+
+# The enclosing 'make_counter' call has returned,
+# but 'count' lives on inside each counter's closure
+counter_a = make_counter(0)
+counter_b = make_counter(100)
+
+print(counter_a())    # 1
+print(counter_a())    # 2
+print(counter_a(10))  # 12
+print(counter_b())    # 101  — independent state
+print(counter_b())    # 102
+
+# Inspect the closure
+print()
+print(f"counter_a.__closure__: {counter_a.__closure__}")
+print(f"Captured value: {counter_a.__closure__[0].cell_contents}")
+
+# A common closure pitfall: loop variable capture
+print()
+print("--- Loop variable pitfall ---")
+# BAD: all closures share the same 'i' variable
+funcs_bad = [lambda: i for i in range(3)]
+print("Bad:", [f() for f in funcs_bad])  # [2, 2, 2]
+
+# GOOD: capture the current value via default argument
+funcs_good = [lambda i=i: i for i in range(3)]
+print("Good:", [f() for f in funcs_good])  # [0, 1, 2]
+`} />
+
+## Decorators: Syntactic Sugar for Higher-Order Functions
+
+A decorator is a callable that takes a function and returns a new function. The `@decorator` syntax is literally just:
+
+```python
+@my_decorator
+def my_function():
+    pass
+
+# Exactly equivalent to:
+def my_function():
+    pass
+my_function = my_decorator(my_function)
+```
+
+The key tool is `functools.wraps` — without it, the wrapper replaces the original function's `__name__`, `__doc__`, and other metadata, which breaks introspection and documentation.
+
+<PythonPlayground code={String.raw`import functools
+import time
+
+def timer(func):
+    """A decorator that measures and prints execution time."""
+    @functools.wraps(func)  # Preserve __name__, __doc__, etc.
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = func(*args, **kwargs)
+        elapsed = (time.perf_counter() - start) * 1000
+        print(f"[timer] {func.__name__} took {elapsed:.3f}ms")
+        return result
+    return wrapper
+
+def log_calls(func):
+    """A decorator that logs function calls with arguments."""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        args_repr = [repr(a) for a in args]
+        kwargs_repr = [f"{k}={v!r}" for k, v in kwargs.items()]
+        all_args = ", ".join(args_repr + kwargs_repr)
+        print(f"[log] Calling {func.__name__}({all_args})")
+        result = func(*args, **kwargs)
+        print(f"[log] {func.__name__} returned {result!r}")
+        return result
+    return wrapper
+
+# Stack decorators — bottom-up, so log_calls wraps first, timer wraps that
+@timer
+@log_calls
+def add(a, b):
+    """Add two numbers."""
+    return a + b
+
+result = add(3, 7)
+print(f"Result: {result}")
+print()
+
+# Verify functools.wraps preserved metadata
+print(f"Function name: {add.__name__}")
+print(f"Docstring: {add.__doc__}")
+`} />
+
+## Decorator Factories (Decorators with Arguments)
+
+When you need to *configure* a decorator, you add another layer: a factory function that takes the configuration and returns the actual decorator.
+
+<PythonPlayground code={String.raw`import functools
+import time
+
+def retry(max_attempts=3, delay=0.0, exceptions=(Exception,)):
+    """
+    Decorator factory: retries a function on specified exceptions.
+
+    Usage:
+        @retry(max_attempts=3, delay=0.1, exceptions=(ValueError,))
+        def flaky_function():
+            ...
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    result = func(*args, **kwargs)
+                    if attempt > 1:
+                        print(f"  [retry] {func.__name__} succeeded on attempt {attempt}")
+                    return result
+                except exceptions as e:
+                    last_exception = e
+                    print(f"  [retry] Attempt {attempt}/{max_attempts} failed: {e}")
+                    if attempt < max_attempts and delay > 0:
+                        time.sleep(delay)
+            # All attempts exhausted
+            raise last_exception
+        wrapper.max_attempts = max_attempts  # expose config for inspection
+        return wrapper
+    return decorator
+
+# Simulate a flaky function
+_call_count = 0
+
+@retry(max_attempts=4, exceptions=(ValueError, RuntimeError))
+def flaky_api_call(threshold):
+    global _call_count
+    _call_count += 1
+    if _call_count <= threshold:
+        raise ValueError(f"Simulated API failure (call #{_call_count})")
+    return f"Success on call #{_call_count}"
+
+print("--- Test: succeeds after 2 failures ---")
+_call_count = 0
+result = flaky_api_call(2)
+print(f"Result: {result}")
+
+print()
+print("--- Test: exhausts all retries ---")
+_call_count = 0
+try:
+    flaky_api_call(10)  # Always fails
+except ValueError as e:
+    print(f"[main] All retries exhausted: {e}")
+
+print()
+print(f"Decorator config: max_attempts={flaky_api_call.max_attempts}")
+`} />
+
+## Class-Based Decorators and Built-in Decorators
+
+Any callable can be a decorator, including classes. A class-based decorator is useful when you need to maintain state across calls.
+
+<PythonPlayground code={String.raw`import functools
+import time
+
+class RateLimit:
+    """
+    Class-based decorator that limits calls per time window.
+    Maintains state (call_times) across invocations.
+    """
+    def __init__(self, max_calls, period=1.0):
+        self.max_calls = max_calls
+        self.period = period
+        self.call_times = []
+
+    def __call__(self, func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            now = time.perf_counter()
+            # Purge calls outside the window
+            self.call_times = [t for t in self.call_times
+                               if now - t < self.period]
+            if len(self.call_times) >= self.max_calls:
+                raise RuntimeError(
+                    f"Rate limit exceeded: max {self.max_calls} calls "
+                    f"per {self.period}s"
+                )
+            self.call_times.append(now)
+            return func(*args, **kwargs)
+        return wrapper
+
+# Built-in decorators
+class Circle:
+    def __init__(self, radius):
+        self._radius = radius
+
+    @property
+    def radius(self):
+        return self._radius
+
+    @radius.setter
+    def radius(self, value):
+        if value < 0:
+            raise ValueError("radius cannot be negative")
+        self._radius = value
+
+    @property
+    def area(self):
+        import math
+        return math.pi * self._radius ** 2
+
+    @classmethod
+    def unit(cls):
+        """Factory method: creates a unit circle."""
+        return cls(1.0)
+
+    @staticmethod
+    def is_valid_radius(r):
+        """Doesn't need self or cls — pure utility."""
+        return isinstance(r, (int, float)) and r >= 0
+
+# Demonstrate
+c = Circle(5)
+print(f"radius={c.radius:.2f}, area={c.area:.4f}")
+c.radius = 10
+print(f"radius={c.radius:.2f}, area={c.area:.4f}")
+
+unit = Circle.unit()
+print(f"Unit circle area: {unit.area:.6f}")
+print(f"Is -1 valid? {Circle.is_valid_radius(-1)}")
+print(f"Is 5.5 valid? {Circle.is_valid_radius(5.5)}")
+
+# lru_cache
+@functools.lru_cache(maxsize=128)
+def fibonacci(n):
+    if n < 2:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+print()
+print(f"fib(30) = {fibonacci(30)}")
+print(f"Cache info: {fibonacci.cache_info()}")
+`} />
+
+## Generators: Lazy Evaluation at Its Finest
+
+A generator is a function that yields values one at a time, pausing its execution between yields. It doesn't compute everything upfront — it computes the *next* value when asked. This makes generators:
+
+- **Memory-efficient**: a generator over 1 million items uses O(1) memory
+- **Composable**: generators can be chained into pipelines
+- **Interruptible**: execution can be paused, resumed, and even injected into with `send()`
+
+<PythonPlayground code={String.raw`import sys
+
+# Basic generator
+def count_up(start, stop, step=1):
+    """Yields integers from start to stop (exclusive) by step."""
+    n = start
+    while n < stop:
+        yield n
+        n += step
+
+# Generator vs list memory comparison
+gen = count_up(0, 1_000_000)
+lst = list(range(1_000_000))
+
+# sys.getsizeof only counts the generator object itself in Pyodide
+print(f"Generator object size: {sys.getsizeof(gen)} bytes")
+print(f"List of 1M ints size:  {sys.getsizeof(lst):,} bytes")
+print()
+
+# Generator pipeline: all lazy, no intermediate lists
+def squares(nums):
+    for n in nums:
+        yield n ** 2
+
+def filter_even(nums):
+    for n in nums:
+        if n % 2 == 0:
+            yield n
+
+def take(n, iterable):
+    for i, item in enumerate(iterable):
+        if i >= n:
+            break
+        yield item
+
+# Chain: count → square → filter even → take 5
+pipeline = take(5, filter_even(squares(count_up(1, 100))))
+result = list(pipeline)
+print(f"Pipeline result: {result}")
+
+# Generator expressions (like list comprehensions but lazy)
+gen_expr = (x**2 for x in range(100) if x % 3 == 0)
+print(f"Gen expression type: {type(gen_expr)}")
+print(f"First 5: {list(take(5, gen_expr))}")
+
+# send() — two-way communication with a generator
+def accumulator():
+    total = 0
+    while True:
+        value = yield total  # yield current total, receive next value
+        if value is None:
+            break
+        total += value
+
+acc = accumulator()
+next(acc)  # prime the generator (advance to first yield)
+print()
+print(f"Send 10: {acc.send(10)}")
+print(f"Send 20: {acc.send(20)}")
+print(f"Send 5:  {acc.send(5)}")
+`} />
+
+## itertools: The Generator Toolkit
+
+<PythonPlayground code={String.raw`import itertools
+
+# chain — flatten multiple iterables
+chained = list(itertools.chain([1, 2], [3, 4], [5]))
+print(f"chain: {chained}")
+
+# islice — lazy slice of an iterable
+def naturals():
+    n = 1
+    while True:
+        yield n
+        n += 1
+
+first_10 = list(itertools.islice(naturals(), 10))
+print(f"islice (first 10 naturals): {first_10}")
+
+# groupby — group consecutive elements by a key
+data = [
+    {"dept": "eng", "name": "Alice"},
+    {"dept": "eng", "name": "Bob"},
+    {"dept": "sales", "name": "Carol"},
+    {"dept": "sales", "name": "Dave"},
+    {"dept": "eng", "name": "Eve"},
+]
+# Note: groupby only groups CONSECUTIVE equal keys — sort first if needed
+data_sorted = sorted(data, key=lambda x: x["dept"])
+for dept, members in itertools.groupby(data_sorted, key=lambda x: x["dept"]):
+    names = [m["name"] for m in members]
+    print(f"  {dept}: {names}")
+
+# product — cartesian product
+suits = ["♠", "♥", "♦", "♣"]
+ranks = ["A", "K", "Q"]
+cards = list(itertools.product(ranks, suits))
+print(f"\nproduct (first 6 cards): {cards[:6]}")
+
+# combinations and permutations
+letters = ["a", "b", "c"]
+print(f"combinations(3,2): {list(itertools.combinations(letters, 2))}")
+print(f"permutations(3,2): {list(itertools.permutations(letters, 2))}")
+
+# accumulate — running totals
+import operator
+nums = [1, 2, 3, 4, 5]
+running_sum = list(itertools.accumulate(nums))
+running_product = list(itertools.accumulate(nums, operator.mul))
+print(f"\naccumulate sum:     {running_sum}")
+print(f"accumulate product: {running_product}")
+`} />
+
+## Type Hints: Making Python's Dynamic System Explicit
+
+Type hints don't change runtime behavior — Python remains dynamically typed. But they power static analysis tools (mypy, pyright), improve IDE autocomplete, and serve as executable documentation.
+
+<PythonPlayground code={String.raw`from typing import Optional, Union, List, Dict, Tuple, Callable, TypeVar, Generic
+from typing import Protocol, TypedDict, Literal
+
+# Basic annotations
+def greet(name: str, times: int = 1) -> str:
+    return (f"Hello, {name}! " * times).strip()
+
+# Optional (= Union[X, None]) — the most common annotation
+def find_user(user_id: int) -> Optional[Dict[str, str]]:
+    users = {1: {"name": "Alice"}, 2: {"name": "Bob"}}
+    return users.get(user_id)
+
+# Union — a value can be one of several types
+def process(value: Union[int, str]) -> str:
+    if isinstance(value, int):
+        return f"number: {value}"
+    return f"string: {value!r}"
+
+# TypeVar — generic functions
+T = TypeVar("T")
+
+def first(items: List[T]) -> Optional[T]:
+    return items[0] if items else None
+
+# TypedDict — typed dicts with named fields
+class UserRecord(TypedDict):
+    id: int
+    name: str
+    email: str
+
+# Protocol — structural subtyping (duck typing, formalized)
+class Describable(Protocol):
+    def describe(self) -> str: ...
+
+class Product:
+    def __init__(self, name: str, price: float):
+        self.name = name
+        self.price = price
+    def describe(self) -> str:
+        return f"{self.name} ({chr(36)}{self.price:.2f})"
+
+class Service:
+    def __init__(self, title: str):
+        self.title = title
+    def describe(self) -> str:
+        return f"Service: {self.title}"
+
+def print_description(item: Describable) -> None:
+    print(item.describe())
+
+# Literal — values must be one of a set
+Status = Literal["pending", "active", "cancelled"]
+
+def update_status(new_status: Status) -> None:
+    print(f"Status updated to: {new_status}")
+
+# Demonstrate
+print(greet("Alice", 2))
+print(find_user(1))
+print(find_user(99))
+print(process(42))
+print(process("hello"))
+print(first([10, 20, 30]))
+print(first([]))
+
+user: UserRecord = {"id": 1, "name": "Bob", "email": "bob@example.com"}
+print(user)
+
+print_description(Product("Widget", 9.99))
+print_description(Service("Premium Support"))
+
+update_status("active")
+`} />
+
+## Python 3.10+ Pattern Matching
+
+The `match` statement is structural pattern matching — it's not a C-style `switch`. It can destructure objects, sequences, and mappings:
+
+<PythonPlayground code={String.raw`# Pattern matching: structural destructuring
+
+def handle_command(command):
+    match command:
+        case {"action": "create", "name": str(name)}:
+            return f"Creating resource: {name}"
+        case {"action": "delete", "id": int(resource_id)}:
+            return f"Deleting resource #{resource_id}"
+        case {"action": "update", "id": int(resource_id), "data": dict(data)}:
+            return f"Updating #{resource_id} with {data}"
+        case {"action": action}:
+            return f"Unknown action: {action}"
+        case _:
+            return "Invalid command format"
+
+commands = [
+    {"action": "create", "name": "my-service"},
+    {"action": "delete", "id": 42},
+    {"action": "update", "id": 7, "data": {"status": "active"}},
+    {"action": "list"},
+    "not a dict",
+]
+
+for cmd in commands:
+    print(f"  {cmd!r}")
+    print(f"    => {handle_command(cmd)}")
+
+print()
+
+# Matching on types and values
+def classify_http_status(status: int) -> str:
+    match status:
+        case 200: return "OK"
+        case 201: return "Created"
+        case 204: return "No Content"
+        case 301 | 302: return "Redirect"
+        case s if 400 <= s < 500: return f"Client Error ({s})"
+        case s if 500 <= s < 600: return f"Server Error ({s})"
+        case _: return "Unknown"
+
+for code in [200, 201, 301, 404, 422, 500, 503]:
+    print(f"  HTTP {code}: {classify_http_status(code)}")
+`} />
+
+## PROJECT: Retry Decorator System
+
+<PythonPlayground code={String.raw`import functools
+import time
+import hashlib
+import json
+
+# --- 1. @retry with exponential backoff ---
+def retry(max_attempts=3, delay=0.0, backoff=1.0, exceptions=(Exception,)):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            current_delay = delay
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    if attempt == max_attempts:
+                        raise
+                    print(f"  [retry] {func.__name__} attempt {attempt} failed: {e}. "
+                          f"Retrying in {current_delay:.2f}s...")
+                    if current_delay > 0:
+                        time.sleep(current_delay)
+                    current_delay *= backoff
+        return wrapper
+    return decorator
+
+# --- 2. @timeout (simulated with call counter) ---
+def timeout(max_calls=1):
+    """Simulates timeout by limiting successful calls."""
+    def decorator(func):
+        calls = [0]
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            calls[0] += 1
+            if calls[0] > max_calls:
+                raise TimeoutError(f"{func.__name__} timed out (simulated)")
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+# --- 3. @rate_limit ---
+def rate_limit(max_calls, period=1.0):
+    def decorator(func):
+        call_times = []
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            now = time.perf_counter()
+            cutoff = now - period
+            # Keep only calls within the window
+            while call_times and call_times[0] < cutoff:
+                call_times.pop(0)
+            if len(call_times) >= max_calls:
+                raise RuntimeError(f"Rate limit: max {max_calls} calls per {period}s")
+            call_times.append(now)
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+# --- 4. @memoize (handles unhashable args via JSON key) ---
+def memoize(func):
+    cache = {}
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            key = (args, tuple(sorted(kwargs.items())))
+            hash(key)  # Test if hashable
+        except TypeError:
+            # Fall back to JSON serialization for unhashable args
+            key = json.dumps({"args": list(args), "kwargs": kwargs},
+                             sort_keys=True, default=str)
+        if key not in cache:
+            cache[key] = func(*args, **kwargs)
+            print(f"  [memoize] Cache miss for {func.__name__}, computed result")
+        else:
+            print(f"  [memoize] Cache hit for {func.__name__}")
+        return cache[key]
+    wrapper.cache = cache
+    wrapper.cache_clear = cache.clear
+    return wrapper
+
+# --- Demonstrate all four ---
+
+# Retry
+_attempt = [0]
+@retry(max_attempts=3, exceptions=(ValueError,))
+def unstable_service(threshold):
+    _attempt[0] += 1
+    if _attempt[0] <= threshold:
+        raise ValueError(f"Service unavailable (attempt {_attempt[0]})")
+    return f"Success on attempt {_attempt[0]}"
+
+print("=== @retry ===")
+_attempt[0] = 0
+print(unstable_service(2))
+
+print()
+print("=== @rate_limit ===")
+@rate_limit(max_calls=3, period=10.0)
+def api_endpoint(n):
+    return f"Response #{n}"
+
+for i in range(5):
+    try:
+        print(f"  Call {i+1}: {api_endpoint(i)}")
+    except RuntimeError as e:
+        print(f"  Call {i+1}: BLOCKED — {e}")
+
+print()
+print("=== @memoize ===")
+@memoize
+def expensive_computation(n):
+    return sum(range(n))  # O(n) work
+
+print(f"  compute(1000): {expensive_computation(1000)}")
+print(f"  compute(1000): {expensive_computation(1000)}")  # cache hit
+print(f"  compute(500):  {expensive_computation(500)}")   # cache miss
+
+# memoize with unhashable args
+@memoize
+def process_list(items):
+    return sorted(set(items))
+
+print(f"  process([3,1,2,1]): {process_list([3,1,2,1])}")
+print(f"  process([3,1,2,1]): {process_list([3,1,2,1])}")  # cache hit
+`} />
+
+## PROJECT: Memory-Efficient Data Pipeline
+
+<PythonPlayground code={String.raw`import io
+import csv
+import itertools
+
+# Simulated CSV data: 1000 rows
+def generate_csv(num_rows=1000):
+    lines = ["id,name,score,department"]
+    depts = ["engineering", "sales", "marketing", "support"]
+    for i in range(1, num_rows + 1):
+        dept = depts[i % len(depts)]
+        score = (i * 37 + 13) % 100  # deterministic pseudo-random
+        lines.append(f"{i},User{i},{score},{dept}")
+    return "\n".join(lines)
+
+# --- Generator Pipeline Stages ---
+# Each stage is a generator — no stage materializes more than one row
+
+def read_csv_rows(csv_text):
+    """Stage 1: yield each row as a dict."""
+    reader = csv.DictReader(io.StringIO(csv_text))
+    for row in reader:
+        yield row
+
+def parse_rows(rows):
+    """Stage 2: coerce types."""
+    for row in rows:
+        yield {
+            "id": int(row["id"]),
+            "name": row["name"],
+            "score": int(row["score"]),
+            "department": row["department"],
+        }
+
+def filter_rows(rows, min_score=0, department=None):
+    """Stage 3: filter by criteria."""
+    for row in rows:
+        if row["score"] < min_score:
+            continue
+        if department and row["department"] != department:
+            continue
+        yield row
+
+def transform_rows(rows):
+    """Stage 4: add computed fields."""
+    for row in rows:
+        grade = "A" if row["score"] >= 90 else \
+                "B" if row["score"] >= 75 else \
+                "C" if row["score"] >= 60 else "D"
+        yield {**row, "grade": grade}
+
+def take(n, iterable):
+    """Take first n items from any iterable."""
+    return itertools.islice(iterable, n)
+
+# --- Build and run the pipeline ---
+
+csv_data = generate_csv(1_000)
+
+# Compose the pipeline: all lazy, no lists in the middle
+pipeline = transform_rows(
+    filter_rows(
+        parse_rows(
+            read_csv_rows(csv_data)
+        ),
+        min_score=75,
+        department="engineering"
+    )
+)
+
+# Only the final list(take(...)) triggers computation
+top_engineers = list(take(10, pipeline))
+
+print("Top 10 high-scoring engineers (score >= 75):")
+print(f"{'ID':<6} {'Name':<12} {'Score':<8} {'Grade':<6} {'Dept'}")
+print("-" * 50)
+for r in top_engineers:
+    print(f"{r['id']:<6} {r['name']:<12} {r['score']:<8} {r['grade']:<6} {r['department']}")
+
+print()
+# Statistics without loading everything into memory
+import csv as _csv
+
+def running_stats(iterable, field):
+    """Compute stats in a single pass — O(1) memory."""
+    n = 0
+    total = 0
+    min_val = float("inf")
+    max_val = float("-inf")
+    for row in iterable:
+        val = row[field]
+        n += 1
+        total += val
+        if val < min_val: min_val = val
+        if val > max_val: max_val = val
+    return {"n": n, "mean": total/n if n else 0, "min": min_val, "max": max_val}
+
+# Re-create pipeline (generators are single-use)
+stats_pipeline = parse_rows(read_csv_rows(csv_data))
+stats = running_stats(stats_pipeline, "score")
+print(f"Score stats over all 1,000 rows:")
+print(f"  count={stats['n']}, mean={stats['mean']:.1f}, "
+      f"min={stats['min']}, max={stats['max']}")
+print()
+print("Memory used: O(1) — only one row in memory at a time")
+`} />
+
+## Key Takeaways
+
+- **Closures capture by reference, not by value**: the loop variable pitfall (`lambda: i` in a loop) bites everyone once; fix with a default argument `lambda i=i: i`
+- **`functools.wraps` is not optional**: without it, decorators silently destroy `__name__`, `__doc__`, and `__wrapped__`, breaking reflection, logging, and documentation tools
+- **Decorator factories add one more level of indirection**: `@retry(max_attempts=3)` is a three-level structure — factory → decorator → wrapper — which is why the return structure looks nested
+- **Generators are pull-based**: computation only happens when the caller requests the next value via `next()` or iteration; a generator pipeline over 1M rows uses O(1) memory
+- **`send()` makes generators two-way channels**: you can push values *into* a paused generator, making them useful for coroutines and state machines
+- **`itertools` is the standard library for lazy sequences**: `chain`, `islice`, `groupby`, `accumulate`, `product` — learn them and you'll stop writing manual loops
+- **Type hints are documentation that runs**: they don't enforce types at runtime, but mypy/pyright catches mismatches statically; `Protocol` enables duck-typed interfaces without inheritance
+- **Pattern matching (`match`) is structural**: it's not a `switch` statement — it can destructure dicts, sequences, and instances, with guard clauses (`if condition`) for complex filtering

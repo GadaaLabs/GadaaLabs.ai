@@ -1,0 +1,643 @@
+---
+title: "Functions, Scope & Modules"
+description: "Master Python functions from first principles: parameters, defaults, *args/**kwargs, closures, and scope rules. Build a text statistics analyzer and a reusable utility module."
+duration: 26
+order: 2
+---
+
+## Why Functions Are the Unit of Thought
+
+A function is not just a way to avoid repeating code. It is a named, callable unit of computation that takes inputs, does work, and returns outputs. Good Python code is almost entirely functions and classes working together — understanding them deeply is the single biggest lever you have for writing better code.
+
+Python functions are **first-class objects**. They can be stored in variables, passed as arguments, returned from other functions, and stored in data structures. This is not a curiosity — it enables entire programming paradigms: callbacks, decorators, functional pipelines.
+
+## Defining Functions
+
+The `def` keyword creates a function object and binds it to a name. The body runs only when called.
+
+```python
+def greet(name):
+    return f"Hello, {name}!"
+
+message = greet("Ada")   # calls the function
+print(message)           # Hello, Ada!
+```
+
+A function without an explicit `return` statement returns `None`. Always be intentional about return values.
+
+<PythonPlayground code={String.raw`def add(a, b):
+    """Return the sum of a and b."""
+    return a + b
+
+def describe(value):
+    """Print the type and value — returns None implicitly."""
+    print(f"Value: {value!r}, Type: {type(value).__name__}")
+
+result = add(3, 4)
+print(result)            # 7
+
+describe(42)
+describe("hello")
+describe([1, 2, 3])
+
+# Functions are objects — you can inspect them
+print(add.__name__)      # add
+print(add.__doc__)       # Return the sum of a and b.
+`} title="Basic function definition" />
+
+### Docstrings
+
+Every non-trivial function should have a docstring. Python treats the first string literal in a function body as its documentation. Tools like `help()`, IDEs, and documentation generators read it automatically.
+
+```python
+def calculate_bmi(weight_kg, height_m):
+    """
+    Calculate Body Mass Index.
+
+    Args:
+        weight_kg: Weight in kilograms.
+        height_m: Height in metres.
+
+    Returns:
+        BMI as a float, rounded to 1 decimal place.
+    """
+    return round(weight_kg / height_m ** 2, 1)
+```
+
+## Parameters: The Full Picture
+
+Python has five distinct parameter types. Most Python developers only use three, but knowing all five prevents confusion when you encounter them.
+
+### Positional and Keyword Arguments
+
+Any parameter can be passed positionally (by order) or by keyword (by name). Keyword arguments can appear in any order.
+
+<PythonPlayground code={String.raw`def connect(host, port, timeout):
+    print(f"Connecting to {host}:{port} (timeout={timeout}s)")
+
+# Positional — order matters
+connect("localhost", 5432, 30)
+
+# Keyword — order doesn't matter
+connect(timeout=30, host="localhost", port=5432)
+
+# Mix: positional first, then keyword
+connect("localhost", timeout=30, port=5432)
+`} title="Positional vs keyword arguments" />
+
+### Default Parameter Values
+
+Parameters with defaults are optional at the call site. Always put defaulted parameters after non-defaulted ones.
+
+**Critical rule**: Never use a mutable object (list, dict) as a default value. Python creates the default object once when the function is defined, not each time it is called.
+
+<PythonPlayground code={String.raw`# CORRECT: use None and create inside the function
+def append_item(item, collection=None):
+    if collection is None:
+        collection = []
+    collection.append(item)
+    return collection
+
+# Each call gets a fresh list
+a = append_item(1)
+b = append_item(2)
+print(a)   # [1]
+print(b)   # [2]  — correct!
+
+# WRONG pattern (demonstrated here for illustration):
+def broken_append(item, collection=[]):  # DON'T do this
+    collection.append(item)
+    return collection
+
+x = broken_append(1)
+y = broken_append(2)
+print(x)   # [1, 2]  — WRONG, shared mutable default!
+print(y)   # [1, 2]  — same list!
+`} title="Default values — the mutable default trap" />
+
+### *args and **kwargs
+
+`*args` collects extra positional arguments into a tuple. `**kwargs` collects extra keyword arguments into a dict. They let you write functions that accept a variable number of arguments.
+
+<PythonPlayground code={String.raw`def summarize(*args, **kwargs):
+    """Accept any positional and keyword arguments."""
+    print(f"Positional: {args}")
+    print(f"Keyword:    {kwargs}")
+
+summarize(1, 2, 3, name="Ada", year=1815)
+
+# Real use case: flexible logging
+def log(level, *messages, sep=" ", prefix=""):
+    joined = sep.join(str(m) for m in messages)
+    print(f"[{level.upper()}] {prefix}{joined}")
+
+log("info", "Server", "started", "OK")
+log("error", "File not found", sep=" | ", prefix=">> ")
+
+# Unpacking into a function call
+def add3(a, b, c):
+    return a + b + c
+
+nums = [1, 2, 3]
+opts = {"a": 10, "b": 20, "c": 30}
+print(add3(*nums))   # unpack list as positional args
+print(add3(**opts))  # unpack dict as keyword args
+`} title="*args and **kwargs" />
+
+### Keyword-Only and Positional-Only Parameters
+
+Parameters after a bare `*` are keyword-only. Parameters before a `/` are positional-only. These are useful for designing clean APIs.
+
+<PythonPlayground code={String.raw`# Keyword-only: must be passed as keyword=value
+def create_user(name, *, role="viewer", active=True):
+    return {"name": name, "role": role, "active": active}
+
+user = create_user("Ada", role="admin")
+print(user)
+
+# This would raise TypeError:
+# create_user("Ada", "admin")  # role must be keyword
+
+# Positional-only (Python 3.8+): cannot use as keyword
+def magnitude(x, y, /):
+    return (x**2 + y**2) ** 0.5
+
+print(magnitude(3, 4))   # 5.0
+# magnitude(x=3, y=4) would raise TypeError
+`} title="Keyword-only and positional-only parameters" />
+
+## Scope: The LEGB Rule
+
+When Python encounters a name, it searches four scopes in order: **L**ocal, **E**nclosing, **G**lobal, **B**uilt-in. This is the LEGB rule. Understanding it eliminates an entire class of bugs.
+
+- **Local** — names defined inside the current function
+- **Enclosing** — names in the enclosing function (for nested functions)
+- **Global** — names defined at module level
+- **Built-in** — Python's built-in names (`len`, `print`, `range`, etc.)
+
+<PythonPlayground code={String.raw`x = "global"           # Global scope
+
+def outer():
+    x = "enclosing"    # Enclosing scope (relative to inner)
+
+    def inner():
+        x = "local"    # Local scope — shadows the others
+        print(f"inner sees: {x}")
+
+    inner()
+    print(f"outer sees: {x}")
+
+outer()
+print(f"module sees: {x}")
+
+# Built-in scope — len, print, range etc. are always available
+print(len("hello"))    # built-in len
+`} title="LEGB scope rules" />
+
+### global and nonlocal
+
+Use `global` to rebind a module-level name from inside a function. Use `nonlocal` to rebind an enclosing function's name. Both are code smells in large programs — prefer returning values or using classes — but they have legitimate uses.
+
+<PythonPlayground code={String.raw`# global keyword
+counter = 0
+
+def increment():
+    global counter   # declare we want the module-level counter
+    counter += 1
+
+increment()
+increment()
+print(counter)   # 2
+
+# nonlocal keyword — the clean way to build accumulators
+def make_counter(start=0):
+    count = start
+
+    def increment(step=1):
+        nonlocal count
+        count += step
+        return count
+
+    return increment
+
+c = make_counter(10)
+print(c())    # 11
+print(c(5))   # 16
+print(c())    # 17
+`} title="global and nonlocal" />
+
+## Closures: Functions That Remember
+
+A closure is a function that captures variables from its enclosing scope even after that scope has finished executing. The function object carries a reference to those variables.
+
+This is how Python implements things like decorators, factory functions, and stateful callbacks without needing a class.
+
+<PythonPlayground code={String.raw`def make_multiplier(factor):
+    """Returns a function that multiplies by factor."""
+    def multiply(x):
+        return x * factor   # factor is captured from enclosing scope
+    return multiply
+
+double = make_multiplier(2)
+triple = make_multiplier(3)
+
+print(double(5))    # 10
+print(triple(5))    # 15
+print(double(triple(4)))  # double(12) = 24
+
+# Inspect what the closure captures
+print(double.__closure__[0].cell_contents)  # 2
+print(triple.__closure__[0].cell_contents)  # 3
+
+# Real-world use: parameterized validators
+def make_range_validator(min_val, max_val):
+    def validate(value):
+        if not (min_val <= value <= max_val):
+            raise ValueError(f"{value} must be between {min_val} and {max_val}")
+        return value
+    return validate
+
+validate_age = make_range_validator(0, 150)
+validate_score = make_range_validator(0, 100)
+
+print(validate_age(25))     # 25
+print(validate_score(87))   # 87
+try:
+    validate_age(200)
+except ValueError as e:
+    print(e)
+`} title="Closures and factory functions" />
+
+## First-Class Functions
+
+Because functions are objects, you can do anything with them that you can do with any other value.
+
+<PythonPlayground code={String.raw`# Store functions in a list
+def celsius_to_fahrenheit(c):
+    return c * 9/5 + 32
+
+def fahrenheit_to_celsius(f):
+    return (f - 32) * 5/9
+
+def kelvin_to_celsius(k):
+    return k - 273.15
+
+converters = [celsius_to_fahrenheit, fahrenheit_to_celsius, kelvin_to_celsius]
+
+# Call each
+for fn in converters:
+    print(f"{fn.__name__}(100) = {fn(100):.2f}")
+
+# Pass a function as an argument
+def apply_twice(func, value):
+    return func(func(value))
+
+def add_ten(x):
+    return x + 10
+
+print(apply_twice(add_ten, 5))   # add_ten(add_ten(5)) = 25
+
+# Built-in higher-order functions
+numbers = [3, 1, 4, 1, 5, 9, 2, 6]
+
+sorted_nums = sorted(numbers)                         # default
+reverse_sorted = sorted(numbers, reverse=True)        # reversed
+abs_sorted = sorted([-3, 1, -4, 2], key=abs)          # by absolute value
+
+print(sorted_nums)
+print(reverse_sorted)
+print(abs_sorted)
+
+# filter and map
+evens = list(filter(lambda x: x % 2 == 0, numbers))
+doubled = list(map(lambda x: x * 2, numbers))
+print(evens)
+print(doubled)
+`} title="First-class functions and higher-order functions" />
+
+## Lambda Expressions
+
+A lambda is an anonymous function limited to a single expression. It is syntactic sugar — everything a lambda can do, a regular `def` can do better. Use lambdas only for short throwaway functions passed to `sorted`, `map`, `filter`, or similar.
+
+**When NOT to use lambda**: if the body is complex, if you need a docstring, if you need to name it and reuse it, or if it would be clearer as a `def`.
+
+<PythonPlayground code={String.raw`# Good lambda use: short key functions
+students = [
+    {"name": "Alice", "grade": 92},
+    {"name": "Bob", "grade": 85},
+    {"name": "Carol", "grade": 97},
+]
+
+# Sort by grade descending
+by_grade = sorted(students, key=lambda s: s["grade"], reverse=True)
+for s in by_grade:
+    print(f"{s['name']}: {s['grade']}")
+
+# Lambda in sorted with multiple criteria
+data = [("Alice", 25), ("Bob", 20), ("Carol", 25), ("Dave", 20)]
+# Sort by age, then by name within same age
+sorted_data = sorted(data, key=lambda x: (x[1], x[0]))
+print(sorted_data)
+
+# When lambda hurts readability — prefer def
+# BAD:
+transform = lambda x: x ** 2 + 2 * x + 1
+
+# BETTER:
+def transform_v2(x):
+    """Compute x^2 + 2x + 1 (i.e., (x+1)^2)."""
+    return x ** 2 + 2 * x + 1
+`} title="Lambda expressions — good and bad uses" />
+
+## Modules: Organizing Code
+
+A module is simply a Python file. When you write `import math`, Python finds `math.py` in its search path (`sys.path`), executes it, and binds the resulting module object to the name `math` in your current namespace.
+
+```python
+import math                    # import the whole module
+from math import sqrt, pi      # import specific names
+from math import sqrt as sq    # alias to avoid name conflicts
+import numpy as np             # conventional alias
+```
+
+### The `__name__ == "__main__"` Guard
+
+When Python runs a file directly, it sets `__name__` to `"__main__"`. When a file is imported as a module, `__name__` is set to the module's name. The guard lets you write code that only runs when the file is executed directly, not when imported.
+
+<PythonPlayground code={String.raw`# Simulating what a module structure looks like at runtime
+import math
+import random
+import sys
+
+print(f"math module: {math}")
+print(f"pi = {math.pi:.10f}")
+print(f"e  = {math.e:.10f}")
+
+# Some useful math functions
+print(math.sqrt(2))
+print(math.log(math.e))    # natural log
+print(math.log10(1000))    # log base 10
+print(math.factorial(10))
+
+# random module
+random.seed(42)  # reproducible
+sample = [random.randint(1, 100) for _ in range(5)]
+print(f"Random sample: {sample}")
+print(f"Choice: {random.choice(sample)}")
+shuffled = sample[:]
+random.shuffle(shuffled)
+print(f"Shuffled: {shuffled}")
+
+# Check __name__ (in this playground it won't be __main__,
+# but this is what the guard looks like)
+print(f"__name__ = {__name__!r}")
+`} title="Modules and the standard library" />
+
+## The Standard Library Highlights
+
+Python's standard library is enormous. Here are the modules you will use constantly:
+
+<PythonPlayground code={String.raw`from collections import Counter, defaultdict, deque
+import itertools
+import datetime
+
+# --- collections.Counter ---
+words = "the quick brown fox jumps over the lazy dog the fox".split()
+freq = Counter(words)
+print("Word frequencies:", freq)
+print("Top 3:", freq.most_common(3))
+
+# --- collections.defaultdict ---
+# Never get a KeyError for missing keys
+groups = defaultdict(list)
+data = [("fruit", "apple"), ("veg", "carrot"), ("fruit", "banana"), ("veg", "broccoli")]
+for category, item in data:
+    groups[category].append(item)
+print(dict(groups))
+
+# --- collections.deque ---
+# O(1) append and pop from both ends (list is O(n) for left operations)
+queue = deque([1, 2, 3])
+queue.appendleft(0)   # O(1) — list.insert(0, x) would be O(n)
+queue.append(4)
+print(list(queue))
+queue.popleft()       # O(1) — list.pop(0) would be O(n)
+print(list(queue))
+
+# --- itertools ---
+# chain: iterate over multiple iterables as one
+combined = list(itertools.chain([1, 2], [3, 4], [5]))
+print("chain:", combined)
+
+# islice: lazy slice (no copy)
+first_five = list(itertools.islice(range(1000000), 5))
+print("islice:", first_five)
+
+# groupby: group consecutive elements
+data2 = [1, 1, 2, 2, 3, 1]
+groups2 = [(k, list(v)) for k, v in itertools.groupby(data2)]
+print("groupby:", groups2)
+
+# --- datetime ---
+now = datetime.datetime.now()
+print(f"Now: {now:%Y-%m-%d %H:%M:%S}")
+tomorrow = now + datetime.timedelta(days=1)
+print(f"Tomorrow: {tomorrow:%Y-%m-%d}")
+`} title="collections, itertools, datetime" />
+
+## PROJECT: Text Statistics Analyzer
+
+A real utility that computes several statistics about a piece of text — demonstrating functions, `collections.Counter`, string methods, and module-level organization.
+
+<PythonPlayground code={String.raw`from collections import Counter
+import re
+
+def word_count(text):
+    """Count total words in text."""
+    return len(text.split())
+
+def unique_words(text):
+    """Return the set of unique words (lowercased, punctuation stripped)."""
+    words = re.findall(r"[a-zA-Z']+", text.lower())
+    return set(words)
+
+def most_common_words(text, n=10):
+    """Return the n most common words as a list of (word, count) tuples."""
+    words = re.findall(r"[a-zA-Z']+", text.lower())
+    return Counter(words).most_common(n)
+
+def average_word_length(text):
+    """Return the average length of words in the text."""
+    words = re.findall(r"[a-zA-Z']+", text)
+    if not words:
+        return 0.0
+    return round(sum(len(w) for w in words) / len(words), 2)
+
+def sentence_count(text):
+    """Count sentences (splits on . ! ?)."""
+    sentences = re.split(r'[.!?]+', text.strip())
+    return len([s for s in sentences if s.strip()])
+
+def reading_time(text, wpm=250):
+    """Estimate reading time in minutes and seconds."""
+    total_words = word_count(text)
+    minutes = total_words / wpm
+    whole_minutes = int(minutes)
+    seconds = int((minutes - whole_minutes) * 60)
+    return whole_minutes, seconds
+
+def analyze(text):
+    """Run all statistics and return a dict."""
+    wc = word_count(text)
+    uw = unique_words(text)
+    mc = most_common_words(text, 10)
+    awl = average_word_length(text)
+    sc = sentence_count(text)
+    mins, secs = reading_time(text)
+    return {
+        "word_count": wc,
+        "unique_word_count": len(uw),
+        "lexical_diversity": round(len(uw) / wc, 3) if wc else 0,
+        "most_common": mc,
+        "avg_word_length": awl,
+        "sentence_count": sc,
+        "reading_time": f"{mins}m {secs}s",
+    }
+
+def print_report(stats):
+    """Pretty-print the analysis report."""
+    print("=" * 50)
+    print("TEXT STATISTICS REPORT")
+    print("=" * 50)
+    print(f"  Words            : {stats['word_count']}")
+    print(f"  Unique words     : {stats['unique_word_count']}")
+    print(f"  Lexical diversity: {stats['lexical_diversity']:.1%}")
+    print(f"  Avg word length  : {stats['avg_word_length']} chars")
+    print(f"  Sentences        : {stats['sentence_count']}")
+    print(f"  Reading time     : {stats['reading_time']} @ 250 wpm")
+    print()
+    print("Top 10 words:")
+    for word, count in stats['most_common']:
+        bar = '#' * count
+        print(f"  {word:<15} {count:>3}  {bar}")
+
+# --- Demo ---
+sample_text = """
+Python is a high-level, general-purpose programming language. Its design
+philosophy emphasizes code readability through significant indentation.
+Python is dynamically typed and garbage-collected. It supports multiple
+programming paradigms, including structured, object-oriented and functional
+programming. Python is often described as a batteries included language
+due to its comprehensive standard library. Python was created by Guido van
+Rossum and first released in 1991. Python consistently ranks as one of the
+most popular programming languages. Python is used in web development,
+scientific computing, data analysis, artificial intelligence, and more.
+"""
+
+stats = analyze(sample_text)
+print_report(stats)
+`} title="PROJECT: Text Statistics Analyzer" />
+
+## PROJECT: Utility Module Structure
+
+In a real project, you would organize reusable functions into a module. Here is what a utility module looks like — the structure and import patterns:
+
+<PythonPlayground code={String.raw`# --- textutils.py (what the module would contain) ---
+# We define everything in this playground to simulate importing it.
+
+def slugify(text):
+    """Convert text to URL-friendly slug: 'Hello World' -> 'hello-world'."""
+    import re
+    text = text.lower().strip()
+    text = re.sub(r'[^\w\s-]', '', text)
+    text = re.sub(r'[\s_]+', '-', text)
+    text = re.sub(r'-+', '-', text)
+    return text
+
+def truncate(text, max_length=100, ellipsis="..."):
+    """Truncate text at a word boundary."""
+    if len(text) <= max_length:
+        return text
+    truncated = text[:max_length - len(ellipsis)]
+    last_space = truncated.rfind(' ')
+    if last_space > 0:
+        truncated = truncated[:last_space]
+    return truncated + ellipsis
+
+def camel_to_snake(name):
+    """Convert 'CamelCase' to 'snake_case'."""
+    import re
+    s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1_\2', name)
+    return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+def snake_to_camel(name):
+    """Convert 'snake_case' to 'CamelCase'."""
+    return ''.join(word.capitalize() for word in name.split('_'))
+
+def pluralize(word, count):
+    """Naive English pluralization."""
+    if count == 1:
+        return word
+    if word.endswith(('s', 'sh', 'ch', 'x', 'z')):
+        return word + 'es'
+    if word.endswith('y') and not word[-2] in 'aeiou':
+        return word[:-1] + 'ies'
+    return word + 's'
+
+# --- Demonstrate usage ---
+print("slugify:")
+print(" ", slugify("Hello World! Python is Great."))
+print(" ", slugify("  My Blog Post #1  "))
+
+print("truncate:")
+print(" ", truncate("The quick brown fox jumps over the lazy dog", max_length=25))
+
+print("case conversions:")
+print(" ", camel_to_snake("HTTPSResponseCode"))
+print(" ", camel_to_snake("getUserByEmail"))
+print(" ", snake_to_camel("get_user_by_email"))
+
+print("pluralize:")
+for n in [0, 1, 2, 5]:
+    print(f"  {n} {pluralize('item', n)}")
+    print(f"  {n} {pluralize('box', n)}")
+    print(f"  {n} {pluralize('city', n)}")
+`} title="PROJECT: Utility module" />
+
+## Challenge
+
+Test your understanding with these exercises:
+
+1. **Memoization from scratch** — write a `memoize(func)` function that wraps any function and caches its results in a dict. Call `memoize(fibonacci)(35)` and compare the speed to the naive recursive version.
+
+2. **Partial application** — implement your own `partial(func, *partial_args)` function (then compare to `functools.partial`). Use it to create `double` and `triple` from a `multiply(a, b)` function.
+
+3. **Scope puzzle** — predict what this prints before running it:
+```python
+x = 1
+def f():
+    x = 2
+    def g():
+        print(x)
+    return g
+f()()
+```
+
+4. **Text analyzer extension** — add a `flesch_reading_ease` score to the Text Statistics Analyzer. The formula is:
+```
+206.835 - 1.015 * (words/sentences) - 84.6 * (syllables/words)
+```
+Estimate syllable count by counting vowel groups per word.
+
+5. **Module design** — design a `validators` module with functions: `is_email`, `is_url`, `is_phone_number`, `is_strong_password`. Each returns `True`/`False`. Add a `validate(value, *validator_fns)` function that runs all validators and returns a list of failures.
+
+## Key Takeaways
+
+- Functions are objects — storing, passing, and returning them unlocks powerful patterns
+- The LEGB rule governs every name lookup; understanding it eliminates mysterious bugs
+- Never use mutable default arguments — use `None` and create inside the function
+- `*args` and `**kwargs` make APIs flexible; keyword-only parameters make them safe
+- Closures capture variables from enclosing scope — they are the foundation of decorators and factory functions
+- Lambda is for short, throwaway key functions — reach for `def` otherwise
+- The `__name__ == "__main__"` guard separates executable scripts from importable modules
+- `collections.Counter`, `collections.defaultdict`, and `itertools` solve 90% of common iteration problems elegantly
