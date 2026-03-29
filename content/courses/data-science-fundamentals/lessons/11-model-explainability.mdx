@@ -1,0 +1,307 @@
+---
+title: "Model Explainability — SHAP, LIME & Interpretable ML"
+description: "Understand why your model makes each prediction using Shapley values, LIME, partial dependence plots, and ICE curves. Covers global and local explanations, regulatory context, bias detection, and a complete XGBoost + SHAP workflow on a synthetic loan dataset."
+duration: 24
+order: 11
+---
+
+A model that produces predictions you cannot explain is a model you cannot trust, debug, or defend. Regulators increasingly require explanations — GDPR Article 22 grants individuals the right to an explanation of automated decisions; the Equal Credit Opportunity Act (ECOA) requires adverse action notices that specify the reasons for credit denials. Beyond compliance, explainability is a debugging tool: a SHAP waterfall plot showing that a loan rejection was driven by a feature you know to be a proxy for protected attributes tells you something is wrong before deployment.
+
+## Why Explainability Matters
+
+Four concrete reasons to invest in explainability:
+
+1. **Regulatory compliance**: GDPR Art. 22 requires human oversight of consequential automated decisions. ECOA requires specific, feature-level explanations for credit decisions.
+2. **Debugging**: A model predicting house prices that attributes large positive SHAP values to "number of photos in listing" reveals a confound, not a causal feature.
+3. **Stakeholder trust**: A loan officer who understands that the top reasons for a rejection were high DTI ratio and short credit history is far more likely to accept (or challenge) the model's recommendation than one who sees only a score.
+4. **Bias detection**: SHAP values can reveal that protected attributes — or their proxies — are driving predictions in discriminatory ways.
+
+### Global vs Local Explanations
+
+| Type | Question answered | Example method |
+|------|------------------|----------------|
+| Global | Which features matter most across all predictions? | Feature importance, SHAP summary plot |
+| Local | Why did this specific prediction get this value? | SHAP waterfall, LIME coefficients |
+
+---
+
+## SHAP: Shapley Values from Game Theory
+
+SHAP (SHapley Additive exPlanations) computes each feature's contribution to a specific prediction relative to a baseline (the expected model output). The Shapley value of feature j for prediction i is its average marginal contribution across all possible orderings of features.
+
+Formally: `φⱼ = Σ [|S|!(|F|-|S|-1)!/|F|!] × [v(S∪{j}) - v(S)]` summed over all subsets S of features that do not include j.
+
+This guarantees four desirable properties: efficiency (contributions sum to the prediction minus baseline), symmetry, dummy (features with no effect get zero), and additivity.
+
+### TreeSHAP vs KernelSHAP
+
+- **TreeSHAP**: exploits the tree structure to compute exact Shapley values in O(TL²D) time (T trees, L leaves, D max depth). Extremely fast — milliseconds per prediction.
+- **KernelSHAP**: model-agnostic. Approximates Shapley values by sampling coalitions and fitting a weighted linear model. Slower (seconds per prediction), but works for any model.
+
+---
+
+## Complete Workflow: XGBoost + SHAP on Synthetic Loan Data
+
+```python
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score, classification_report
+import xgboost as xgb
+import shap
+
+rng = np.random.default_rng(42)
+n = 3000
+
+# Synthetic loan application dataset
+df = pd.DataFrame({
+    "age":               rng.integers(18, 75, n),
+    "income_annual":     rng.exponential(60_000, n) + 20_000,
+    "loan_amount":       rng.exponential(15_000, n) + 5_000,
+    "credit_score":      np.clip(rng.normal(680, 80, n), 300, 850),
+    "dti_ratio":         np.clip(rng.normal(0.35, 0.12, n), 0.05, 0.95),
+    "months_employed":   np.clip(rng.exponential(36, n), 0, 240),
+    "num_delinquencies": rng.integers(0, 6, n),
+    "loan_purpose":      rng.choice(["home", "auto", "personal", "education"], n),
+    "employment_type":   rng.choice(["salaried", "self-employed", "contract"], n),
+    # Sensitive attribute — should NOT drive predictions
+    "zip_income_index":  rng.normal(0, 1, n),   # proxy for neighbourhood income / race
+})
+
+# Construct target: default probability driven primarily by credit score and DTI
+log_odds = (
+    -2.0
+    + 0.015  * (700 - df["credit_score"])       # higher score = less default
+    + 3.0    * df["dti_ratio"]                  # higher DTI = more default
+    + 0.005  * df["num_delinquencies"]
+    - 0.001  * df["months_employed"]
+    + 0.4    * df["zip_income_index"]            # introduced bias: zip ~ race
+)
+prob_default = 1 / (1 + np.exp(-log_odds))
+df["defaulted"] = rng.binomial(1, prob_default)
+
+print(f"Default rate: {df['defaulted'].mean():.2%}")
+
+# Encode categoricals for XGBoost
+df_enc = pd.get_dummies(df, columns=["loan_purpose", "employment_type"], drop_first=False)
+feature_cols = [c for c in df_enc.columns if c != "defaulted"]
+X = df_enc[feature_cols]
+y = df_enc["defaulted"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.25, stratify=y, random_state=42
+)
+
+model = xgb.XGBClassifier(
+    n_estimators=300,
+    max_depth=4,
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    min_child_weight=5,
+    tree_method="hist",
+    eval_metric="auc",
+    random_state=42,
+)
+model.fit(X_train, y_train,
+          eval_set=[(X_test, y_test)],
+          early_stopping_rounds=30,
+          verbose=False)
+
+y_prob = model.predict_proba(X_test)[:, 1]
+print(f"Test ROC-AUC: {roc_auc_score(y_test, y_prob):.4f}")
+```
+
+---
+
+## SHAP Global Summary Plot (Beeswarm)
+
+```python
+# Create the SHAP explainer (TreeSHAP for XGBoost)
+explainer    = shap.TreeExplainer(model)
+shap_values  = explainer(X_test)     # returns a shap.Explanation object
+
+# Summary (beeswarm) plot: global importance + direction
+# Each dot = one sample; x-axis = SHAP value; color = feature value
+# Features sorted by mean |SHAP|: most important at top
+shap.summary_plot(shap_values, X_test, plot_type="beeswarm",
+                   max_display=15, show=True)
+
+# Compact bar chart showing mean(|SHAP|) per feature
+shap.summary_plot(shap_values, X_test, plot_type="bar",
+                   max_display=15, show=True)
+```
+
+---
+
+## SHAP Local Explanations
+
+```python
+# Waterfall plot: explains a single rejected loan application
+# Shows how each feature pushes the prediction above or below the baseline
+rejected_idx  = X_test.index[y_prob > 0.7][0]
+rejected_pos  = X_test.index.get_loc(rejected_idx)
+
+shap.waterfall_plot(shap_values[rejected_pos], max_display=12, show=True)
+
+# Force plot: alternative visual — features push left (lower risk) or right (higher risk)
+shap.force_plot(
+    explainer.expected_value,
+    shap_values.values[rejected_pos],
+    X_test.iloc[rejected_pos],
+    matplotlib=True,
+    show=True,
+)
+
+# Dependence plot: how one feature's SHAP value varies with its raw value
+# Color shows the most interacting feature (auto-selected)
+shap.dependence_plot("dti_ratio", shap_values.values, X_test,
+                      interaction_index="auto", show=True)
+shap.dependence_plot("credit_score", shap_values.values, X_test,
+                      interaction_index="dti_ratio", show=True)
+```
+
+---
+
+## LIME: Local Surrogate Model
+
+LIME perturbs the neighbourhood around a single prediction and fits a simple linear model to those perturbed points, weighted by their proximity to the original sample.
+
+```python
+import lime
+import lime.lime_tabular
+import numpy as np
+
+# LIME requires a prediction function that takes numpy arrays
+predict_fn = lambda x: model.predict_proba(
+    pd.DataFrame(x, columns=X_train.columns)
+)
+
+lime_explainer = lime.lime_tabular.LimeTabularExplainer(
+    training_data=X_train.values,
+    feature_names=X_train.columns.tolist(),
+    class_names=["no_default", "default"],
+    mode="classification",
+    discretize_continuous=True,
+    random_state=42,
+)
+
+# Explain the same rejected application
+lime_exp = lime_explainer.explain_instance(
+    data_row=X_test.iloc[rejected_pos].values,
+    predict_fn=predict_fn,
+    num_features=10,
+    num_samples=5000,
+)
+lime_exp.show_in_notebook(show_table=True)
+
+# Get the linear coefficients as a dict
+lime_weights = dict(lime_exp.as_list())
+print("LIME top features:")
+for feat, weight in sorted(lime_weights.items(), key=lambda x: abs(x[1]), reverse=True):
+    direction = "↑ default" if weight > 0 else "↓ default"
+    print(f"  {feat:40s} {weight:+.4f}  ({direction})")
+```
+
+LIME is less theoretically grounded than SHAP (no consistency guarantee) but is completely model-agnostic and works for images and text as well as tabular data.
+
+---
+
+## Partial Dependence Plots and ICE Plots
+
+```python
+from sklearn.inspection import PartialDependenceDisplay
+import matplotlib.pyplot as plt
+
+# PDP: marginalises all other features, shows average effect of one feature
+fig, ax = plt.subplots(figsize=(10, 4))
+PartialDependenceDisplay.from_estimator(
+    model, X_test,
+    features=["credit_score", "dti_ratio"],
+    kind="average",          # "average" = PDP
+    ax=ax,
+)
+ax.set_title("Partial Dependence: credit_score and dti_ratio")
+plt.tight_layout()
+plt.show()
+
+# ICE (Individual Conditional Expectation): one line per sample
+# Reveals heterogeneous effects hidden by the average PDP line
+fig, ax = plt.subplots(figsize=(10, 4))
+PartialDependenceDisplay.from_estimator(
+    model, X_test,
+    features=["credit_score"],
+    kind="both",             # "both" = ICE lines + centered PDP
+    subsample=200,           # plot 200 random samples for readability
+    ax=ax,
+)
+ax.set_title("ICE + PDP: credit_score (heterogeneous effects visible)")
+plt.tight_layout()
+plt.show()
+```
+
+ICE plots reveal when the average PDP line hides heterogeneous subgroup effects — if some ICE lines slope upward while others slope downward, the average PDP is misleading.
+
+---
+
+## Permutation Importance with eli5
+
+```python
+# sklearn's permutation_importance is covered in lesson 9.
+# Here we show the eli5 interface, which provides richer output.
+import eli5
+from eli5.sklearn import PermutationImportance
+
+perm = PermutationImportance(model, scoring="roc_auc", n_iter=10, random_state=42)
+perm.fit(X_test, y_test)
+eli5.show_weights(perm, feature_names=X_test.columns.tolist(), top=15)
+```
+
+---
+
+## Detecting Demographic Bias with SHAP
+
+```python
+import pandas as pd
+import numpy as np
+
+# Detect whether zip_income_index (race proxy) drives predictions unfairly
+zip_shap = shap_values[:, X_test.columns.get_loc("zip_income_index")].values
+
+# Compute mean |SHAP| for zip_income_index vs top legitimate features
+feature_shap_means = pd.Series(
+    np.abs(shap_values.values).mean(axis=0),
+    index=X_test.columns
+).sort_values(ascending=False)
+print("Feature SHAP importance (mean |SHAP|):")
+print(feature_shap_means.head(10))
+
+# If zip_income_index appears in the top features, the model may be biased.
+zip_rank = feature_shap_means.index.get_loc("zip_income_index")
+print(f"\nzip_income_index rank: {zip_rank + 1} / {len(feature_shap_means)}")
+
+# Slice analysis: compare average predicted probability across zip_income_index quartiles
+X_test_copy = X_test.copy()
+X_test_copy["y_prob"] = y_prob
+X_test_copy["zip_quartile"] = pd.qcut(X_test_copy["zip_income_index"], q=4,
+                                        labels=["Q1 (low)", "Q2", "Q3", "Q4 (high)"])
+bias_table = X_test_copy.groupby("zip_quartile")["y_prob"].mean()
+print("\nMean predicted default prob by zip income quartile:")
+print(bias_table)
+
+# Large variation across quartiles driven by zip_income_index → algorithmic bias
+# Fix: remove zip_income_index from features, or use fairness-aware regularisation
+```
+
+---
+
+## Key Takeaways
+
+- Shapley values are the only feature attribution method that satisfies all four desirable game-theory properties (efficiency, symmetry, dummy, additivity); they should be the default for explaining tree models.
+- TreeSHAP computes exact Shapley values for tree-based models in milliseconds; KernelSHAP is model-agnostic but slower — use KernelSHAP only when TreeSHAP is not available.
+- The SHAP beeswarm summary plot gives global importance and feature effect direction simultaneously; the waterfall plot explains a single prediction in terms of contributions from each feature.
+- Partial dependence plots show average marginal effects; ICE plots reveal heterogeneous subgroup effects that the average hides — always look at both together.
+- LIME is fast and model-agnostic but its explanations can be unstable across repeated runs and are not theoretically consistent; prefer SHAP when you have tree or linear models.
+- Detecting bias requires examining SHAP values for protected attributes and their proxies, and comparing predicted scores across demographic slices — not just overall accuracy.
+- Explainability is not a post-hoc add-on: the feature engineering and data collection decisions you make upstream determine whether any explanation will be meaningful or misleading.
+- Regulatory compliance (GDPR, ECOA) requires feature-level explanations for individual decisions — build SHAP infrastructure into your serving pipeline so explanations are available at inference time, not just during model development.

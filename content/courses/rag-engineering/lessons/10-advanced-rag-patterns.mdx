@@ -1,0 +1,356 @@
+---
+title: "Advanced RAG Patterns — Agentic, Corrective & Self-RAG"
+description: "Go beyond single-pass retrieve-and-generate. Implement agentic RAG with multi-hop retrieval, Corrective RAG with quality grading, Self-RAG with reflection tokens, RAG Fusion with multi-retriever merging, Graph RAG for entity-rich corpora, and conversational RAG."
+duration: 26
+order: 10
+---
+
+## Beyond Single-Pass RAG
+
+Standard RAG retrieves once, concatenates the results, and generates an answer. This works well for self-contained factual questions with a single relevant document. It breaks down for:
+
+- **Multi-hop questions**: "What is the CEO of the company that acquired DeepMind?" — requires finding DeepMind's acquirer first, then finding that company's CEO.
+- **Low-quality retrieval**: the retrieved context doesn't contain the answer; the LLM hallucinates rather than admitting ignorance.
+- **Knowledge graph questions**: "How is concept A related to concept B?" — requires traversing a relationship graph, not just finding nearest neighbours.
+
+Advanced RAG patterns address these failure modes by adding reasoning, iteration, and structure to the retrieval process.
+
+## Agentic RAG — Retrieval as a Tool
+
+In agentic RAG, retrieval is one tool in an agent's toolbox. The agent decides when to retrieve, what to search for, and whether to retrieve again based on what it has found. This enables multi-hop reasoning.
+
+```python
+import json
+from groq import Groq
+
+client = Groq()
+
+AGENT_SYSTEM_PROMPT = """You are a research assistant with access to a knowledge base retrieval tool.
+
+Available tools:
+- search(query: str) -> list of relevant document excerpts
+
+When answering questions:
+1. Search the knowledge base for relevant information
+2. Read the results and decide if you have enough to answer
+3. If not, search again with a more specific query
+4. Maximum 5 searches per question
+5. If you cannot find the answer after searching, say so — do not guess
+
+Respond in JSON:
+{
+  "action": "search" | "answer",
+  "query": "<search query if action=search>",
+  "answer": "<final answer if action=answer>",
+  "reasoning": "<one sentence explaining your decision>"
+}"""
+
+
+def run_agentic_rag(
+    user_question: str,
+    retriever_fn,
+    max_steps: int = 5,
+) -> dict:
+    """
+    Agentic RAG loop: the LLM decides when to retrieve and what to search for.
+    Returns the final answer and the full trace of retrieval steps.
+    """
+    messages = [
+        {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+        {"role": "user", "content": user_question},
+    ]
+    trace = []
+    step = 0
+
+    while step < max_steps:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.1,
+        )
+        action = json.loads(response.choices[0].message.content)
+        trace.append(action)
+
+        if action["action"] == "answer":
+            return {"answer": action["answer"], "trace": trace, "steps": step + 1}
+
+        # Execute the search
+        search_query = action["query"]
+        results = retriever_fn(search_query, k=3)
+        context_text = "\n\n".join(r["text"] for r in results)
+
+        # Add search results to the conversation
+        messages.append({"role": "assistant", "content": json.dumps(action)})
+        messages.append({
+            "role": "user",
+            "content": f"Search results for '{search_query}':\n\n{context_text}\n\nContinue your research or provide a final answer.",
+        })
+        step += 1
+
+    return {"answer": "Could not find a confident answer within the step limit.", "trace": trace, "steps": step}
+```
+
+## Corrective RAG (CRAG)
+
+Corrective RAG adds a quality-grading step after retrieval. If the retrieved context is low quality, the system falls back to a web search or broader retrieval rather than generating a hallucinated answer.
+
+```python
+GRADE_PROMPT = """Grade the relevance of a retrieved document to a user question.
+
+QUESTION: {question}
+
+RETRIEVED DOCUMENT:
+{document}
+
+Output a JSON object:
+{{
+  "grade": "RELEVANT" | "AMBIGUOUS" | "IRRELEVANT",
+  "confidence": <float 0.0-1.0>,
+  "reasoning": "<one sentence>"
+}}
+
+- RELEVANT: document clearly contains information that helps answer the question
+- AMBIGUOUS: document is somewhat related but may not fully answer the question
+- IRRELEVANT: document has little or nothing to do with the question"""
+
+
+def grade_document(question: str, document: str) -> dict:
+    """Grade a single retrieved document's relevance."""
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{
+            "role": "user",
+            "content": GRADE_PROMPT.format(question=question, document=document[:1500]),
+        }],
+        response_format={"type": "json_object"},
+        temperature=0.0,
+    )
+    return json.loads(response.choices[0].message.content)
+
+
+def web_search_fallback(query: str) -> list[dict]:
+    """Placeholder for a real web search tool (Tavily, SerpAPI, etc.)."""
+    # In production: call Tavily or SerpAPI here
+    return [{"text": f"[Web search result for: {query}]", "source": "web"}]
+
+
+def corrective_rag(
+    question: str,
+    retriever_fn,
+    generator_fn,
+    relevance_threshold: float = 0.6,
+) -> dict:
+    """
+    Corrective RAG: retrieve → grade → correct if needed → generate.
+
+    Pipeline:
+    1. Retrieve top-k documents
+    2. Grade each document for relevance
+    3. If most are IRRELEVANT → fall back to web search
+    4. If AMBIGUOUS → combine local + web results
+    5. If RELEVANT → proceed with local results
+    6. Generate answer from final context
+    """
+    # Step 1: Retrieve
+    candidates = retriever_fn(question, k=5)
+
+    # Step 2: Grade each candidate
+    grades = [grade_document(question, c["text"]) for c in candidates]
+    relevant = [c for c, g in zip(candidates, grades) if g["grade"] == "RELEVANT"]
+    ambiguous = [c for c, g in zip(candidates, grades) if g["grade"] == "AMBIGUOUS"]
+
+    # Step 3: Decide on correction strategy
+    if len(relevant) >= 2:
+        # Enough relevant docs — use local results only
+        final_context = relevant
+        strategy = "local_only"
+    elif len(relevant) + len(ambiguous) >= 2:
+        # Some relevant/ambiguous — supplement with web search
+        web_results = web_search_fallback(question)
+        final_context = relevant + ambiguous + web_results
+        strategy = "local_plus_web"
+    else:
+        # Mostly irrelevant — rely on web search
+        final_context = web_search_fallback(question)
+        strategy = "web_only"
+
+    # Step 4: Generate answer
+    context_text = "\n\n".join(c["text"] for c in final_context[:5])
+    answer = generator_fn(question, context_text)
+
+    return {"answer": answer, "strategy": strategy, "grades": grades}
+```
+
+## Self-RAG — Reflective Generation
+
+Self-RAG trains the LLM to emit special reflection tokens during generation:
+- `[Retrieve]`: the model decides it needs retrieval
+- `[ISREL]` / `[ISNOTREL]`: is the retrieved passage relevant?
+- `[ISSUP]` / `[ISNOTSUP]`: is the generated statement supported by the passage?
+- `[ISUSE]` / `[ISNOTUSE]`: is the response useful to the query?
+
+Without a Self-RAG-trained model, you can simulate the reflection behaviour by prompting a standard LLM to decide whether retrieval is needed before generating:
+
+```python
+RETRIEVAL_DECISION_PROMPT = """Given a user question, decide whether you need to retrieve information from a knowledge base to answer it accurately.
+
+- Choose "retrieve" if the question requires specific, up-to-date, or domain-specific facts
+- Choose "generate" if the question can be answered reliably from general knowledge
+
+Question: {question}
+
+Output JSON: {{"decision": "retrieve" | "generate", "reasoning": "<one sentence>"}}"""
+
+
+def self_rag_decide(question: str) -> dict:
+    """Decide whether retrieval is needed for this question."""
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": RETRIEVAL_DECISION_PROMPT.format(question=question)}],
+        response_format={"type": "json_object"},
+        temperature=0.0,
+    )
+    return json.loads(response.choices[0].message.content)
+```
+
+## RAG Fusion — Multiple Retrievers
+
+RAG Fusion sends the query to multiple different retrievers (dense model A, dense model B, BM25) and merges with Reciprocal Rank Fusion. Each retriever captures different relevance signals.
+
+```python
+import asyncio
+
+
+async def rag_fusion(
+    query: str,
+    dense_retriever_a,    # e.g. BGE-large
+    dense_retriever_b,    # e.g. E5-large
+    bm25_retriever,
+    embed_fn_a,
+    embed_fn_b,
+    k: int = 10,
+) -> list[dict]:
+    """
+    RAG Fusion: retrieve from three sources in parallel, merge with RRF.
+    """
+    # Run all three retrievers concurrently
+    vec_a = embed_fn_a(query)
+    vec_b = embed_fn_b(query)
+
+    results_a, results_b, results_bm25 = await asyncio.gather(
+        asyncio.to_thread(dense_retriever_a, vec_a, k),
+        asyncio.to_thread(dense_retriever_b, vec_b, k),
+        asyncio.to_thread(bm25_retriever, query, k),
+    )
+
+    # Build ranked lists for RRF
+    ids_a = [r["id"] for r in results_a]
+    ids_b = [r["id"] for r in results_b]
+    ids_bm25 = [r["id"] for r in results_bm25]
+
+    # RRF merge
+    scores: dict[str, float] = {}
+    for ranked_list in [ids_a, ids_b, ids_bm25]:
+        for rank, doc_id in enumerate(ranked_list, start=1):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (60 + rank)
+
+    merged_ids = sorted(scores, key=lambda x: scores[x], reverse=True)[:k]
+
+    # Reconstruct result objects
+    result_map = {r["id"]: r for r in results_a + results_b + results_bm25}
+    return [result_map[doc_id] for doc_id in merged_ids if doc_id in result_map]
+```
+
+## Graph RAG
+
+Graph RAG (Microsoft Research) extracts entities and relationships from the corpus, builds a knowledge graph, and uses community detection to create hierarchical summaries. This enables answering high-level questions ("What are the main themes in this corpus?") that vector search cannot answer because no single chunk covers the full scope.
+
+```python
+# Conceptual implementation — production would use networkx + a community detection algorithm
+
+def extract_entities_and_relations(chunk_text: str) -> dict:
+    """Extract a simple entity-relation graph from a text chunk."""
+    EXTRACT_PROMPT = """Extract entities and relationships from the text.
+Return JSON: {{"entities": [{"name": str, "type": str}], "relations": [{"source": str, "relation": str, "target": str}]}}
+
+TEXT: {text}"""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": EXTRACT_PROMPT.format(text=chunk_text[:1000])}],
+        response_format={"type": "json_object"},
+        temperature=0.0,
+    )
+    return json.loads(response.choices[0].message.content)
+
+
+def build_community_summary(community_nodes: list[dict]) -> str:
+    """Summarise a community of related entities for high-level queries."""
+    node_descriptions = "\n".join(f"- {n['name']} ({n['type']})" for n in community_nodes)
+    SUMMARY_PROMPT = f"Summarise the following group of related entities in 2-3 sentences:\n{node_descriptions}"
+
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": SUMMARY_PROMPT}],
+        temperature=0.3,
+        max_tokens=150,
+    )
+    return response.choices[0].message.content.strip()
+```
+
+## Conversational RAG
+
+In a multi-turn conversation, later questions often reference earlier context ("what about its performance?" after discussing a product). Conversational RAG condenses the chat history into a standalone question before retrieval.
+
+```python
+CONDENSE_PROMPT = """Given the following conversation history and a follow-up question,
+rewrite the follow-up question as a standalone question that includes all necessary context.
+
+CONVERSATION HISTORY:
+{history}
+
+FOLLOW-UP QUESTION: {question}
+
+Standalone question:"""
+
+
+def condense_question(history: list[dict], follow_up: str) -> str:
+    """Convert a follow-up question in context to a self-contained query."""
+    history_text = "\n".join(
+        f"{m['role'].upper()}: {m['content']}" for m in history[-6:]  # last 3 turns
+    )
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{
+            "role": "user",
+            "content": CONDENSE_PROMPT.format(history=history_text, question=follow_up),
+        }],
+        temperature=0.0,
+        max_tokens=150,
+    )
+    return response.choices[0].message.content.strip()
+```
+
+## Choosing the Right Pattern
+
+| Pattern | When to Use | Added Latency | Added Cost |
+|---------|-------------|---------------|------------|
+| Standard RAG | Simple factual queries, single-hop | none | none |
+| Agentic RAG | Multi-hop, exploratory queries | 2–5× | 3–8× |
+| CRAG | Low retrieval quality corpus, high accuracy requirement | +1 LLM call | +20% |
+| Self-RAG | Mixed knowledge (some answerable without retrieval) | +1 LLM call | +10% |
+| RAG Fusion | Multiple content types, high recall requirement | +2–3× retrieval | +50% |
+| Graph RAG | Entity-rich corpora, thematic questions | build time heavy | moderate |
+| Conversational RAG | Multi-turn chatbots | +1 LLM call | +10% |
+
+## Key Takeaways
+
+- Single-pass RAG fails for multi-hop questions; agentic RAG gives the LLM control over when and what to retrieve, enabling iterative reasoning.
+- Corrective RAG grades retrieval quality before generation and falls back to web search when quality is low — eliminating the "bad context → hallucination" failure mode.
+- Self-RAG introduces reflection tokens (ISREL, ISSUP, ISUSE) to make retrieval and faithfulness decisions part of the generation process.
+- RAG Fusion runs multiple retrievers in parallel and merges with RRF, capturing complementary relevance signals from dense and sparse models.
+- Graph RAG is the right tool for thematic or cross-entity questions in entity-rich corpora; vector search alone cannot answer "what are the main themes?".
+- Conversational RAG requires condensing the chat history into a standalone query — skipping this step causes retrieval failures on follow-up questions.
+- Every advanced pattern adds latency and cost; choose the simplest pattern that meets your accuracy requirements.
+- Measure each pattern against your golden set before deploying — more complexity does not always mean better results on your specific domain.

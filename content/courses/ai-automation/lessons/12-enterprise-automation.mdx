@@ -1,0 +1,399 @@
+---
+title: "Enterprise AI Automation — Patterns, Governance & ROI"
+description: "Deploy AI automation that survives enterprise scrutiny: ROI calculation frameworks, automation maturity levels, governance with agent inventories and RBAC, vendor lock-in abstractions, DLP output scanning, integration patterns, and production success metrics."
+duration: 26
+order: 12
+---
+
+## Enterprise Use Cases and ROI
+
+Before investing in AI automation infrastructure, quantify the expected return. The four highest-ROI enterprise automation patterns are:
+
+**Document processing** (contracts, invoices, compliance reports): a knowledge worker spends 2 hours per document reviewing, extracting key fields, and classifying. At 100 documents per day, that is 200 labour hours per day. An AI automation pipeline processing each document in under 30 seconds with 95% accuracy saves approximately 190 hours per day.
+
+**Customer support tier-1 deflection**: an LLM trained on your support docs can deflect 60% of tier-1 tickets (password resets, how-to questions, status checks). If tier-1 support costs $12 per ticket and you receive 500 tickets per day, deflecting 300 per day saves $3,600 per day.
+
+**Code review assistance**: an agent that checks PRs for common issues (missing error handling, hardcoded secrets, SQL injection patterns) before human review reduces reviewer time by 30–40% on routine checks.
+
+**Compliance checking**: running compliance checks manually against 50-page regulatory documents takes 4–8 hours per review. An LLM can check the same document against a rubric in under 2 minutes.
+
+```python
+def calculate_roi(
+    time_saved_hours_per_month: float,
+    hourly_rate_usd: float,
+    agent_cost_per_month_usd: float,
+) -> dict:
+    """
+    Calculate the monthly ROI of an AI automation deployment.
+
+    ROI = (monthly_savings - monthly_cost) / monthly_cost × 100%
+    """
+    monthly_labour_saving = time_saved_hours_per_month * hourly_rate_usd
+    net_benefit = monthly_labour_saving - agent_cost_per_month_usd
+    roi_pct = (net_benefit / agent_cost_per_month_usd) * 100 if agent_cost_per_month_usd > 0 else float("inf")
+    payback_months = agent_cost_per_month_usd / monthly_labour_saving if monthly_labour_saving > 0 else float("inf")
+
+    return {
+        "monthly_labour_saving_usd": round(monthly_labour_saving, 2),
+        "agent_cost_usd": agent_cost_per_month_usd,
+        "net_benefit_usd": round(net_benefit, 2),
+        "roi_pct": round(roi_pct, 1),
+        "payback_months": round(payback_months, 2),
+        "positive_roi": net_benefit > 0,
+    }
+
+
+# Example: document processing automation
+print(calculate_roi(
+    time_saved_hours_per_month=190 * 22,   # 190 h/day × 22 working days
+    hourly_rate_usd=45,                    # $45/hr for a knowledge worker
+    agent_cost_per_month_usd=2000,         # LLM API + hosting
+))
+# → monthly_labour_saving: $188,100, roi_pct: 9305%
+```
+
+## Automation Maturity Levels
+
+Organisations should not jump directly from Level 0 to Level 4. Each level builds the trust, monitoring, and fallback infrastructure needed for the next:
+
+| Level | Name | Description | Human Role |
+|-------|------|-------------|------------|
+| 0 | Manual | No automation | All work done by humans |
+| 1 | Assisted | Agent drafts, human finalises | Human approves every output |
+| 2 | Supervised | Agent acts, human reviews sample | Human reviews 20% of outputs |
+| 3 | Monitored | Agent autonomous, human reviews anomalies | Human reviews alerts and outliers |
+| 4 | Autonomous | Agent acts with audit trail | Human reviews audit summaries |
+
+Progress between levels should require a demonstrated override rate below threshold for a defined period:
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class MaturityGate:
+    """Criteria that must be met to advance to the next maturity level."""
+    level_name: str
+    required_override_rate_below: float
+    min_sample_days: int
+    min_total_tasks: int
+
+
+MATURITY_GATES = [
+    MaturityGate("level_1_to_2", required_override_rate_below=0.10, min_sample_days=14, min_total_tasks=200),
+    MaturityGate("level_2_to_3", required_override_rate_below=0.05, min_sample_days=30, min_total_tasks=1000),
+    MaturityGate("level_3_to_4", required_override_rate_below=0.02, min_sample_days=60, min_total_tasks=5000),
+]
+
+
+def check_maturity_gate(
+    gate: MaturityGate,
+    actual_override_rate: float,
+    days_observed: int,
+    total_tasks: int,
+) -> dict:
+    """Check whether a maturity gate has been passed."""
+    passed = (
+        actual_override_rate < gate.required_override_rate_below
+        and days_observed >= gate.min_sample_days
+        and total_tasks >= gate.min_total_tasks
+    )
+    return {
+        "gate": gate.level_name,
+        "passed": passed,
+        "override_rate": actual_override_rate,
+        "days_observed": days_observed,
+        "requirements": {
+            "override_rate": f"< {gate.required_override_rate_below:.0%} ({'PASS' if actual_override_rate < gate.required_override_rate_below else 'FAIL'})",
+            "days": f">= {gate.min_sample_days} ({'PASS' if days_observed >= gate.min_sample_days else 'FAIL'})",
+            "tasks": f">= {gate.min_total_tasks} ({'PASS' if total_tasks >= gate.min_total_tasks else 'FAIL'})",
+        },
+    }
+```
+
+## Governance Framework
+
+### Agent Inventory
+
+Register every production agent in a central inventory. The inventory is the audit surface — you cannot govern agents you don't know exist.
+
+```python
+import sqlite3
+import datetime
+import json
+
+
+class AgentInventory:
+    """Central registry of all production agents."""
+
+    def __init__(self, db_path: str = "agent_inventory.db"):
+        self.db_path = db_path
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS agents (
+                    agent_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    owner_email TEXT NOT NULL,
+                    purpose TEXT NOT NULL,
+                    risk_level TEXT NOT NULL,
+                    tools TEXT NOT NULL,
+                    allowed_user_roles TEXT NOT NULL,
+                    environment TEXT DEFAULT 'production',
+                    registered_at TEXT NOT NULL,
+                    last_updated TEXT NOT NULL,
+                    active INTEGER DEFAULT 1
+                )
+            """)
+
+    def register(
+        self,
+        agent_id: str,
+        name: str,
+        owner_email: str,
+        purpose: str,
+        risk_level: str,
+        tools: list[str],
+        allowed_user_roles: list[str],
+        environment: str = "production",
+    ) -> None:
+        """Register a new agent. Raises if risk_level is unknown."""
+        valid_risk_levels = {"low", "medium", "high", "critical"}
+        if risk_level not in valid_risk_levels:
+            raise ValueError(f"risk_level must be one of {valid_risk_levels}")
+
+        now = datetime.datetime.utcnow().isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO agents
+                   (agent_id, name, owner_email, purpose, risk_level, tools,
+                    allowed_user_roles, environment, registered_at, last_updated)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (agent_id, name, owner_email, purpose, risk_level,
+                 json.dumps(tools), json.dumps(allowed_user_roles),
+                 environment, now, now),
+            )
+
+    def get_agent(self, agent_id: str) -> dict | None:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute("SELECT * FROM agents WHERE agent_id=?", (agent_id,)).fetchone()
+        if not row:
+            return None
+        cols = ["agent_id", "name", "owner_email", "purpose", "risk_level", "tools",
+                "allowed_user_roles", "environment", "registered_at", "last_updated", "active"]
+        d = dict(zip(cols, row))
+        d["tools"] = json.loads(d["tools"])
+        d["allowed_user_roles"] = json.loads(d["allowed_user_roles"])
+        return d
+```
+
+### RBAC — Who Can Trigger Which Agent
+
+```python
+def check_agent_access(
+    user_roles: list[str],
+    agent_id: str,
+    inventory: AgentInventory,
+) -> bool:
+    """
+    Check whether a user (identified by their roles) is allowed to run an agent.
+    Returns True if the user has at least one of the agent's allowed roles.
+    """
+    agent = inventory.get_agent(agent_id)
+    if not agent:
+        return False  # unknown agent — deny by default
+
+    allowed_roles = set(agent["allowed_user_roles"])
+    user_role_set = set(user_roles)
+    return bool(allowed_roles & user_role_set)
+```
+
+## Vendor Lock-In Mitigation
+
+Abstract all LLM calls behind an interface so that swapping providers requires no changes in agent logic:
+
+```python
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+
+@dataclass
+class LLMResponse:
+    content: str
+    input_tokens: int
+    output_tokens: int
+    model: str
+
+
+class LLMClient(ABC):
+    """Abstract interface for LLM providers. Swap providers by changing the implementation."""
+
+    @abstractmethod
+    def chat(self, messages: list[dict], max_tokens: int = 500, temperature: float = 0.3) -> LLMResponse:
+        pass
+
+
+class GroqClient(LLMClient):
+    def __init__(self, model: str = "llama-3.3-70b-versatile"):
+        from groq import Groq
+        self._client = Groq()
+        self._model = model
+
+    def chat(self, messages: list[dict], max_tokens: int = 500, temperature: float = 0.3) -> LLMResponse:
+        resp = self._client.chat.completions.create(
+            model=self._model, messages=messages, max_tokens=max_tokens, temperature=temperature,
+        )
+        return LLMResponse(
+            content=resp.choices[0].message.content,
+            input_tokens=resp.usage.prompt_tokens,
+            output_tokens=resp.usage.completion_tokens,
+            model=self._model,
+        )
+
+
+class OpenAIClient(LLMClient):
+    def __init__(self, model: str = "gpt-4o"):
+        from openai import OpenAI
+        self._client = OpenAI()
+        self._model = model
+
+    def chat(self, messages: list[dict], max_tokens: int = 500, temperature: float = 0.3) -> LLMResponse:
+        resp = self._client.chat.completions.create(
+            model=self._model, messages=messages, max_tokens=max_tokens, temperature=temperature,
+        )
+        return LLMResponse(
+            content=resp.choices[0].message.content,
+            input_tokens=resp.usage.prompt_tokens,
+            output_tokens=resp.usage.completion_tokens,
+            model=self._model,
+        )
+```
+
+## DLP — Data Loss Prevention
+
+Before returning any agent output to the user or external system, scan for confidential markers:
+
+```python
+import re
+
+CONFIDENTIAL_PATTERNS = {
+    "api_key": re.compile(r'(?:sk-|gsk_|xai-)[A-Za-z0-9]{20,}'),
+    "private_key": re.compile(r'-----BEGIN (?:RSA |EC )?PRIVATE KEY-----'),
+    "aws_key": re.compile(r'AKIA[0-9A-Z]{16}'),
+    "email": re.compile(r'\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Z|a-z]{2,}\b'),
+    "ssn": re.compile(r'\b\d{3}-\d{2}-\d{4}\b'),
+}
+
+CONFIDENTIAL_TEXT_MARKERS = [
+    "CONFIDENTIAL", "TOP SECRET", "INTERNAL ONLY",
+    "DO NOT DISTRIBUTE", "PROPRIETARY"
+]
+
+
+def dlp_scan_output(text: str) -> dict:
+    """
+    Scan agent output for PII and confidential markers before returning to caller.
+    Returns {safe: bool, findings: list, redacted_text: str}
+    """
+    findings = []
+
+    for pattern_name, pattern in CONFIDENTIAL_PATTERNS.items():
+        matches = pattern.findall(text)
+        if matches:
+            findings.append({"type": pattern_name, "count": len(matches)})
+
+    for marker in CONFIDENTIAL_TEXT_MARKERS:
+        if marker.lower() in text.lower():
+            findings.append({"type": "text_marker", "value": marker})
+
+    # Redact all matches
+    redacted = text
+    for pattern_name, pattern in CONFIDENTIAL_PATTERNS.items():
+        redacted = pattern.sub(f"[{pattern_name.upper()}_REDACTED]", redacted)
+
+    return {
+        "safe": len(findings) == 0,
+        "findings": findings,
+        "redacted_text": redacted,
+    }
+```
+
+## Measuring Automation Success
+
+Track these five KPIs weekly and review them in a standing operations meeting:
+
+```python
+import sqlite3
+import datetime
+
+
+class AutomationMetrics:
+    """Weekly KPI tracker for an enterprise automation deployment."""
+
+    def __init__(self, db_path: str = "automation_metrics.db"):
+        self.db_path = db_path
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS weekly_kpis (
+                    week_start TEXT PRIMARY KEY,
+                    task_completion_rate REAL,
+                    error_rate REAL,
+                    human_override_rate REAL,
+                    cost_per_task_usd REAL,
+                    weekly_hours_saved REAL
+                )
+            """)
+
+    def record_week(
+        self,
+        week_start: str,       # ISO date of Monday
+        total_tasks: int,
+        completed_tasks: int,
+        error_tasks: int,
+        human_overrides: int,
+        total_cost_usd: float,
+        hours_saved: float,
+    ) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO weekly_kpis VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    week_start,
+                    completed_tasks / total_tasks if total_tasks else 0,
+                    error_tasks / total_tasks if total_tasks else 0,
+                    human_overrides / total_tasks if total_tasks else 0,
+                    total_cost_usd / total_tasks if total_tasks else 0,
+                    hours_saved,
+                ),
+            )
+
+    def get_trend(self, weeks: int = 8) -> list[dict]:
+        """Return KPI trend for the last N weeks."""
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM weekly_kpis ORDER BY week_start DESC LIMIT ?", (weeks,)
+            ).fetchall()
+        cols = ["week_start", "task_completion_rate", "error_rate",
+                "human_override_rate", "cost_per_task_usd", "weekly_hours_saved"]
+        return [dict(zip(cols, row)) for row in reversed(rows)]
+```
+
+**Target KPIs for a healthy enterprise automation deployment:**
+
+| KPI | Target | Alert Threshold |
+|-----|--------|-----------------|
+| task_completion_rate | &gt; 95% | &lt; 90% |
+| error_rate | &lt; 2% | &gt; 5% |
+| human_override_rate | &lt; 5% | &gt; 15% |
+| cost_per_task_usd | Decreasing trend | 3× baseline |
+| weekly_hours_saved | Increasing trend | Flat for 3 weeks |
+
+## Key Takeaways
+
+- Calculate ROI before building: document processing and customer support deflection typically offer 1000%+ ROI; start with the highest-ROI use case.
+- Automation maturity is a 5-level progression from fully manual to fully autonomous — advance levels only after demonstrating override rate below threshold for a minimum observation period.
+- Every production agent must be registered in an inventory with owner, purpose, risk level, tools, and allowed roles — ungoverned agents are a security and compliance liability.
+- RBAC at the agent level prevents unauthorised users from triggering high-risk agents.
+- Abstract LLM calls behind an LLMClient interface from day one — swapping from Groq to OpenAI to Anthropic should not require rewriting agent logic.
+- DLP output scanning is a compliance requirement in regulated industries — never return agent output that contains API keys, private keys, SSNs, or confidential text markers.
+- The REST API gateway pattern (all external tool calls routed through a gateway) provides centralised logging, rate limiting, and access control for all agent-initiated API calls.
+- Track five weekly KPIs: completion rate, error rate, override rate, cost per task, and hours saved — declining quality is detectable weeks before it causes user complaints.

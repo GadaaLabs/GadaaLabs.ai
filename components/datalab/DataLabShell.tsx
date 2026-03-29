@@ -8,7 +8,7 @@ import { computeStats, summaryToPrompt, type DatasetSummary } from "@/lib/datala
 import { downloadNotebook } from "@/lib/notebook";
 import {
   BarChart2, Brain, MessageSquare, AlertCircle, Loader2, Send,
-  RotateCcw, CheckCircle2, Circle, Download, FileDown, Zap,
+  RotateCcw, CheckCircle2, Download, FileDown, Zap,
   Database, TrendingUp, Cpu, FileText, BookOpen,
 } from "lucide-react";
 
@@ -163,11 +163,9 @@ export function DataLabShell() {
       setPipelineDone(true);
     } catch (e) {
       console.error(e);
-      ["quality","eda","patterns","ml","notebook","report"].forEach((id) => {
-        setStages((prev) => prev.map((s) =>
-          s.status === "running" ? { ...s, status: "error" } : s
-        ));
-      });
+      setStages((prev) => prev.map((s) =>
+        s.status === "running" ? { ...s, status: "error" } : s
+      ));
       setReport((r) => r + "\n\n**Error: pipeline failed. Check your API key.**");
     } finally {
       setPipelineRunning(false);

@@ -1,0 +1,384 @@
+---
+title: "Multi-Agent Systems — Supervisor, Collaborative & Competitive"
+description: "Build systems where multiple specialised agents collaborate on complex tasks. Implement the supervisor/orchestrator pattern, message protocols, shared state, debate and QA patterns, async parallel execution, and a complete 3-agent research pipeline."
+duration: 26
+order: 6
+---
+
+## Why Multiple Agents
+
+A single general-purpose agent is limited by what you can cram into one system prompt and one context window. Multi-agent systems address three structural problems:
+
+**Specialisation**: a Researcher agent can be optimised for web search and source evaluation; a Writer agent for long-form prose; an Analyst agent for data transformation. Each has a focused system prompt, the right tools, and no distracting capabilities.
+
+**Parallelism**: independent sub-tasks (summarise document A, summarise document B, summarise document C) can run simultaneously across multiple agents, cutting wall-clock time proportionally.
+
+**Quality control**: a separate QA agent can review another agent's output against a rubric before it is used downstream. This adds a check that would otherwise require a human reviewer.
+
+## Architectures
+
+**Supervisor/Orchestrator** (most common): a Supervisor LLM receives the user's task, delegates to the right specialist, collects results, and synthesises the final output. The Supervisor is the only agent that communicates with the user.
+
+**Peer-to-peer**: agents communicate directly with each other via a message bus. No single coordinator. More complex to reason about, but allows emergent collaboration.
+
+**Hierarchical**: Supervisors supervise sub-supervisors which supervise workers. Appropriate for very large tasks with clear sub-domain boundaries.
+
+## Message Protocol
+
+Define a standard message format that every agent sends and receives. Consistency prevents parsing errors when results are passed between agents.
+
+```python
+import json
+import datetime
+from dataclasses import dataclass, field, asdict
+from enum import Enum
+
+
+class MessageRole(str, Enum):
+    USER = "user"
+    AGENT = "agent"
+    SUPERVISOR = "supervisor"
+    SYSTEM = "system"
+
+
+@dataclass
+class AgentMessage:
+    """Standard message passed between agents in the system."""
+    sender: str           # agent name
+    recipient: str        # agent name or "supervisor" or "user"
+    task: str             # description of what is requested
+    context: dict = field(default_factory=dict)    # shared state / prior results
+    result: str = ""      # the agent's output (filled in by the receiving agent)
+    status: str = "pending"  # "pending" | "success" | "failed"
+    error: str = ""
+    timestamp: str = field(default_factory=lambda: datetime.datetime.utcnow().isoformat())
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+```
+
+## The Supervisor Agent
+
+The Supervisor maintains a registry of available agents and their capabilities. When a task arrives, it decides which agent(s) to delegate to.
+
+```python
+from groq import Groq
+
+client = Groq()
+
+SUPERVISOR_SYSTEM = """You are an orchestrator that delegates tasks to specialist agents.
+
+Available agents:
+{agent_descriptions}
+
+When given a task, output a JSON array of delegations:
+[
+  {{"agent": "<agent_name>", "task": "<specific task description>", "depends_on": [<agent names>]}}
+]
+
+Rules:
+- Delegate to the most appropriate specialist
+- List dependencies in depends_on (agents whose results this agent needs)
+- Tasks with empty depends_on can run in parallel
+- Return ONLY the JSON array"""
+
+
+@dataclass
+class AgentSpec:
+    name: str
+    description: str
+    system_prompt: str
+    tools: list[dict]
+
+
+class Supervisor:
+    """
+    Orchestrates a pool of specialist agents.
+    Decomposes tasks, dispatches agents, and aggregates results.
+    """
+
+    def __init__(self, agents: list[AgentSpec]):
+        self.agents = {spec.name: spec for spec in agents}
+        self.agent_descriptions = "\n".join(
+            f"- {spec.name}: {spec.description}" for spec in agents
+        )
+
+    def _plan_delegations(self, task: str) -> list[dict]:
+        """Ask the supervisor LLM which agents to delegate to."""
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": SUPERVISOR_SYSTEM.format(
+                    agent_descriptions=self.agent_descriptions
+                )},
+                {"role": "user", "content": f"TASK: {task}"},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+        )
+        data = json.loads(response.choices[0].message.content)
+        return data if isinstance(data, list) else next(iter(data.values()))
+
+    def _run_agent(self, spec: AgentSpec, task: str, context: dict) -> AgentMessage:
+        """Run a single specialist agent with the given task and shared context."""
+        context_text = json.dumps(context, indent=2) if context else "None"
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": spec.system_prompt},
+                {"role": "user", "content": f"TASK: {task}\n\nCONTEXT FROM PRIOR AGENTS:\n{context_text}"},
+            ],
+            temperature=0.3,
+            max_tokens=800,
+        )
+        return AgentMessage(
+            sender=spec.name,
+            recipient="supervisor",
+            task=task,
+            context=context,
+            result=response.choices[0].message.content,
+            status="success",
+        )
+
+    def run(self, user_task: str) -> dict:
+        """
+        Execute a task by delegating to agents in dependency order.
+        Independent agents run in parallel using asyncio.
+        Returns a dict with all agent results and the final synthesis.
+        """
+        import asyncio
+
+        delegations = self._plan_delegations(user_task)
+        print(f"Supervisor delegated to {len(delegations)} agents")
+
+        # Execute in dependency waves (same topological pattern as planning agents)
+        results: dict[str, str] = {}
+        remaining = {d["agent"]: d for d in delegations}
+        completed = set()
+
+        while remaining:
+            # Find agents whose dependencies are all satisfied
+            ready = [
+                d for d in remaining.values()
+                if all(dep in completed for dep in d.get("depends_on", []))
+            ]
+
+            # Build context from completed agents
+            context = {agent_name: results[agent_name] for agent_name in completed if agent_name in results}
+
+            # Run ready agents in parallel (using threads for sync API)
+            wave_results = {}
+            for delegation in ready:
+                name = delegation["agent"]
+                if name not in self.agents:
+                    wave_results[name] = f"Error: agent '{name}' not found"
+                    continue
+                msg = self._run_agent(self.agents[name], delegation["task"], context)
+                wave_results[name] = msg.result
+
+            results.update(wave_results)
+            for d in ready:
+                completed.add(d["agent"])
+                del remaining[d["agent"]]
+
+        # Final synthesis
+        synthesis_prompt = f"ORIGINAL TASK: {user_task}\n\nAGENT RESULTS:\n"
+        for agent_name, result in results.items():
+            synthesis_prompt += f"\n--- {agent_name.upper()} ---\n{result}\n"
+        synthesis_prompt += "\nSynthesize the above results into a final coherent response."
+
+        synthesis = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": synthesis_prompt}],
+            temperature=0.2,
+            max_tokens=1000,
+        )
+
+        return {
+            "agent_results": results,
+            "final_answer": synthesis.choices[0].message.content,
+        }
+```
+
+## Debate and QA Patterns
+
+### Debate Pattern
+
+Two agents argue for different approaches; a Judge agent evaluates both and picks the winner. Useful for high-stakes decisions.
+
+```python
+def run_debate(question: str, approach_a: str, approach_b: str) -> dict:
+    """Run a structured debate between two approaches."""
+    # Advocate A
+    arg_a_resp = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{
+            "role": "user",
+            "content": f"Argue strongly FOR this approach to the question '{question}':\nAPPROACH: {approach_a}\nProvide 3 concrete arguments."
+        }],
+        max_tokens=400,
+    )
+
+    # Advocate B
+    arg_b_resp = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{
+            "role": "user",
+            "content": f"Argue strongly FOR this approach to the question '{question}':\nAPPROACH: {approach_b}\nProvide 3 concrete arguments."
+        }],
+        max_tokens=400,
+    )
+
+    # Judge
+    judge_resp = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{
+            "role": "user",
+            "content": f"""You are a neutral judge. Evaluate these two arguments:
+
+APPROACH A: {approach_a}
+ARGUMENTS FOR A:
+{arg_a_resp.choices[0].message.content}
+
+APPROACH B: {approach_b}
+ARGUMENTS FOR B:
+{arg_b_resp.choices[0].message.content}
+
+Pick the better approach and explain why in 2-3 sentences.
+Return JSON: {{"winner": "A" | "B", "reasoning": str}}"""
+        }],
+        response_format={"type": "json_object"},
+        temperature=0.0,
+    )
+
+    return {
+        "arguments_a": arg_a_resp.choices[0].message.content,
+        "arguments_b": arg_b_resp.choices[0].message.content,
+        "judgement": json.loads(judge_resp.choices[0].message.content),
+    }
+```
+
+### QA Agent Pattern
+
+A reviewer agent checks another agent's output against a rubric:
+
+```python
+QA_PROMPT = """You are a quality reviewer. Check the following output against the rubric.
+
+TASK: {task}
+
+OUTPUT TO REVIEW:
+{output}
+
+RUBRIC:
+{rubric}
+
+Score each rubric item (pass/fail) and give an overall verdict.
+Return JSON: {{"rubric_scores": [{{\"item\": str, \"pass\": bool, \"note\": str}}], "overall_pass": bool, "feedback": str}}"""
+
+
+def qa_review(task: str, output: str, rubric: list[str]) -> dict:
+    """Review an agent's output against a rubric."""
+    rubric_text = "\n".join(f"- {item}" for item in rubric)
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{
+            "role": "user",
+            "content": QA_PROMPT.format(task=task, output=output, rubric=rubric_text),
+        }],
+        response_format={"type": "json_object"},
+        temperature=0.0,
+    )
+    return json.loads(response.choices[0].message.content)
+```
+
+## Complete 3-Agent Research Pipeline
+
+```python
+RESEARCHER_PROMPT = """You are a research specialist. When given a topic, you:
+1. Identify the key sub-topics to investigate
+2. For each sub-topic, write a concise research summary (2-3 sentences each)
+3. Note any conflicting information or knowledge gaps
+Your output is raw research notes — not a polished report."""
+
+ANALYST_PROMPT = """You are a data analyst. When given research notes, you:
+1. Extract key facts and statistics
+2. Identify patterns and relationships
+3. Highlight the most important quantitative findings
+Your output is a structured analysis — bullet points with data."""
+
+WRITER_PROMPT = """You are a technical writer. When given research notes and analysis, you:
+1. Write a clear, structured report with headings
+2. Synthesise the research and analysis into coherent prose
+3. Conclude with key takeaways
+Your output is a polished, publication-ready report."""
+
+
+def build_research_pipeline() -> Supervisor:
+    return Supervisor(agents=[
+        AgentSpec(
+            name="researcher",
+            description="Investigates topics and produces research notes",
+            system_prompt=RESEARCHER_PROMPT,
+            tools=[],
+        ),
+        AgentSpec(
+            name="analyst",
+            description="Analyses research notes and extracts quantitative insights",
+            system_prompt=ANALYST_PROMPT,
+            tools=[],
+        ),
+        AgentSpec(
+            name="writer",
+            description="Writes polished reports from research and analysis",
+            system_prompt=WRITER_PROMPT,
+            tools=[],
+        ),
+    ])
+
+
+# Usage:
+# pipeline = build_research_pipeline()
+# result = pipeline.run("Research the current state of vector database technology in 2025")
+# print(result["final_answer"])
+```
+
+## Preventing Conflicts in Shared State
+
+When multiple agents write to shared state, define ownership rules:
+
+```python
+class SharedState:
+    """Thread-safe shared state dictionary with ownership enforcement."""
+
+    def __init__(self):
+        import threading
+        self._state: dict = {}
+        self._owners: dict[str, str] = {}   # key -> owning agent name
+        self._lock = threading.Lock()
+
+    def write(self, key: str, value, agent_name: str) -> None:
+        with self._lock:
+            owner = self._owners.get(key)
+            if owner and owner != agent_name:
+                raise PermissionError(
+                    f"Agent '{agent_name}' cannot write key '{key}' — owned by '{owner}'"
+                )
+            self._state[key] = value
+            self._owners[key] = agent_name
+
+    def read(self, key: str):
+        with self._lock:
+            return self._state.get(key)
+```
+
+## Key Takeaways
+
+- Specialised agents with focused system prompts and tools consistently outperform a single general-purpose agent on complex multi-step tasks.
+- The supervisor pattern is the right default: it is predictable, debuggable, and scales to many agents without peer-to-peer coordination complexity.
+- Standardise message passing with a typed dataclass — untyped string passing between agents creates parsing bugs that are hard to trace.
+- Independent agents (no dependency chain) should always run in parallel with asyncio.gather; this is the primary latency win in multi-agent systems.
+- The debate pattern improves decision quality for high-stakes choices; the QA pattern catches errors before they propagate downstream.
+- Shared state needs ownership rules — two agents writing the same key concurrently is a race condition that produces silent data corruption.
+- The supervisor's synthesis step is as important as the individual agents; invest in a good synthesis prompt.
+- In production, treat each agent delegation as a traceable span — log sender, recipient, task, and result for every message.

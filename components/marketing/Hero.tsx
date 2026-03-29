@@ -69,7 +69,6 @@ export function Hero() {
       } else {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setRoleIdx((r) => (r + 1) % ROLES.length);
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setTyping(true);
       }
     }

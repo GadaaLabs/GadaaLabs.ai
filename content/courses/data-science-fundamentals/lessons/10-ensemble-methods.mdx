@@ -1,0 +1,393 @@
+---
+title: "Ensemble Methods — Bagging, Boosting & Stacking"
+description: "Master the three major ensemble strategies: understand why averaging reduces variance, build Random Forests and Extra Trees, implement gradient boosting from pseudo-residuals, tune XGBoost and LightGBM, and assemble stacking pipelines with out-of-fold meta-features."
+duration: 26
+order: 10
+---
+
+A single decision tree is interpretable but brittle — a small change in training data produces a very different tree. The solution is to train many trees and combine their predictions. Ensemble methods work because combining uncorrelated, reasonably accurate models reduces variance without increasing bias proportionally. This lesson goes from the statistical justification to production-grade XGBoost tuning.
+
+## Why Ensembles Work: The Bias-Variance View
+
+For a regression ensemble of M models with identical variance σ² and pairwise correlation ρ:
+
+```
+Variance of average = ρ·σ² + (1-ρ)/M · σ²
+```
+
+When predictions are perfectly correlated (ρ = 1), averaging does nothing. When they are fully uncorrelated (ρ = 0), variance shrinks by M. The goal of every ensemble method is to increase diversity (reduce ρ) while keeping individual models accurate.
+
+```python
+import numpy as np
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.datasets import make_classification
+from sklearn.model_selection import cross_val_score
+from sklearn.ensemble import BaggingClassifier, RandomForestClassifier
+
+X, y = make_classification(
+    n_samples=2000, n_features=20, n_informative=10,
+    n_redundant=4, random_state=42
+)
+
+# Single deep tree — high variance, low bias
+single_tree = DecisionTreeClassifier(max_depth=None, random_state=42)
+score_tree = cross_val_score(single_tree, X, y, cv=5, scoring="roc_auc").mean()
+print(f"Single tree ROC-AUC: {score_tree:.4f}")
+```
+
+---
+
+## Bagging
+
+Bootstrap AGGregatING trains each model on a bootstrap sample (same size as original, drawn with replacement). Each sample contains ~63.2% of unique original observations; the rest are duplicates.
+
+```python
+from sklearn.ensemble import BaggingClassifier
+from sklearn.tree import DecisionTreeClassifier
+
+bagging = BaggingClassifier(
+    estimator=DecisionTreeClassifier(max_depth=None),
+    n_estimators=200,
+    max_samples=1.0,       # bootstrap fraction of training set
+    max_features=1.0,      # fraction of features per tree (not standard RF)
+    bootstrap=True,
+    bootstrap_features=False,
+    oob_score=True,        # evaluate on out-of-bag samples (free validation set)
+    n_jobs=-1,
+    random_state=42,
+)
+bagging.fit(X, y)
+print(f"Bagging OOB accuracy:  {bagging.oob_score_:.4f}")
+score_bag = cross_val_score(bagging, X, y, cv=5, scoring="roc_auc").mean()
+print(f"Bagging CV ROC-AUC:    {score_bag:.4f}")
+```
+
+The OOB score uses the ~36.8% of samples not seen during each tree's training as a validation set. It correlates well with held-out test performance at no extra cost.
+
+---
+
+## Random Forest in Depth
+
+Random Forest extends bagging by also randomising which features each tree can split on. This is the key to decorrelating trees.
+
+```python
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
+from sklearn.inspection import permutation_importance
+import pandas as pd
+
+# max_features controls tree diversity:
+#   "sqrt" for classification (sqrt of total features per split) → standard choice
+#   0.33   for regression (one third of features) → sklearn default
+rf = RandomForestClassifier(
+    n_estimators=500,
+    max_features="sqrt",      # core randomisation: subsample features at each split
+    max_depth=None,           # let trees grow fully (bagging corrects variance)
+    min_samples_leaf=1,
+    bootstrap=True,
+    oob_score=True,
+    n_jobs=-1,
+    random_state=42,
+)
+rf.fit(X, y)
+print(f"Random Forest OOB score: {rf.oob_score_:.4f}")
+
+# --- Feature importances ---
+
+# Impurity-based (Mean Decrease Impurity): fast, built-in, but biased toward
+# high-cardinality continuous features — they have more possible split points.
+imp_impurity = pd.Series(rf.feature_importances_,
+                          index=[f"f{i}" for i in range(X.shape[1])])
+print("Top 5 (impurity):", imp_impurity.sort_values(ascending=False).head())
+
+# Permutation importance: model-agnostic, unbiased.
+# Randomly shuffles each feature and measures performance drop on a validation set.
+from sklearn.model_selection import train_test_split
+X_tr, X_val, y_tr, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+rf.fit(X_tr, y_tr)
+perm = permutation_importance(rf, X_val, y_val, n_repeats=10,
+                               scoring="roc_auc", random_state=42, n_jobs=-1)
+imp_perm = pd.Series(perm.importances_mean, index=[f"f{i}" for i in range(X.shape[1])])
+print("Top 5 (permutation):", imp_perm.sort_values(ascending=False).head())
+
+# ExtraTrees: splits each feature at a RANDOM threshold rather than the optimal one.
+# More randomisation → more decorrelated trees → usually lower variance than RF,
+# slightly higher bias. Significantly faster to train (no sort for optimal split).
+et = ExtraTreesClassifier(n_estimators=500, max_features="sqrt",
+                           oob_score=True, bootstrap=True,
+                           n_jobs=-1, random_state=42)
+et.fit(X, y)
+score_et = cross_val_score(et, X, y, cv=5, scoring="roc_auc").mean()
+print(f"ExtraTrees CV ROC-AUC: {score_et:.4f}")
+```
+
+---
+
+## Gradient Boosting: Mechanics from Scratch
+
+Gradient boosting builds trees sequentially. Each new tree fits the *pseudo-residuals* — the negative gradient of the loss with respect to the current ensemble's predictions.
+
+```python
+import numpy as np
+
+# Pseudo-residuals by loss function:
+#
+# Regression (MSE):     residual_i = y_i - y_hat_i
+# Binary classification (log-loss):
+#   p_i   = sigmoid(F_i)   where F_i is the raw score
+#   residual_i = y_i - p_i
+#
+# Each new tree h_m(x) fits these residuals.
+# Update: F_m(x) = F_{m-1}(x) + learning_rate * h_m(x)
+#
+# The learning_rate shrinks each tree's contribution.
+# Smaller lr → need more trees → better generalisation (up to a point).
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
+
+# Simulate two steps of manual gradient boosting for binary classification
+rng = np.random.default_rng(0)
+n = 8
+y_true   = np.array([1, 1, 0, 1, 0, 0, 1, 0], dtype=float)
+F_0      = np.full(n, np.log(y_true.mean() / (1 - y_true.mean())))  # log-odds init
+p_0      = sigmoid(F_0)
+resid_0  = y_true - p_0
+print("Init log-odds:", round(F_0[0], 4))
+print("Init prob:    ", round(p_0[0], 4))
+print("Residuals 1:  ", np.round(resid_0, 4))
+
+# In practice sklearn/XGBoost handle this automatically:
+from sklearn.ensemble import GradientBoostingClassifier
+
+gb = GradientBoostingClassifier(
+    n_estimators=300,
+    learning_rate=0.05,   # shrinkage: smaller = more trees needed, usually better
+    max_depth=4,          # shallow trees are the "weak learners"
+    subsample=0.8,        # stochastic GB: row subsampling per tree (reduces variance)
+    max_features=0.5,     # column subsampling per tree
+    random_state=42,
+)
+score_gb = cross_val_score(gb, X, y, cv=5, scoring="roc_auc").mean()
+print(f"GradientBoosting CV ROC-AUC: {score_gb:.4f}")
+```
+
+---
+
+## XGBoost: Full Hyperparameter Guide
+
+XGBoost adds regularisation, second-order gradients (Newton step), and hardware-level optimisations on top of gradient boosting.
+
+```python
+import xgboost as xgb
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score
+import numpy as np
+
+X_tr, X_val, y_tr, y_val = train_test_split(X, y, test_size=0.2,
+                                              stratify=y, random_state=42)
+
+xgb_model = xgb.XGBClassifier(
+    # Tree architecture
+    n_estimators=1000,          # will be capped by early stopping
+    max_depth=4,                # 3-6: shallower = less overfit; default 6 is often too deep
+    learning_rate=0.05,         # 0.01-0.1: smaller needs more trees
+    # Subsampling (all help regularise)
+    subsample=0.8,              # row fraction per tree
+    colsample_bytree=0.8,       # feature fraction per tree
+    colsample_bylevel=1.0,      # feature fraction per tree level
+    # Regularisation
+    min_child_weight=5,         # min sum of hessians in a leaf; increase to reduce overfit
+    gamma=0.1,                  # min loss reduction to make a split; 0 = no constraint
+    reg_alpha=0.1,              # L1 on leaf weights (promotes sparsity)
+    reg_lambda=1.0,             # L2 on leaf weights (default 1)
+    # Class imbalance
+    scale_pos_weight=3,         # set to neg/pos ratio for imbalanced data
+    # Hardware
+    tree_method="hist",         # histogram-based: much faster for large datasets
+    device="cpu",               # "cuda" for GPU
+    eval_metric="auc",
+    early_stopping_rounds=50,   # stop if AUC doesn't improve for 50 rounds
+    random_state=42,
+)
+
+xgb_model.fit(
+    X_tr, y_tr,
+    eval_set=[(X_val, y_val)],
+    verbose=False,
+)
+best_n = xgb_model.best_iteration
+val_auc = roc_auc_score(y_val, xgb_model.predict_proba(X_val)[:, 1])
+print(f"XGBoost best round: {best_n}, Val AUC: {val_auc:.4f}")
+```
+
+Key tuning heuristic: start with `max_depth=4, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8`. Enable early stopping. Then tune `max_depth`, `min_child_weight`, and `gamma` for regularisation.
+
+---
+
+## LightGBM vs XGBoost
+
+```python
+import lightgbm as lgb
+from sklearn.model_selection import cross_val_score
+
+# LightGBM key differences:
+# 1. Leaf-wise (best-first) tree growth vs XGBoost's level-wise.
+#    Leaf-wise finds the single leaf with the highest loss reduction at each step.
+#    → Deeper, more asymmetric trees → better accuracy, higher overfit risk.
+# 2. num_leaves controls tree complexity directly (not max_depth).
+#    A tree of depth d can have up to 2^d leaves; num_leaves < 2^max_depth.
+# 3. Histogram-based from the start → 10-20x faster than older XGBoost.
+# 4. GOSS (Gradient-based One-Side Sampling): keeps high-gradient samples,
+#    randomly drops low-gradient ones → faster with minimal accuracy loss.
+
+lgb_model = lgb.LGBMClassifier(
+    n_estimators=500,
+    learning_rate=0.05,
+    num_leaves=31,            # key param: 20-150 typical; increase = more complex
+    min_data_in_leaf=20,      # minimum samples per leaf: prevents overfit in leaf-wise growth
+    feature_fraction=0.8,     # column subsampling (= colsample_bytree in XGBoost)
+    bagging_fraction=0.8,     # row subsampling
+    bagging_freq=1,           # apply bagging every tree
+    reg_alpha=0.1,
+    reg_lambda=0.1,
+    class_weight="balanced",  # handles imbalance
+    random_state=42,
+    verbose=-1,
+)
+score_lgb = cross_val_score(lgb_model, X, y, cv=5, scoring="roc_auc").mean()
+print(f"LightGBM CV ROC-AUC: {score_lgb:.4f}")
+```
+
+Speed comparison: on a 100k × 100 dataset, LightGBM typically trains 3-10x faster than XGBoost with default settings, due to leaf-wise growth and GOSS. For final accuracy on tabular data, the difference is usually &lt; 0.002 AUC — choose based on speed requirements and hyperparameter familiarity.
+
+---
+
+## Stacking
+
+Stacking uses out-of-fold (OOF) predictions from base models as features for a meta-learner. The meta-learner learns how to best combine the base models' predictions.
+
+```python
+from sklearn.ensemble import StackingClassifier, RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import cross_val_predict, cross_val_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+import numpy as np
+
+# --- Manual OOF stacking (illustrates what StackingClassifier does internally) ---
+from sklearn.model_selection import StratifiedKFold
+
+def build_oof_features(base_models, X, y, cv=5):
+    """
+    For each base model, generate out-of-fold probability predictions.
+    The i-th sample's prediction uses only models trained on other folds.
+    Returns an (n_samples, n_base_models) array of meta-features.
+    """
+    kf  = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
+    oof = np.zeros((len(y), len(base_models)))
+
+    for j, model in enumerate(base_models):
+        for train_idx, val_idx in kf.split(X, y):
+            clone = type(model)(**model.get_params())
+            clone.fit(X[train_idx], y[train_idx])
+            oof[val_idx, j] = clone.predict_proba(X[val_idx])[:, 1]
+
+    return oof
+
+base_models = [
+    RandomForestClassifier(n_estimators=100, random_state=42),
+    GradientBoostingClassifier(n_estimators=100, random_state=42),
+    KNeighborsClassifier(n_neighbors=15),
+]
+
+oof_features = build_oof_features(base_models, X, y, cv=5)
+meta_learner = make_pipeline(StandardScaler(), LogisticRegression(C=1.0))
+meta_cv_auc  = cross_val_score(meta_learner, oof_features, y, cv=5, scoring="roc_auc").mean()
+print(f"Manual stacking meta-learner CV AUC: {meta_cv_auc:.4f}")
+
+# --- sklearn StackingClassifier (cleaner API) ---
+stacking = StackingClassifier(
+    estimators=[
+        ("rf",  RandomForestClassifier(n_estimators=200, random_state=42)),
+        ("gb",  GradientBoostingClassifier(n_estimators=200, random_state=42)),
+        ("knn", KNeighborsClassifier(n_neighbors=15)),
+    ],
+    final_estimator=LogisticRegression(C=1.0),
+    cv=5,                    # OOF splits for meta-feature generation
+    passthrough=False,       # True = also pass original X to meta-learner
+    n_jobs=-1,
+)
+score_stack = cross_val_score(stacking, X, y, cv=5, scoring="roc_auc").mean()
+print(f"StackingClassifier CV ROC-AUC: {score_stack:.4f}")
+```
+
+### Blending: Simpler Holdout Stacking
+
+```python
+from sklearn.model_selection import train_test_split
+
+# Blending: use a fixed holdout set for meta-features (faster but higher variance)
+X_blend_tr, X_blend_hold, y_blend_tr, y_blend_hold = train_test_split(
+    X, y, test_size=0.3, stratify=y, random_state=42
+)
+blend_meta = np.column_stack([
+    m.fit(X_blend_tr, y_blend_tr).predict_proba(X_blend_hold)[:, 1]
+    for m in base_models
+])
+meta = LogisticRegression(C=1.0).fit(blend_meta, y_blend_hold)
+# In production, retrain base models on full train set, then blend on holdout.
+```
+
+---
+
+## Optuna Hyperparameter Search for XGBoost
+
+```python
+import optuna
+import xgboost as xgb
+from sklearn.model_selection import StratifiedKFold, cross_val_score
+import numpy as np
+
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+def objective(trial):
+    params = {
+        "max_depth":        trial.suggest_int("max_depth", 3, 8),
+        "learning_rate":    trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
+        "subsample":        trial.suggest_float("subsample", 0.5, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+        "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
+        "gamma":            trial.suggest_float("gamma", 0, 1.0),
+        "reg_alpha":        trial.suggest_float("reg_alpha", 1e-4, 10.0, log=True),
+        "reg_lambda":       trial.suggest_float("reg_lambda", 1e-4, 10.0, log=True),
+        "n_estimators": 300,
+        "tree_method": "hist",
+        "eval_metric": "auc",
+        "random_state": 42,
+    }
+    model  = xgb.XGBClassifier(**params, verbose=0)
+    scores = cross_val_score(model, X, y, cv=StratifiedKFold(5),
+                              scoring="roc_auc", n_jobs=-1)
+    return scores.mean()
+
+study = optuna.create_study(direction="maximize",
+                             sampler=optuna.samplers.TPESampler(seed=42))
+study.optimize(objective, n_trials=50, show_progress_bar=False)
+
+print(f"Best AUC: {study.best_value:.4f}")
+print(f"Best params: {study.best_params}")
+```
+
+---
+
+## Key Takeaways
+
+- Ensembles reduce variance proportionally to model diversity — maximising the decorrelation between base learners (via bootstrap sampling, feature subsampling, or different algorithms) is the primary goal.
+- Random Forest's `max_features="sqrt"` is the critical source of tree diversity; OOB score provides a reliable free validation estimate equal to roughly 5-fold CV.
+- Use permutation importance rather than impurity-based importance when features differ in cardinality or scale — impurity importance is biased toward high-cardinality features.
+- Gradient boosting fits pseudo-residuals sequentially; the learning rate acts as shrinkage — always pair a small learning rate with early stopping rather than a fixed `n_estimators`.
+- XGBoost key levers: `max_depth` (3-4 for tabular), `min_child_weight` and `gamma` for regularisation, `subsample`+`colsample_bytree` for variance reduction; set `scale_pos_weight` for class imbalance.
+- LightGBM's leaf-wise growth is 3-10x faster than XGBoost on large datasets; control complexity with `num_leaves` and `min_data_in_leaf` rather than `max_depth`.
+- Stacking must use out-of-fold predictions as meta-features — fitting the meta-learner on the same data used to train base models causes severe data leakage.
+- Optuna's TPE sampler typically finds better hyperparameters than random or grid search in 50-100 trials due to Bayesian modelling of the objective function.

@@ -1,0 +1,364 @@
+---
+title: "ML Platform Architecture — Building for Scale"
+description: "Design the full six-layer ML platform stack, navigate build vs buy decisions for each layer, recognise hidden technical debt patterns, understand the ML platform maturity model from Level 0 to Level 3, and analyse the cost structure of a medium-scale ML system."
+duration: 26
+order: 12
+---
+
+An ML platform is the infrastructure that makes every other lesson in this course possible at scale. Without a platform, each team builds their own data pipeline, their own experiment tracking, their own model registry, their own serving infrastructure. The platform abstracts those concerns so ML engineers can focus on model quality. This lesson gives you the architecture vocabulary, the build vs buy framework, and the maturity model to design and evolve an ML platform for any organisation.
+
+## The Six-Layer ML Platform Stack
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 6: MONITORING LAYER                                          │
+│  Drift detection · Performance tracking · Alerting · Dashboards     │
+├─────────────────────────────────────────────────────────────────────┤
+│  Layer 5: SERVING LAYER                                             │
+│  Online inference · Batch scoring · A/B routing · SLA management    │
+├─────────────────────────────────────────────────────────────────────┤
+│  Layer 4: EVALUATION LAYER                                          │
+│  Model registry · Metadata store · Promotion gates · Model cards    │
+├─────────────────────────────────────────────────────────────────────┤
+│  Layer 3: TRAINING LAYER                                            │
+│  Experiment tracking · Compute orchestration · Hyperparameter opt.  │
+├─────────────────────────────────────────────────────────────────────┤
+│  Layer 2: FEATURE LAYER                                             │
+│  Feature store · Point-in-time joins · Online/offline stores        │
+├─────────────────────────────────────────────────────────────────────┤
+│  Layer 1: DATA LAYER                                                │
+│  Pipelines · Validation · Lineage · Storage · Data catalogue        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Layer 1 — Data Layer
+
+Responsible for ingesting, transforming, validating, and storing raw data. Key concerns: idempotent pipelines, data quality contracts, lineage tracking so you can trace every training row back to its source system, and a data catalogue so teams can discover existing datasets.
+
+Tools: Airflow/Prefect (orchestration), dbt (transformation), Great Expectations (validation), Apache Atlas / DataHub (lineage + catalogue), Delta Lake / Apache Iceberg (versioned table storage).
+
+### Layer 2 — Feature Layer
+
+Computes ML features from raw data and serves them to both training (offline, high-throughput) and inference (online, low-latency) with point-in-time correctness. Without a feature store, the same feature logic is reimplemented in the training pipeline (Python batch) and the serving pipeline (Go/Java microservice), and they inevitably diverge, causing training-serving skew.
+
+Tools: Feast (open-source), Tecton, Vertex AI Feature Store, Hopsworks.
+
+### Layer 3 — Training Layer
+
+Manages compute resources for training jobs, tracks experiments (hyperparameters, metrics, artefacts), enables reproducibility, and provides hyperparameter optimisation. A training job should be a reproducible artefact: given the same data version, code commit, and random seed, it should produce the same model.
+
+Tools: MLflow (tracking + model registry), Weights & Biases, Kubeflow Pipelines, Ray Train (distributed training), Optuna/Hyperopt (HPO).
+
+### Layer 4 — Evaluation Layer
+
+Provides a model registry with versioning, metadata, and lineage. Manages promotion gates (champion/challenger), model cards, fairness evaluations, and approval workflows. The registry is the source of truth for "what model is running in production right now?"
+
+Tools: MLflow Model Registry, Weights & Biases Model Registry, SageMaker Model Registry.
+
+### Layer 5 — Serving Layer
+
+Deploys registered models as REST APIs, gRPC endpoints, or batch scoring jobs. Manages load balancing, auto-scaling, A/B routing, feature retrieval from the online feature store, and model warm-up.
+
+Tools: Custom FastAPI + Kubernetes, BentoML, NVIDIA Triton Inference Server, TorchServe, Seldon Core.
+
+### Layer 6 — Monitoring Layer
+
+Observes deployed models for data drift, prediction drift, concept drift, and business metric degradation. Integrates with alerting systems and triggers retraining pipelines when drift thresholds are exceeded.
+
+Tools: Custom (DriftMonitor from lesson 9), Evidently AI, Arize AI, WhyLabs, Grafana + Prometheus (system health).
+
+---
+
+## Build vs Buy for Each Layer
+
+```python
+BUILD_VS_BUY = {
+    "data_pipelines": {
+        "build": "Custom scripts/Prefect flows",
+        "buy":   "AWS Glue, Fivetran, dbt Cloud",
+        "recommendation": "Start with Prefect or Airflow (open-source). "
+                          "Buy managed ingestion (Fivetran) for SaaS sources. "
+                          "Never build your own scheduler.",
+    },
+    "feature_store": {
+        "build": "Feast self-hosted on Redis + S3",
+        "buy":   "Tecton, Vertex AI Feature Store",
+        "recommendation": "Feast if you have infra expertise and &lt;5 models. "
+                          "Tecton/Vertex if you need SLAs on online serving at scale.",
+    },
+    "experiment_tracking": {
+        "build": "Log to CSV / local MLflow",
+        "buy":   "Weights & Biases, Comet ML",
+        "recommendation": "MLflow is free and sufficient for &lt;20 active experiments/week. "
+                          "W&B adds collaboration features worth paying for at team scale.",
+    },
+    "serving": {
+        "build": "FastAPI + Docker + Kubernetes",
+        "buy":   "BentoML, Triton, SageMaker Endpoints",
+        "recommendation": "Build for simple sklearn/XGBoost models. "
+                          "Triton for GPU inference at scale. "
+                          "Managed endpoints for teams without Kubernetes expertise.",
+    },
+    "monitoring": {
+        "build": "Custom DriftMonitor + Prometheus/Grafana",
+        "buy":   "Arize AI, Evidently Cloud, WhyLabs",
+        "recommendation": "Build the core KS/PSI logic yourself to understand it. "
+                          "Buy for dashboarding and alerting at enterprise scale.",
+    },
+}
+
+for layer, options in BUILD_VS_BUY.items():
+    print(f"\n{layer.upper()}")
+    print(f"  Build:          {options['build']}")
+    print(f"  Buy:            {options['buy']}")
+    print(f"  Recommendation: {options['recommendation']}")
+```
+
+---
+
+## Hidden Technical Debt in ML Systems
+
+The 2015 Google paper "Hidden Technical Debt in Machine Learning Systems" identified ML-specific debt patterns that standard software engineering practices don't catch.
+
+```python
+DEBT_PATTERNS = {
+    "glue_code": {
+        "description": "Generic data preparation code that grows to dominate the codebase. "
+                       "The model is 5% of the code; data wrangling is 95%.",
+        "detection":   "Count lines in model code vs preprocessing code. "
+                       "If ratio > 1:10, you have a glue code problem.",
+        "fix":         "Extract feature engineering into versioned, tested functions "
+                       "in a shared library. Move feature computation into the feature store.",
+    },
+    "undeclared_consumers": {
+        "description": "Other systems read from your model's raw output table "
+                       "without a formal contract. When you change the output schema, "
+                       "those systems break silently.",
+        "detection":   "Audit all downstream consumers of your model output table. "
+                       "Check for undocumented dependencies via data lineage tools.",
+        "fix":         "Publish a versioned API contract for all model outputs. "
+                       "Use schema enforcement on output tables.",
+    },
+    "data_dependency_chains": {
+        "description": "Your training pipeline depends on features computed by "
+                       "another team's pipeline, which depends on a third pipeline. "
+                       "A change anywhere breaks your model silently.",
+        "detection":   "Map your full dependency graph. Count the number of "
+                       "external pipelines you have no SLA on.",
+        "fix":         "Publish data quality expectations. Use Great Expectations "
+                       "to validate inputs at every pipeline boundary.",
+    },
+    "feedback_loops": {
+        "description": "The model's output influences future training data. "
+                       "A churn model that flags high-risk users for human intervention "
+                       "changes whether those users actually churn — corrupting future labels.",
+        "detection":   "Trace whether any action taken on a model's output "
+                       "affects the outcome variable in future training data.",
+        "fix":         "Holdout a random slice from interventions to preserve "
+                       "unbiased ground truth. Log which predictions were acted upon.",
+    },
+}
+```
+
+---
+
+## ML Platform Maturity Model
+
+```
+Level 0: Manual (Notebooks)
+  - Models trained in Jupyter notebooks
+  - Deployment: copy-paste code to server
+  - No versioning, no monitoring, no retraining
+  - Characteristic symptom: "the data scientist who trained it has left"
+
+Level 1: Scripts + Some Automation
+  - Training is a Python script runnable from the command line
+  - Deployment: Docker image, manually triggered
+  - Basic experiment logging (MLflow local)
+  - Monitoring: periodic manual checks
+  - Most startups and small teams operate here
+
+Level 2: Automated Retraining Pipeline
+  - CI/CD pipeline: code change → train → evaluate → deploy if champion
+  - Feature store with offline/online parity
+  - Model registry with champion/challenger tracking
+  - Automated drift monitoring with alerting
+  - Most mature ML teams operate here (this course's target)
+
+Level 3: Full MLOps with Auto-Remediation
+  - Drift detected → retraining triggered automatically → champion test → auto-deploy
+  - Self-healing data pipelines with schema evolution
+  - Multi-team platform with RBAC, cost attribution, SLA tracking
+  - A/B testing infrastructure for every deployment
+  - Platform team dedicated to building and operating the stack
+  - Less than 5% of companies operate at this level
+```
+
+---
+
+## Cost Analysis: Medium ML System
+
+```python
+import math
+
+def estimate_monthly_cost(
+    training_hours_per_week:   float = 8,
+    n_models_in_production:    int   = 3,
+    inference_rps_per_model:   float = 100,
+    avg_latency_ms:            float = 20,
+    monitoring_gb_per_month:   float = 50,
+) -> dict:
+    """
+    Rough monthly cost estimate for a medium ML system on AWS.
+    Adjust instance types and counts for your actual usage.
+    """
+    # Training: g4dn.xlarge = $0.526/hr (4 vCPU, 16 GB RAM, T4 GPU)
+    training_cost = training_hours_per_week * 4.3 * 0.526
+
+    # Serving: c6i.xlarge = $0.17/hr per instance
+    # Capacity: ~1000 RPS per instance at 20ms average latency
+    # Required instances per model = ceil(rps / 1000)
+    instances_per_model = max(1, math.ceil(inference_rps_per_model / 1000))
+    # Add 2x redundancy (2 AZs minimum)
+    serving_instances = instances_per_model * n_models_in_production * 2
+    serving_cost = serving_instances * 0.17 * 24 * 30
+
+    # Redis (ElastiCache cache.r7g.large) = ~$250/month
+    redis_cost = 250
+
+    # S3 storage for model artefacts: ~$0.023/GB/month; assume 50 GB
+    s3_cost = 50 * 0.023
+
+    # Monitoring and logging: Prometheus + Grafana on t3.medium = ~$30/month
+    # Plus CloudWatch / log storage
+    monitoring_cost = 30 + monitoring_gb_per_month * 0.50
+
+    # MLflow tracking server (t3.medium): ~$30/month
+    mlflow_cost = 30
+
+    total = training_cost + serving_cost + redis_cost + s3_cost + monitoring_cost + mlflow_cost
+
+    return {
+        "training_monthly":    round(training_cost,    2),
+        "serving_monthly":     round(serving_cost,     2),
+        "redis_monthly":       redis_cost,
+        "s3_monthly":          round(s3_cost,          2),
+        "monitoring_monthly":  round(monitoring_cost,  2),
+        "mlflow_monthly":      mlflow_cost,
+        "total_monthly_usd":   round(total,            2),
+        "serving_instances":   serving_instances,
+    }
+
+cost = estimate_monthly_cost()
+for k, v in cost.items():
+    print(f"  {k:<30} ${v}" if "usd" in k or "monthly" in k else f"  {k:<30} {v}")
+```
+
+---
+
+## Managed ML Platforms: One Paragraph Each
+
+**Kubeflow** is an open-source ML platform built on Kubernetes. It provides pipeline orchestration (Kubeflow Pipelines), experiment tracking, multi-framework training operators (PyTorchJob, TFJob), and a model serving component (KServe). It is highly configurable and integrates with any cloud, but requires significant Kubernetes expertise to operate. Best choice for organisations that already have a strong Kubernetes practice and want full control.
+
+**Vertex AI** (Google Cloud) is Google's fully managed ML platform. It provides managed pipelines (based on Kubeflow), AutoML, a managed feature store, Vertex AI Experiments (MLflow-compatible), and Vertex AI Endpoints for serving. The integration with BigQuery and Cloud Storage is seamless. Well-suited for organisations already in GCP; the managed experience is significantly easier than self-hosted Kubeflow, but costs are higher and vendor lock-in is real.
+
+**Amazon SageMaker** is AWS's ML platform, offering managed training jobs, SageMaker Pipelines (workflow orchestration), SageMaker Feature Store, SageMaker Experiments, Model Registry, and SageMaker Endpoints with auto-scaling. The breadth of features is unmatched among managed platforms. The learning curve is steep and the API surface is large; teams that commit to SageMaker benefit from deep AWS integration but face meaningful migration costs if they later change direction.
+
+**Azure Machine Learning** is Microsoft's managed ML platform, with strong integration with Azure DevOps, Azure Databricks, and enterprise Active Directory for access control. Its AutoML capabilities and the integration with Power BI for model monitoring dashboards differentiate it in enterprise settings. A natural choice for organisations that are already committed to the Microsoft stack and need tight enterprise governance.
+
+---
+
+## Full Stack ASCII Architecture Diagram
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                       ML PLATFORM — FULL STACK                             │
+│                                                                            │
+│  ┌──────────────────┐   ┌─────────────────────────────────────────────┐  │
+│  │   Data Sources   │   │          MONITORING LAYER (Layer 6)         │  │
+│  │                  │   │  Evidently / Arize  │  Grafana + Prometheus  │  │
+│  │ • Postgres / DWH │   │  PSI + KS alerts    │  p99 latency / errors  │  │
+│  │ • Kafka streams  │   └──────────────────────────┬──────────────────┘  │
+│  │ • S3 data lake   │                               │ alerts              │
+│  └────────┬─────────┘   ┌──────────────────────────▼──────────────────┐  │
+│           │              │          SERVING LAYER (Layer 5)            │  │
+│           ▼              │  FastAPI / BentoML / Triton                 │  │
+│  ┌────────────────────┐  │  Nginx LB · Redis cache · A/B router       │  │
+│  │   DATA LAYER       │  │  Canary deployment · Graceful shutdown      │  │
+│  │   (Layer 1)        │  └──────────────────────────┬──────────────────┘  │
+│  │ Prefect/Airflow    │                               │ loads model         │
+│  │ dbt + GE tests     │  ┌──────────────────────────▼──────────────────┐  │
+│  │ Delta Lake         │  │       EVALUATION LAYER (Layer 4)            │  │
+│  └────────┬───────────┘  │  MLflow Model Registry                      │  │
+│           │               │  Champion/challenger · Model cards          │  │
+│           ▼               └──────────────────────────┬──────────────────┘  │
+│  ┌────────────────────┐                               │ registers           │
+│  │  FEATURE LAYER     │  ┌──────────────────────────▼──────────────────┐  │
+│  │  (Layer 2)         │  │       TRAINING LAYER (Layer 3)              │  │
+│  │ Feast / Tecton     │◄─┤  MLflow Tracking · Optuna HPO               │  │
+│  │ Offline: S3/Hive   │  │  GitHub Actions train job                   │  │
+│  │ Online:  Redis     │  │  Data validation (GE) → train → evaluate    │  │
+│  └────────────────────┘  └─────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Platform Evolution Path
+
+```python
+EVOLUTION_PATH = [
+    {
+        "phase":     "Phase 1 — Prove value (months 1-3)",
+        "actions":   [
+            "Train first model in a clean Python script (not a notebook)",
+            "Track experiments with local MLflow",
+            "Deploy as a Docker container with a FastAPI endpoint",
+            "Set up basic Prometheus/Grafana for latency and error rate",
+        ],
+        "cost":      "~$200/month",
+        "team_size": "1-2 ML engineers",
+    },
+    {
+        "phase":     "Phase 2 — Build foundations (months 4-9)",
+        "actions":   [
+            "Add CI/CD with GitHub Actions (code test → train → evaluate → deploy)",
+            "Add MLflow Model Registry for champion/challenger tracking",
+            "Implement feature engineering in a shared library with tests",
+            "Add drift monitoring (PSI + KS) with email alerts",
+        ],
+        "cost":      "~$800/month",
+        "team_size": "2-4 ML engineers",
+    },
+    {
+        "phase":     "Phase 3 — Automate and scale (months 10-18)",
+        "actions":   [
+            "Add feature store (Feast) to eliminate training/serving skew",
+            "Automate retraining on drift trigger + weekly schedule",
+            "Implement A/B testing infrastructure with shadow deployment",
+            "Add batch scoring pipeline for large-scale inference",
+        ],
+        "cost":      "~$3,000/month",
+        "team_size": "4-8 engineers (2 dedicated platform)",
+    },
+]
+
+for phase_info in EVOLUTION_PATH:
+    print(f"\n{phase_info['phase']}")
+    print(f"  Cost: {phase_info['cost']}  |  Team: {phase_info['team_size']}")
+    for action in phase_info["actions"]:
+        print(f"  - {action}")
+```
+
+---
+
+## Key Takeaways
+
+- The six-layer stack (data → feature → training → evaluation → serving → monitoring) maps cleanly to team responsibilities; each layer has a clear contract with the layers above and below it.
+- The single highest-ROI platform investment for most teams is a feature store that enforces point-in-time correctness — it eliminates training-serving skew, the most common production failure mode.
+- Hidden technical debt (glue code proliferation, undeclared consumers, data dependency chains, feedback loops) is ML-specific and not caught by standard code review — audit for it explicitly at least once per quarter.
+- Start at Maturity Level 1 and earn Level 2 before considering managed platforms — understanding what the platform does for you is essential before paying for it to do it automatically.
+- The dominant ML platform cost at medium scale is serving (inference instances × replicas × hours), not training — optimise inference latency and pack more models per instance before scaling horizontally.
+- Build vs buy rule of thumb: build what differentiates you (feature engineering logic, model architecture); buy or open-source what is commodity (orchestration, dashboarding, container registry).
+- Every component in the platform should have an independent failure mode — a drift alert system that depends on the same infrastructure as the model it monitors is useless when that infrastructure fails.
+- The hardest ML platform problem is organisational, not technical: the platform team must maintain the trust of the ML teams who use it, which means fast iteration on internal APIs and treating ML engineers as customers.

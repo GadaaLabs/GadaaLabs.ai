@@ -1,0 +1,451 @@
+---
+title: "CI/CD for ML — Automated Testing & Deployment Pipelines"
+description: "Build a complete ML CI/CD pipeline: four-layer testing (code, data, model, integration), a GitHub Actions workflow with automatic champion/challenger promotion, containerised training, drift-triggered retraining, canary deployment, and automated rollback."
+duration: 24
+order: 10
+---
+
+ML CI/CD is harder than software CI/CD because you have three artefacts to version and test simultaneously: code, data, and model. A test suite that passes on a code change can still produce a broken model if the training data changed. A model that passes all offline tests can still fail in production if the serving environment diverges from the training environment. This lesson builds the infrastructure to catch failures at every transition.
+
+## Why ML CI/CD Is Different
+
+In software CI/CD, a green test suite means you can deploy. In ML CI/CD:
+
+- Tests are **probabilistic** (AUC = 0.872 ± 0.003; the threshold comparison needs confidence intervals)
+- The **data** is a first-class artefact that can change independently of code
+- A model's **serving environment** (Python version, library versions, hardware) must match its training environment
+- **Retraining** must be triggered not just by code changes but by data drift and calendar schedules
+- **Rollback** must revert both the serving artefact and the preprocessing pipeline, not just the application binary
+
+---
+
+## The Four Test Layers
+
+### Layer 1: Code Tests (pytest)
+
+```python
+# tests/test_feature_engineering.py
+import numpy as np
+import pandas as pd
+import pytest
+from src.features import (
+    cyclical_encode,
+    compute_days_since_reference,
+    frequency_encode,
+)
+
+class TestCyclicalEncode:
+    def test_output_shape(self):
+        s = pd.Series(range(24), name="hour")
+        result = cyclical_encode(s, period=24)
+        assert result.shape == (24, 2)
+        assert "hour_sin" in result.columns
+        assert "hour_cos" in result.columns
+
+    def test_periodicity(self):
+        """Hour 0 and hour 24 should produce the same (sin, cos) values."""
+        s = pd.Series([0, 24], name="hour")
+        result = cyclical_encode(s, period=24)
+        np.testing.assert_allclose(result.iloc[0], result.iloc[1], atol=1e-10)
+
+    def test_range(self):
+        """sin and cos values must be in [-1, 1]."""
+        s = pd.Series(range(0, 24), name="hour")
+        result = cyclical_encode(s, period=24)
+        assert result.values.max() <= 1.0 + 1e-10
+        assert result.values.min() >= -1.0 - 1e-10
+
+class TestFrequencyEncode:
+    def test_sum_to_one(self):
+        s = pd.Series(["a", "b", "a", "c"])
+        result = frequency_encode(s, normalize=True)
+        # Each unique value should appear with its correct frequency
+        assert abs(result[s == "a"].iloc[0] - 0.5) < 1e-10
+        assert abs(result[s == "b"].iloc[0] - 0.25) < 1e-10
+
+    def test_no_nan(self):
+        s = pd.Series(["x", "y", "x"])
+        assert frequency_encode(s).isna().sum() == 0
+
+class TestDataLoader:
+    def test_schema(self, tmp_path):
+        from src.data import load_churn_data
+        df = load_churn_data(tmp_path / "fixture.csv")
+        required_cols = {"tenure_months", "monthly_spend", "churned"}
+        assert required_cols.issubset(df.columns)
+
+    def test_no_duplicate_ids(self, tmp_path):
+        from src.data import load_churn_data
+        df = load_churn_data(tmp_path / "fixture.csv")
+        assert df["customer_id"].nunique() == len(df)
+```
+
+### Layer 2: Data Tests (Great Expectations)
+
+```python
+# tests/test_data_expectations.py
+import great_expectations as gx
+import pandas as pd
+import pytest
+
+@pytest.fixture
+def production_sample():
+    """Load a sample of the latest production data snapshot."""
+    return pd.read_parquet("data/production_snapshot_latest.parquet")
+
+def test_no_null_customer_id(production_sample):
+    ctx    = gx.get_context()
+    ds     = ctx.sources.pandas_default
+    da     = ds.read_dataframe(production_sample)
+    result = da.expect_column_values_to_not_be_null("customer_id")
+    assert result.success, f"Null customer_ids found: {result.result}"
+
+def test_monthly_spend_range(production_sample):
+    ctx    = gx.get_context()
+    ds     = ctx.sources.pandas_default
+    da     = ds.read_dataframe(production_sample)
+    result = da.expect_column_mean_to_be_between(
+        "monthly_spend",
+        min_value=20.0,
+        max_value=400.0,
+    )
+    assert result.success, (
+        f"monthly_spend mean out of expected range: "
+        f"{result.result.get('observed_value')}"
+    )
+
+def test_contract_type_values(production_sample):
+    ctx    = gx.get_context()
+    ds     = ctx.sources.pandas_default
+    da     = ds.read_dataframe(production_sample)
+    result = da.expect_column_values_to_be_in_set(
+        "contract_type",
+        value_set={"monthly", "annual", "multi-year"},
+    )
+    assert result.success, f"Unknown contract_type values: {result.result}"
+```
+
+### Layer 3: Model Tests
+
+```python
+# tests/test_model.py
+import numpy as np
+import pandas as pd
+import joblib
+import pytest
+from sklearn.metrics import roc_auc_score
+
+HOLDOUT_PATH  = "data/holdout_test.parquet"
+MODEL_PATH    = "models/champion.joblib"
+AUC_THRESHOLD = 0.80       # minimum acceptable AUC on holdout
+SLICE_THRESHOLD = 0.74     # minimum AUC within each important slice
+
+@pytest.fixture(scope="module")
+def holdout():
+    return pd.read_parquet(HOLDOUT_PATH)
+
+@pytest.fixture(scope="module")
+def model():
+    return joblib.load(MODEL_PATH)
+
+def test_overall_auc(holdout, model):
+    X = holdout.drop(columns=["churned"])
+    y = holdout["churned"]
+    auc = roc_auc_score(y, model.predict_proba(X)[:, 1])
+    assert auc >= AUC_THRESHOLD, f"AUC {auc:.4f} below threshold {AUC_THRESHOLD}"
+
+def test_invariance_contract_type(holdout, model):
+    """
+    Behavioral/invariance test: changing contract_type from 'monthly' to 'annual'
+    should monotonically decrease predicted churn probability for all samples.
+    """
+    X = holdout.drop(columns=["churned"]).copy()
+    X_monthly = X.copy(); X_monthly["contract_type"] = "monthly"
+    X_annual  = X.copy(); X_annual["contract_type"]  = "annual"
+
+    p_monthly = model.predict_proba(X_monthly)[:, 1]
+    p_annual  = model.predict_proba(X_annual)[:, 1]
+
+    pct_correct = (p_annual < p_monthly).mean()
+    assert pct_correct > 0.90, (
+        f"Only {pct_correct:.1%} of samples showed lower churn with annual contract"
+    )
+
+def test_slice_auc_enterprise(holdout, model):
+    """Slice test: model should perform adequately on enterprise customers."""
+    ent = holdout[holdout["is_enterprise"] == 1]
+    if len(ent) < 30:
+        pytest.skip("Insufficient enterprise samples in holdout")
+    X = ent.drop(columns=["churned"])
+    y = ent["churned"]
+    auc = roc_auc_score(y, model.predict_proba(X)[:, 1])
+    assert auc >= SLICE_THRESHOLD, (
+        f"Enterprise slice AUC {auc:.4f} below threshold {SLICE_THRESHOLD}"
+    )
+
+def test_prediction_coverage(holdout, model):
+    """Integration: model must return a valid probability for all holdout rows."""
+    X     = holdout.drop(columns=["churned"])
+    probs = model.predict_proba(X)[:, 1]
+    assert not np.any(np.isnan(probs)), "NaN predictions detected"
+    assert np.all((probs >= 0) & (probs <= 1)), "Probabilities out of [0, 1]"
+```
+
+---
+
+## Complete GitHub Actions Workflow
+
+```yaml
+# .github/workflows/ml-pipeline.yml
+name: ML Pipeline
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * 1"   # Weekly retraining: Monday 02:00 UTC
+
+env:
+  PYTHON_VERSION: "3.11"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/churn-model
+
+jobs:
+  # ── Job 1: Data validation ──────────────────────────────────────────────────
+  data-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}" }
+      - run: pip install -r requirements-test.txt
+      - name: Download latest data snapshot
+        run: python scripts/download_snapshot.py --dest data/
+      - name: Run Great Expectations data tests
+        run: pytest tests/test_data_expectations.py -v --tb=short
+      - name: Upload data quality report
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-quality-report
+          path: reports/gx_report.html
+
+  # ── Job 2: Train ────────────────────────────────────────────────────────────
+  train:
+    needs: data-validation
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.11-slim
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -r requirements.txt
+      - name: Train challenger model
+        run: python src/train.py --output models/challenger.joblib --run-id ${{ github.sha }}
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      - name: Run code tests
+        run: pytest tests/test_feature_engineering.py tests/test_data_loader.py -v
+      - uses: actions/upload-artifact@v4
+        with:
+          name: challenger-model
+          path: models/challenger.joblib
+
+  # ── Job 3: Evaluate and promote ─────────────────────────────────────────────
+  evaluate:
+    needs: train
+    runs-on: ubuntu-latest
+    outputs:
+      champion_replaced: ${{ steps.promote.outputs.replaced }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}" }
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: { name: challenger-model, path: models/ }
+      - name: Download champion model from registry
+        run: python scripts/download_champion.py --dest models/champion.joblib
+        env: { MLFLOW_TRACKING_URI: "${{ secrets.MLFLOW_TRACKING_URI }}" }
+      - name: Run model tests on challenger
+        run: |
+          MODEL_PATH=models/challenger.joblib \
+          pytest tests/test_model.py -v --tb=short
+      - name: Promote challenger if better than champion
+        id: promote
+        run: |
+          python scripts/promote_if_champion.py \
+            --challenger models/challenger.joblib \
+            --champion   models/champion.joblib   \
+            --holdout    data/holdout_test.parquet \
+            --min-delta  0.005                    \
+            --metric     roc_auc
+        # promote_if_champion.py exits 0 and sets output replaced=true
+        # if challenger AUC > champion AUC + 0.005; exits 0 with replaced=false otherwise
+
+  # ── Job 4: Deploy to staging ────────────────────────────────────────────────
+  deploy-staging:
+    needs: evaluate
+    if: needs.evaluate.outputs.champion_replaced == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+      - name: Deploy to staging
+        run: |
+          kubectl set image deployment/churn-model-staging \
+            server=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          kubectl rollout status deployment/churn-model-staging --timeout=300s
+
+  # ── Job 5: Integration tests ────────────────────────────────────────────────
+  integration-test:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}" }
+      - run: pip install pytest httpx
+      - name: Run end-to-end API tests against staging
+        run: pytest tests/test_integration.py -v
+        env: { API_BASE_URL: "https://staging.churn-api.internal" }
+
+  # ── Job 6: Deploy to production (canary) ────────────────────────────────────
+  deploy-production:
+    needs: integration-test
+    runs-on: ubuntu-latest
+    environment: production   # requires manual approval in GitHub
+    steps:
+      - uses: actions/checkout@v4
+      - name: Canary deploy — 5% traffic
+        run: |
+          python scripts/canary_deploy.py \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --weight 5
+      - name: Monitor canary for 10 minutes
+        run: python scripts/wait_and_check_canary.py --minutes 10 --max-error-rate 0.05
+      - name: Ramp to 25%
+        run: python scripts/canary_deploy.py --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} --weight 25
+      - name: Monitor 25% canary for 10 minutes
+        run: python scripts/wait_and_check_canary.py --minutes 10 --max-error-rate 0.05
+      - name: Full rollout
+        run: python scripts/canary_deploy.py --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} --weight 100
+```
+
+---
+
+## Model Promotion Gate
+
+```python
+# scripts/promote_if_champion.py
+import argparse
+import joblib
+import pandas as pd
+from sklearn.metrics import roc_auc_score
+import subprocess
+import sys
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--challenger", required=True)
+    parser.add_argument("--champion",   required=True)
+    parser.add_argument("--holdout",    required=True)
+    parser.add_argument("--min-delta",  type=float, default=0.005)
+    parser.add_argument("--metric",     default="roc_auc")
+    args = parser.parse_args()
+
+    holdout     = pd.read_parquet(args.holdout)
+    X           = holdout.drop(columns=["churned"])
+    y           = holdout["churned"]
+
+    challenger  = joblib.load(args.challenger)
+    champion    = joblib.load(args.champion)
+
+    ch_auc = roc_auc_score(y, challenger.predict_proba(X)[:, 1])
+    cu_auc = roc_auc_score(y, champion.predict_proba(X)[:, 1])
+
+    print(f"Challenger AUC: {ch_auc:.5f}")
+    print(f"Champion AUC:   {cu_auc:.5f}")
+    print(f"Delta:          {ch_auc - cu_auc:+.5f} (threshold: +{args.min_delta})")
+
+    if ch_auc >= cu_auc + args.min_delta:
+        print("PROMOTING challenger to champion")
+        # Set GitHub Actions output
+        print("replaced=true", file=open("/tmp/promote_output.txt", "w"))
+        sys.exit(0)
+    else:
+        print("Challenger does not beat champion — keeping current model")
+        print("replaced=false", file=open("/tmp/promote_output.txt", "w"))
+        sys.exit(0)   # exit 0 — not a failure, just no promotion
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## Canary Deployment and Automated Rollback
+
+```python
+# scripts/wait_and_check_canary.py
+import argparse
+import time
+import requests
+import sys
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--minutes",       type=float, default=10)
+    parser.add_argument("--max-error-rate",type=float, default=0.05)
+    args = parser.parse_args()
+
+    metrics_url = "http://prometheus.internal/api/v1/query"
+    deadline    = time.time() + args.minutes * 60
+    check_interval = 60  # check every 60 seconds
+
+    while time.time() < deadline:
+        time.sleep(check_interval)
+        resp = requests.get(metrics_url, params={
+            "query": 'rate(http_requests_total{status=~"5.."}[5m]) '
+                     '/ rate(http_requests_total[5m])'
+        })
+        resp.raise_for_status()
+        result = resp.json()["data"]["result"]
+        if not result:
+            print("No metrics yet — waiting")
+            continue
+
+        error_rate = float(result[0]["value"][1])
+        print(f"Current error rate: {error_rate:.3%} (threshold: {args.max_error_rate:.1%})")
+
+        if error_rate > args.max_error_rate:
+            print(f"ERROR: error rate {error_rate:.3%} exceeds threshold — rolling back")
+            # Rollback: revert to N-1 image
+            import subprocess
+            subprocess.run([
+                "kubectl", "rollout", "undo", "deployment/churn-model-production"
+            ], check=True)
+            sys.exit(1)  # fail the workflow step
+
+    print("Canary check passed — error rate within threshold")
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## Key Takeaways
+
+- ML CI/CD requires four test layers because code, data, and model can each break independently: always run code tests, data expectations, model performance tests, and end-to-end integration tests as separate jobs.
+- Data tests using Great Expectations should check null rates, value ranges, and categorical set membership — these catch the most common upstream pipeline breakage before a broken model ever gets trained.
+- Model promotion gates with a minimum delta (e.g. AUC &gt; champion + 0.005 on a fixed holdout set) prevent noisy improvements from triggering unnecessary deployments and protect against overfitting to the current holdout.
+- Behavioral invariance tests (contract_type monthly → annual should always decrease churn probability) catch model regressions that aggregate AUC metrics can miss.
+- Automate retraining on two triggers: a weekly schedule and a drift PSI &gt; 0.2 webhook — the schedule catches gradual concept drift; the webhook catches sudden distributional shifts.
+- Canary deployments (5% → 25% → 100%) with automatic rollback on error rate breach are the safest way to ship ML models because production traffic is the only ground truth for serving correctness.
+- Keep the N-1 model image tagged in your container registry and the N-1 Kubernetes rollout history preserved — rollback should take under 60 seconds, not require a new build.
+- The `environment: production` gate in GitHub Actions requiring manual approval gives a human checkpoint between integration tests passing and production traffic being affected.

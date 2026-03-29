@@ -1,0 +1,435 @@
+---
+title: "Human-in-the-Loop — Approval, Review & Escalation Patterns"
+description: "Design human oversight into autonomous agents. Build an approval queue with timeout escalation, async agent pause-and-resume, Slack approval buttons, feedback-driven threshold learning, gradual autonomy ramp-up, and an immutable audit trail for all HITL events."
+duration: 22
+order: 10
+---
+
+## The HITL Spectrum
+
+Human-in-the-loop is not a binary choice. It is a spectrum of oversight levels, and the correct position on that spectrum depends on task risk, agent confidence, and the cost of a mistake:
+
+**Fully automated**: agent acts without any human involvement. Appropriate for reversible, low-stakes, high-volume tasks where the agent is well-tested and the error rate is acceptably low.
+
+**Human-on-the-loop**: agent acts autonomously, but a human can monitor and intervene. A dashboard shows live agent activity; an operator can pause or roll back.
+
+**Human-in-the-loop**: agent pauses before specific actions and waits for explicit approval. The agent is autonomous for most steps but defers to a human for high-risk ones.
+
+**Human-in-command**: human approves every action. Appropriate during initial deployment when agent behaviour is not yet trusted.
+
+Most production agent systems start at human-in-command and progressively move toward human-on-the-loop as the track record accumulates.
+
+## When to Require Approval
+
+Define explicit criteria for when the agent must pause and wait for a human:
+
+```python
+from enum import Enum
+import decimal
+
+
+class RiskLevel(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+HIGH_RISK_ACTIONS = {
+    "delete_record", "send_email", "post_to_external_api",
+    "execute_code", "write_file", "database_modify"
+}
+
+APPROVAL_THRESHOLDS = {
+    "financial_amount_usd": decimal.Decimal("500"),  # > $500 requires approval
+    "agent_confidence": 0.6,    # confidence < 60% requires approval
+    "novel_task_type": True,    # task type not seen before requires approval
+}
+
+
+def assess_risk(action: str, action_args: dict, agent_confidence: float) -> RiskLevel:
+    """
+    Assess the risk level of a proposed agent action.
+    Returns the risk level, which determines whether approval is required.
+    """
+    if action in HIGH_RISK_ACTIONS:
+        return RiskLevel.HIGH
+
+    # Financial threshold check
+    amount = action_args.get("amount_usd") or action_args.get("amount")
+    if amount and decimal.Decimal(str(amount)) > APPROVAL_THRESHOLDS["financial_amount_usd"]:
+        return RiskLevel.HIGH
+
+    # Low confidence check
+    if agent_confidence < APPROVAL_THRESHOLDS["agent_confidence"]:
+        return RiskLevel.MEDIUM
+
+    return RiskLevel.LOW
+
+
+def requires_approval(risk_level: RiskLevel) -> bool:
+    return risk_level in {RiskLevel.HIGH, RiskLevel.CRITICAL}
+```
+
+## Approval Queue with Escalation
+
+```python
+import sqlite3
+import datetime
+import uuid
+import json
+
+
+class ApprovalQueue:
+    """
+    Persistent approval queue for agent actions.
+    Supports timeout-based escalation to a manager.
+    """
+
+    def __init__(self, db_path: str = "approvals.db"):
+        self.db_path = db_path
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS approval_requests (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    action_args TEXT,
+                    context TEXT,
+                    urgency TEXT DEFAULT 'normal',
+                    risk_level TEXT DEFAULT 'medium',
+                    status TEXT DEFAULT 'pending',
+                    assignee TEXT,
+                    reviewer TEXT,
+                    reviewer_notes TEXT,
+                    escalated INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT,
+                    escalate_after_minutes INTEGER DEFAULT 60
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS hitl_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    actor TEXT,
+                    notes TEXT,
+                    timestamp TEXT NOT NULL
+                )
+            """)
+
+    def create_request(
+        self,
+        task_id: str,
+        action: str,
+        action_args: dict,
+        context: str,
+        urgency: str = "normal",
+        risk_level: str = "high",
+        assignee: str | None = None,
+        escalate_after_minutes: int = 60,
+    ) -> str:
+        """Create a new approval request and return the request ID."""
+        request_id = str(uuid.uuid4())
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """INSERT INTO approval_requests
+                   (id, task_id, action, action_args, context, urgency, risk_level,
+                    assignee, created_at, escalate_after_minutes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (request_id, task_id, action, json.dumps(action_args), context,
+                 urgency, risk_level, assignee,
+                 datetime.datetime.utcnow().isoformat(), escalate_after_minutes),
+            )
+            self._log_event("request_created", request_id, actor="agent", notes=f"Action: {action}")
+        return request_id
+
+    def approve(self, request_id: str, reviewer: str, notes: str = "") -> None:
+        """Approve a pending request."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE approval_requests SET status='approved', reviewer=?, reviewer_notes=?, resolved_at=? WHERE id=?",
+                (reviewer, notes, datetime.datetime.utcnow().isoformat(), request_id),
+            )
+            self._log_event("approved", request_id, actor=reviewer, notes=notes, conn=conn)
+
+    def reject(self, request_id: str, reviewer: str, reason: str = "") -> None:
+        """Reject a pending request."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE approval_requests SET status='rejected', reviewer=?, reviewer_notes=?, resolved_at=? WHERE id=?",
+                (reviewer, reason, datetime.datetime.utcnow().isoformat(), request_id),
+            )
+            self._log_event("rejected", request_id, actor=reviewer, notes=reason, conn=conn)
+
+    def get_status(self, request_id: str) -> str:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute("SELECT status FROM approval_requests WHERE id=?", (request_id,)).fetchone()
+        return row[0] if row else "not_found"
+
+    def get_pending(self, assignee: str | None = None) -> list[dict]:
+        """Return all pending approval requests, optionally filtered by assignee."""
+        with sqlite3.connect(self.db_path) as conn:
+            if assignee:
+                rows = conn.execute(
+                    "SELECT id, task_id, action, action_args, context, urgency, risk_level, created_at FROM approval_requests WHERE status='pending' AND assignee=? ORDER BY created_at",
+                    (assignee,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, task_id, action, action_args, context, urgency, risk_level, created_at FROM approval_requests WHERE status='pending' ORDER BY created_at",
+                ).fetchall()
+        return [
+            {"id": r[0], "task_id": r[1], "action": r[2], "action_args": json.loads(r[3]),
+             "context": r[4], "urgency": r[5], "risk_level": r[6], "created_at": r[7]}
+            for r in rows
+        ]
+
+    def escalate_overdue(self, escalation_fn) -> int:
+        """Escalate requests that have not been resolved within their timeout."""
+        now = datetime.datetime.utcnow()
+        with sqlite3.connect(self.db_path) as conn:
+            pending = conn.execute(
+                "SELECT id, task_id, action, created_at, escalate_after_minutes, escalated FROM approval_requests WHERE status='pending'"
+            ).fetchall()
+
+        escalated_count = 0
+        for row in pending:
+            req_id, task_id, action, created_at_str, timeout_mins, already_escalated = row
+            created_at = datetime.datetime.fromisoformat(created_at_str)
+            age_minutes = (now - created_at).total_seconds() / 60
+
+            if age_minutes > timeout_mins and not already_escalated:
+                escalation_fn(request_id=req_id, action=action, age_minutes=age_minutes)
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.execute("UPDATE approval_requests SET escalated=1 WHERE id=?", (req_id,))
+                    self._log_event("escalated", req_id, actor="system", notes=f"Age: {age_minutes:.0f} min")
+                escalated_count += 1
+
+        return escalated_count
+
+    def _log_event(self, event_type: str, request_id: str, actor: str, notes: str = "", conn=None) -> None:
+        """Write an immutable audit event."""
+        record = (event_type, request_id, actor, notes, datetime.datetime.utcnow().isoformat())
+        if conn:
+            conn.execute("INSERT INTO hitl_audit_log (event_type, request_id, actor, notes, timestamp) VALUES (?, ?, ?, ?, ?)", record)
+        else:
+            with sqlite3.connect(self.db_path) as c:
+                c.execute("INSERT INTO hitl_audit_log (event_type, request_id, actor, notes, timestamp) VALUES (?, ?, ?, ?, ?)", record)
+```
+
+## Async Agent Pause-and-Resume
+
+When an agent needs approval, it should not block a thread. Instead, it creates an approval request, stores its state, and continues other work. When approval arrives, it resumes:
+
+```python
+import asyncio
+import time
+
+
+class PauseableAgent:
+    """
+    An agent that can pause on high-risk actions and resume after approval.
+    """
+
+    def __init__(self, approval_queue: ApprovalQueue, poll_interval: float = 2.0):
+        self.queue = approval_queue
+        self.poll_interval = poll_interval
+
+    async def execute_with_approval(
+        self,
+        task_id: str,
+        action: str,
+        action_args: dict,
+        action_fn,
+        context: str,
+        timeout_seconds: float = 300.0,   # 5 minutes max wait
+    ) -> dict:
+        """
+        Execute an action that requires human approval.
+        Creates the approval request, polls for decision, then executes or skips.
+        """
+        request_id = self.queue.create_request(
+            task_id=task_id,
+            action=action,
+            action_args=action_args,
+            context=context,
+        )
+        print(f"Approval requested: {request_id} for action '{action}'")
+
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            status = self.queue.get_status(request_id)
+
+            if status == "approved":
+                print(f"Approved: {request_id}. Executing action.")
+                result = action_fn(**action_args)
+                return {"status": "executed", "result": result, "request_id": request_id}
+
+            elif status == "rejected":
+                print(f"Rejected: {request_id}. Skipping action.")
+                return {"status": "skipped", "reason": "human rejected", "request_id": request_id}
+
+            await asyncio.sleep(self.poll_interval)
+
+        # Timeout
+        return {"status": "timed_out", "request_id": request_id}
+```
+
+## Slack Approval Buttons
+
+In production, route approval requests to Slack with interactive buttons:
+
+```python
+# Requires slack-bolt: pip install slack-bolt
+
+def send_slack_approval_request(
+    channel: str,
+    request_id: str,
+    action: str,
+    context: str,
+    slack_token: str,
+) -> None:
+    """
+    Send an approval request to Slack with Approve/Reject buttons.
+    The Slack app must be configured with an action endpoint.
+    """
+    import requests as http_requests
+
+    blocks = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"*Agent Approval Request*\n*Action:* `{action}`\n*Context:* {context[:300]}"},
+        },
+        {
+            "type": "actions",
+            "block_id": f"approval_{request_id}",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Approve"},
+                    "style": "primary",
+                    "action_id": "approve_action",
+                    "value": request_id,
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Reject"},
+                    "style": "danger",
+                    "action_id": "reject_action",
+                    "value": request_id,
+                },
+            ],
+        },
+    ]
+
+    http_requests.post(
+        "https://slack.com/api/chat.postMessage",
+        headers={"Authorization": f"Bearer {slack_token}", "Content-Type": "application/json"},
+        json={"channel": channel, "blocks": blocks},
+    )
+```
+
+## Feedback-Driven Threshold Learning
+
+Track every human decision (approve/reject) and analyse patterns to tune risk thresholds automatically:
+
+```python
+import sqlite3
+
+
+def analyse_override_patterns(db_path: str = "approvals.db") -> dict:
+    """
+    Analyse human override decisions to identify patterns.
+    If humans approve 98%+ of a certain action type, consider lowering its risk level.
+    """
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute("""
+            SELECT action, status, COUNT(*) as count
+            FROM approval_requests
+            WHERE status IN ('approved', 'rejected')
+            GROUP BY action, status
+        """).fetchall()
+
+    action_stats: dict[str, dict] = {}
+    for action, status, count in rows:
+        action_stats.setdefault(action, {"approved": 0, "rejected": 0})
+        action_stats[action][status] = count
+
+    recommendations = []
+    for action, stats in action_stats.items():
+        total = stats["approved"] + stats["rejected"]
+        if total >= 30:  # enough samples for a meaningful signal
+            approval_rate = stats["approved"] / total
+            if approval_rate >= 0.98:
+                recommendations.append({
+                    "action": action,
+                    "approval_rate": approval_rate,
+                    "total_decisions": total,
+                    "recommendation": "Consider making this action autonomous (approval_rate >= 98%)",
+                })
+            elif approval_rate <= 0.40:
+                recommendations.append({
+                    "action": action,
+                    "approval_rate": approval_rate,
+                    "total_decisions": total,
+                    "recommendation": "Consider blocking this action entirely (humans reject 60%+ of the time)",
+                })
+
+    return {"action_stats": action_stats, "recommendations": recommendations}
+```
+
+## Gradual Autonomy Ramp-Up
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class AutonomyLevel:
+    name: str
+    approval_rate_required: float   # % of requests that require human approval
+    sample_rate: float              # % of autonomous actions that are spot-checked
+    min_days_at_previous_level: int
+
+
+AUTONOMY_LEVELS = [
+    AutonomyLevel("level_0_supervised",     approval_rate_required=1.0,  sample_rate=1.0,  min_days_at_previous_level=0),
+    AutonomyLevel("level_1_spot_check_20",  approval_rate_required=0.20, sample_rate=0.20, min_days_at_previous_level=14),
+    AutonomyLevel("level_2_spot_check_5",   approval_rate_required=0.05, sample_rate=0.05, min_days_at_previous_level=30),
+    AutonomyLevel("level_3_autonomous",     approval_rate_required=0.0,  sample_rate=0.02, min_days_at_previous_level=60),
+]
+
+
+def get_recommended_autonomy_level(
+    override_rate_last_30_days: float,
+    days_at_current_level: int,
+    current_level_index: int,
+) -> int:
+    """
+    Recommend the next autonomy level based on human override rate and time at current level.
+    Returns the recommended level index.
+    """
+    # Only upgrade if override rate is low and enough time has passed
+    if current_level_index >= len(AUTONOMY_LEVELS) - 1:
+        return current_level_index  # already at max autonomy
+
+    next_level = AUTONOMY_LEVELS[current_level_index + 1]
+    if (override_rate_last_30_days < 0.05
+            and days_at_current_level >= next_level.min_days_at_previous_level):
+        return current_level_index + 1
+
+    return current_level_index
+```
+
+## Key Takeaways
+
+- HITL is a spectrum: start at human-in-command, progressively reduce oversight as the agent's track record builds.
+- Define explicit approval triggers: irreversible actions, financial thresholds, low agent confidence, and novel task types.
+- The approval queue must be persistent (not in-memory) — if the server restarts, pending approvals must survive.
+- Timeout escalation is essential: an unanswered approval request should escalate to a manager, then auto-reject if still unresolved — never block indefinitely.
+- Async pause-and-resume lets the agent work on other tasks while waiting for approval, rather than blocking a thread.
+- Slack interactive buttons are the most ergonomic approval interface for engineering teams; email with unique token links works for non-technical approvers.
+- Track every approval and rejection in an immutable audit log — this is both a compliance requirement and the data source for threshold learning.
+- After 30+ decisions on an action type, analyse the override rate: &gt;98% approval suggests autonomy is safe; &lt;40% approval suggests the action should be blocked.

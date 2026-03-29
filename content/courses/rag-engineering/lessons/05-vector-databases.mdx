@@ -1,0 +1,332 @@
+---
+title: "Vector Databases — HNSW, IVF, Filtering & Production Ops"
+description: "Master the indexing algorithms that make ANN search fast at scale: HNSW and IVF. Learn quantisation for memory reduction, filtered search strategies, Qdrant and Weaviate in practice, and multi-tenancy patterns for production deployments."
+duration: 28
+order: 5
+---
+
+## Why Exact k-NN Does Not Scale
+
+The simplest possible vector search is exact k-nearest-neighbour: iterate over every vector in the database, compute the distance to the query vector, return the k smallest. This is O(n) in both time and — for large collections — effectively in memory bandwidth. At one million 1536-dimensional float32 vectors the index occupies 6 GB of memory, and each query touches all of it.
+
+A query for "top-5 similar documents" at one million vectors with a brute-force scan takes roughly 400 ms on a modern CPU. At ten million vectors it is four seconds. Neither is acceptable for a synchronous API.
+
+Approximate Nearest Neighbour (ANN) algorithms trade a small amount of recall for orders-of-magnitude faster search. The two dominant families are graph-based (HNSW) and cluster-based (IVF).
+
+## HNSW — Hierarchical Navigable Small World
+
+HNSW builds a multi-layer directed graph. Each vector becomes a node. At the top layer only a small fraction of nodes are present; each successive layer has more nodes. At the bottom layer (layer 0) every node appears.
+
+When inserting a new vector:
+
+1. Randomly assign the node to a maximum layer using an exponential distribution — most nodes stay at layer 0, a few reach layer 1, fewer still reach layer 2, and so on.
+2. Starting from a fixed entry point at the top layer, greedily navigate to the ef_construction nearest neighbours at the current layer.
+3. Step down to the next layer, starting from the best candidates found above.
+4. At the node's maximum layer and below, add bidirectional edges to the M nearest neighbours found.
+
+At query time, navigation starts at the top layer, greedily moves toward the query vector, then descends to layer 0 where it expands a beam of ef_search candidates before returning the top-k.
+
+### Key Parameters
+
+**M** (default 16): the number of bidirectional edges per node. Higher M → more accurate, higher memory, slower build. The index memory footprint is approximately `n × M × 2 × 4 bytes`. At M=16 and one million vectors: ~128 MB overhead on top of the raw vectors.
+
+**ef_construction** (default 200): the beam width during graph construction. Higher → more accurate graph structure, slower inserts. This is a build-time-only parameter.
+
+**ef_search** (default 50): the beam width at query time. This is your primary knob for trading recall against latency at runtime. Increasing ef_search from 50 to 200 typically raises Recall@10 from ~95% to ~99% at the cost of 2–3× higher latency.
+
+```python
+import hnswlib
+import numpy as np
+
+DIM = 1536  # OpenAI ada-002 or BGE-large dimension
+
+# Build an HNSW index
+index = hnswlib.Index(space="cosine", dim=DIM)
+index.init_index(
+    max_elements=100_000,
+    ef_construction=200,   # beam width during build
+    M=16,                  # edges per node
+)
+
+# Insert vectors with integer IDs
+vectors = np.random.rand(10_000, DIM).astype("float32")
+ids = np.arange(10_000)
+index.add_items(vectors, ids)
+
+# Set query-time beam width
+index.set_ef(64)
+
+# Query: returns (ids_array, distances_array)
+query = np.random.rand(1, DIM).astype("float32")
+labels, distances = index.knn_query(query, k=5)
+print(labels, distances)
+```
+
+## IVF — Inverted File Index
+
+IVF partitions the vector space into nlist clusters using k-means. Each vector is assigned to its nearest cluster centroid. To search, IVF examines only the nprobe nearest clusters rather than all clusters, dramatically reducing the number of distance computations.
+
+**nlist** (number of clusters): rule of thumb is `sqrt(n)`. For one million vectors: 1000 clusters. More clusters → finer partitioning → faster search but more memory for centroids.
+
+**nprobe** (clusters to search): typical range is 10–50. Higher nprobe → higher recall → higher latency. At nprobe = nlist you get exact search.
+
+IVF is typically built on top of quantised vectors for even further memory reduction. The canonical combination is IVF + PQ (Product Quantisation), written as IVFPQ in FAISS.
+
+```python
+import faiss
+import numpy as np
+
+DIM = 1536
+N = 100_000
+
+vectors = np.random.rand(N, DIM).astype("float32")
+faiss.normalize_L2(vectors)  # normalise for cosine similarity via inner product
+
+# Build IVF-Flat index
+nlist = int(np.sqrt(N))
+quantiser = faiss.IndexFlatIP(DIM)              # exact coarse quantiser
+index = faiss.IndexIVFFlat(quantiser, DIM, nlist, faiss.METRIC_INNER_PRODUCT)
+
+# IVF must be trained before adding vectors
+index.train(vectors)
+index.add(vectors)
+
+# Set probe count before querying
+index.nprobe = 32
+
+query = np.random.rand(1, DIM).astype("float32")
+faiss.normalize_L2(query)
+distances, labels = index.search(query, k=5)
+print(labels, distances)
+```
+
+### Recall-Latency-Cost Comparison
+
+| Algorithm | Recall@10 | Query Latency (1M vecs) | Memory | Best For |
+|-----------|-----------|------------------------|--------|----------|
+| Brute Force | 100% | ~400 ms | 6 GB | &lt;50K vectors |
+| HNSW M=16, ef=64 | ~95% | 2–5 ms | 6.1 GB | General purpose |
+| HNSW M=32, ef=128 | ~99% | 8–15 ms | 6.2 GB | High-recall needs |
+| IVF nprobe=32 | ~92% | 1–3 ms | 6 GB | Batch workloads |
+| IVFPQ | ~85% | 1–2 ms | 200 MB | Memory-constrained |
+
+## Quantisation — Reducing Memory Without Killing Recall
+
+### Scalar Quantisation (SQ8)
+
+SQ8 compresses each float32 component to a uint8 integer by finding the min and max in each dimension and linearly mapping to [0, 255]. Four bytes become one byte — 4× compression. Recall loss at Recall@10 is typically under 1% because the relative ordering of distances is preserved.
+
+```python
+# FAISS scalar quantisation
+import faiss
+
+DIM = 1536
+sq_index = faiss.IndexScalarQuantizer(DIM, faiss.ScalarQuantizer.QT_8bit, faiss.METRIC_INNER_PRODUCT)
+sq_index.train(vectors)
+sq_index.add(vectors)
+```
+
+### Product Quantisation (PQ)
+
+PQ divides each d-dimensional vector into M sub-vectors of dimension d/M. Each sub-vector is independently quantised against a codebook of k* centroids (typically k* = 256). Each sub-vector is then stored as a single byte — its codebook index.
+
+For a 1536-dimensional vector with M=48 sub-spaces: 1536/48 = 32 dimensions per sub-vector, each stored as one byte. Total storage: 48 bytes per vector instead of 6144 bytes — a 128× compression. The cost is higher recall loss (typically 5–15% at Recall@10) due to the coarser approximation.
+
+```python
+# FAISS PQ index
+M_subspaces = 48   # number of sub-vectors; DIM must be divisible by M
+bits_per_code = 8  # 2^8 = 256 centroids per sub-space
+
+pq_index = faiss.IndexPQ(DIM, M_subspaces, bits_per_code)
+pq_index.train(vectors)
+pq_index.add(vectors)
+```
+
+## Filtered Search — The Hard Problem
+
+Filtered vector search means "find the k nearest neighbours to this query vector, but only among documents where `category == 'legal'`". This sounds simple but has sharp failure modes.
+
+### Pre-filter (Dangerous)
+
+Restrict the candidate set to matching documents before ANN search, then search only within that subset. Problem: if the filter is selective (only 500 matches out of 1M), HNSW's graph structure cannot navigate to k=10 results because the sparse subset has no good graph edges. Recall collapses. Pre-filter works only when the filter matches at least ~10% of the corpus.
+
+### Post-filter (Wasteful)
+
+Run ANN search without filter, return top-100, then apply filter. If the filter discards 95% of results, you may have fewer than k=5 results after filtering — and you wasted the ANN compute.
+
+### Filtered Graph Traversal (Best Approach)
+
+Filter predicates are evaluated during graph traversal itself. Only nodes that pass the filter are considered as valid neighbours. Qdrant implements this natively. The graph exploration path adapts to the filtered subset, maintaining high recall even with selective filters.
+
+## Qdrant in Practice
+
+Qdrant is the recommended production vector database for most RAG applications: it supports filtered HNSW natively, runs as a single binary or in Kubernetes, and has a clean Python client.
+
+```python
+from qdrant_client import QdrantClient
+from qdrant_client.models import (
+    Distance,
+    VectorParams,
+    HnswConfigDiff,
+    PointStruct,
+    Filter,
+    FieldCondition,
+    MatchValue,
+)
+import numpy as np
+
+# Connect to local Qdrant (or use cloud URL + api_key)
+client = QdrantClient(url="http://localhost:6333")
+
+COLLECTION = "rag_chunks"
+DIM = 1536
+
+# Create collection with custom HNSW config
+client.recreate_collection(
+    collection_name=COLLECTION,
+    vectors_config=VectorParams(size=DIM, distance=Distance.COSINE),
+    hnsw_config=HnswConfigDiff(
+        m=16,
+        ef_construct=200,
+        full_scan_threshold=10_000,  # use brute force below this count
+        on_disk=False,               # keep HNSW graph in RAM
+    ),
+)
+
+# Upsert points with payload metadata
+def upsert_chunks(chunks: list[dict], embeddings: list[list[float]]) -> None:
+    """Insert or update a batch of chunks with their embeddings."""
+    points = [
+        PointStruct(
+            id=chunk["id"],
+            vector=embedding,
+            payload={
+                "text": chunk["text"],
+                "source": chunk["source"],
+                "category": chunk["category"],
+                "tenant_id": chunk["tenant_id"],
+            },
+        )
+        for chunk, embedding in zip(chunks, embeddings)
+    ]
+    client.upsert(collection_name=COLLECTION, points=points)
+
+# Filtered search: only return chunks for a specific tenant
+def search_with_filter(
+    query_vector: list[float],
+    tenant_id: str,
+    category: str | None = None,
+    k: int = 5,
+) -> list[dict]:
+    """Search with mandatory tenant filter and optional category filter."""
+    conditions = [FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
+    if category:
+        conditions.append(FieldCondition(key="category", match=MatchValue(value=category)))
+
+    results = client.search(
+        collection_name=COLLECTION,
+        query_vector=query_vector,
+        query_filter=Filter(must=conditions),
+        limit=k,
+        with_payload=True,
+    )
+    return [{"text": r.payload["text"], "score": r.score, "source": r.payload["source"]} for r in results]
+
+# Paginated scroll — for batch operations, not for query-time retrieval
+def scroll_all_chunks(tenant_id: str) -> list[dict]:
+    """Retrieve all chunks for a tenant via scroll (offset-based pagination)."""
+    all_chunks = []
+    offset = None
+    while True:
+        records, offset = client.scroll(
+            collection_name=COLLECTION,
+            scroll_filter=Filter(must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]),
+            limit=100,
+            offset=offset,
+            with_payload=True,
+        )
+        all_chunks.extend(records)
+        if offset is None:
+            break
+    return all_chunks
+```
+
+## Weaviate — Hybrid Search Built-In
+
+Weaviate ships with native BM25 + vector hybrid search. You do not need a separate keyword search engine.
+
+```python
+import weaviate
+
+client = weaviate.Client("http://localhost:8080")
+
+# Hybrid search: alpha=0 is pure BM25, alpha=1 is pure vector, 0.5 blends both
+result = (
+    client.query
+    .get("Document", ["text", "source"])
+    .with_hybrid(query="vector database HNSW", alpha=0.5)
+    .with_limit(5)
+    .do()
+)
+print(result["data"]["Get"]["Document"])
+```
+
+## Pinecone — Serverless vs Pod Architecture
+
+Pinecone Serverless stores vectors on object storage and loads index pages on demand. It is cost-effective for sporadic workloads but has higher cold-start latency (~100–300 ms). Pod-based deployments keep the entire index in memory for consistent sub-10ms latency. For production RAG with &gt;100 QPS, choose pods.
+
+## Multi-Tenancy Strategies
+
+**Per-tenant collections**: each tenant gets its own Qdrant collection. Strong isolation — a bug in one tenant's query cannot leak into another's. Cost scales linearly with tenant count because each collection has its own HNSW graph overhead. Best for &lt;100 tenants with large per-tenant data volumes.
+
+**Metadata filter**: all tenants share one collection, each chunk carries a `tenant_id` payload field, all queries include a mandatory `tenant_id` filter. More cost-effective for hundreds or thousands of tenants. Risk: a missing filter in application code leaks cross-tenant data. Mitigate by wrapping all search calls in a TenantSearchClient that always injects the filter.
+
+```python
+class TenantSearchClient:
+    """Wrapper that enforces tenant isolation on every query."""
+
+    def __init__(self, client: QdrantClient, collection: str, tenant_id: str):
+        self._client = client
+        self._collection = collection
+        self._tenant_id = tenant_id
+
+    def search(self, query_vector: list[float], k: int = 5) -> list[dict]:
+        """Always injects tenant_id filter — callers cannot bypass it."""
+        results = self._client.search(
+            collection_name=self._collection,
+            query_vector=query_vector,
+            query_filter=Filter(
+                must=[FieldCondition(key="tenant_id", match=MatchValue(value=self._tenant_id))]
+            ),
+            limit=k,
+            with_payload=True,
+        )
+        return [{"text": r.payload["text"], "score": r.score} for r in results]
+```
+
+## Index Maintenance
+
+**When to re-index**: whenever you change the embedding model. The new model produces vectors in a different geometric space — old vectors are incompatible with new queries. Strategy: build a new collection with the new model in parallel, run a canary test, cut over, delete the old collection.
+
+**Segment merging**: Qdrant and similar databases organise data in segments. As you insert and delete, small segments accumulate and degrade query performance. Most databases trigger automatic background merging; for Qdrant you can trigger it explicitly:
+
+```python
+# Trigger optimisation (segment merging) manually if needed
+client.update_collection(
+    collection_name=COLLECTION,
+    optimizer_config={"indexing_threshold": 20_000},
+)
+```
+
+**Tombstones and deletes**: deleting a point marks it as a tombstone. It is still visited during graph traversal but filtered from results. High delete rates degrade recall because the graph still routes through tombstoned nodes. Compact the collection periodically after bulk deletes.
+
+## Key Takeaways
+
+- Exact k-NN is O(n) and becomes unacceptable past ~50K vectors at interactive latency; use ANN algorithms for production.
+- HNSW is the general-purpose choice: tune M for the recall-memory tradeoff, tune ef_search at runtime to balance recall and latency.
+- IVF works well for batch workloads; choose nprobe = 10–50 and nlist ≈ sqrt(n).
+- SQ8 cuts memory 4× with under 1% recall loss; PQ cuts it 32–128× but with meaningful recall cost — use PQ only when memory is the binding constraint.
+- Pre-filtering is dangerous with selective filters; use a vector database that supports filtered graph traversal (Qdrant, Weaviate) to preserve recall.
+- For multi-tenancy, wrap all search calls in a client that enforces the tenant filter — never trust callers to inject it themselves.
+- Re-index from scratch whenever you change embedding models; the vector space is incompatible across models.
+- Monitor segment health and tombstone accumulation; trigger compaction after bulk deletes.

@@ -1,0 +1,413 @@
+---
+title: "Agent Memory — Short-Term, Long-Term & Episodic"
+description: "Give agents persistent memory across sessions. Implement sliding window and LLM-summarisation for in-context management, ChromaDB episodic memory for past interaction recall, SQLite semantic memory for structured facts, and a complete memory-augmented agent."
+duration: 24
+order: 5
+---
+
+## The Four Memory Types
+
+Memory in agent systems maps to four distinct mechanisms:
+
+**In-context memory** (short-term): the conversation history passed to the LLM in every call. Limited by the context window — typically 8K–128K tokens. Fast, automatic, but ephemeral.
+
+**Working memory** (task state): the temporary dictionary of tool results, intermediate outputs, and task variables accumulated during a single task. Cleared when the task completes.
+
+**Episodic memory** (past interactions): summaries of previous sessions, stored in a vector database. Retrieved at the start of each new session by similarity search. Enables "I know you prefer concise answers" or "last time you asked about X, we resolved it by Y".
+
+**Semantic memory** (structured knowledge): facts about the world or the user stored as key-value pairs or a graph. Retrieved by key lookup. Examples: user preferences, system configuration facts, learned domain knowledge.
+
+## In-Context Memory Management
+
+### Sliding Window
+
+The simplest approach: keep only the last N messages. Discard older messages when the window overflows. The problem: important context from early in the conversation is lost.
+
+```python
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ConversationBuffer:
+    """Sliding window conversation history manager."""
+    max_messages: int = 20   # keep last 20 messages (10 turns)
+    messages: list[dict] = field(default_factory=list)
+
+    def add(self, role: str, content: str) -> None:
+        """Add a message, trimming oldest if window is full."""
+        self.messages.append({"role": role, "content": content})
+        # Keep system message (index 0) + last (max_messages - 1) others
+        if len(self.messages) > self.max_messages:
+            system_msgs = [m for m in self.messages if m["role"] == "system"]
+            non_system = [m for m in self.messages if m["role"] != "system"]
+            # Trim oldest non-system messages
+            self.messages = system_msgs + non_system[-(self.max_messages - len(system_msgs)):]
+
+    def get(self) -> list[dict]:
+        return list(self.messages)
+
+    @property
+    def token_estimate(self) -> int:
+        """Rough token estimate: 1 token ≈ 4 characters."""
+        return sum(len(m["content"]) // 4 for m in self.messages)
+```
+
+### LLM Summarisation Compression
+
+When the context exceeds a token threshold, ask the LLM to summarise the oldest half of the conversation, replace those messages with the summary, and continue.
+
+```python
+from groq import Groq
+
+groq_client = Groq()
+
+SUMMARISE_PROMPT = """Summarise the following conversation excerpt in 3-5 bullet points.
+Preserve: key decisions made, important facts established, user preferences expressed, errors encountered.
+Be concise — this summary will replace the original messages to save context space.
+
+CONVERSATION:
+{conversation}
+
+SUMMARY (bullet points):"""
+
+
+def compress_history(
+    messages: list[dict],
+    token_threshold: int = 4000,
+    keep_recent: int = 6,
+) -> list[dict]:
+    """
+    When conversation exceeds token_threshold tokens, summarise the older half.
+    Always keeps the system message and the most recent keep_recent messages intact.
+    """
+    total_tokens = sum(len(m["content"]) // 4 for m in messages)
+    if total_tokens < token_threshold:
+        return messages
+
+    system_msgs = [m for m in messages if m["role"] == "system"]
+    non_system = [m for m in messages if m["role"] != "system"]
+
+    if len(non_system) <= keep_recent:
+        return messages  # not enough history to compress
+
+    to_summarise = non_system[:-keep_recent]
+    to_keep = non_system[-keep_recent:]
+
+    # Format conversation for summarisation
+    conv_text = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in to_summarise)
+    response = groq_client.chat.completions.create(
+        model="llama-3.1-8b-instant",   # small model is fine for summarisation
+        messages=[{"role": "user", "content": SUMMARISE_PROMPT.format(conversation=conv_text)}],
+        max_tokens=300,
+        temperature=0.3,
+    )
+    summary = response.choices[0].message.content.strip()
+
+    # Replace old messages with a single summary message
+    summary_message = {
+        "role": "user",
+        "content": f"[CONVERSATION SUMMARY - earlier messages condensed]\n{summary}",
+    }
+    return system_msgs + [summary_message] + to_keep
+```
+
+## Episodic Memory with ChromaDB
+
+Episodic memory stores summaries of past interactions with embeddings so future sessions can retrieve relevant past context.
+
+```python
+import chromadb
+import datetime
+import hashlib
+from sentence_transformers import SentenceTransformer
+
+embed_model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+chroma_client = chromadb.PersistentClient(path="./episodic_memory")
+
+
+class EpisodicMemory:
+    """
+    Vector-backed episodic memory for storing and retrieving past interactions.
+    Each interaction is stored as a summary with metadata.
+    """
+
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+        self.collection = chroma_client.get_or_create_collection(
+            name=f"episodes_{user_id}",
+            metadata={"hnsw:space": "cosine"},
+        )
+
+    def add_interaction(
+        self,
+        summary: str,
+        task_type: str,
+        outcome: str = "success",
+        metadata: dict | None = None,
+    ) -> str:
+        """
+        Store a session summary in episodic memory.
+        Returns the generated episode_id.
+        """
+        episode_id = hashlib.sha256(
+            f"{self.user_id}{summary}{datetime.datetime.utcnow().isoformat()}".encode()
+        ).hexdigest()[:16]
+
+        embedding = embed_model.encode([summary], normalize_embeddings=True)[0].tolist()
+
+        self.collection.upsert(
+            ids=[episode_id],
+            embeddings=[embedding],
+            documents=[summary],
+            metadatas=[{
+                "user_id": self.user_id,
+                "task_type": task_type,
+                "outcome": outcome,
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                **(metadata or {}),
+            }],
+        )
+        return episode_id
+
+    def retrieve_relevant(self, query: str, k: int = 3) -> list[dict]:
+        """
+        Retrieve the k most relevant past interactions for the current query.
+        Uses cosine similarity on the summary embeddings.
+        """
+        if self.collection.count() == 0:
+            return []
+
+        query_vec = embed_model.encode([query], normalize_embeddings=True)[0].tolist()
+        results = self.collection.query(
+            query_embeddings=[query_vec],
+            n_results=min(k, self.collection.count()),
+            include=["documents", "metadatas", "distances"],
+        )
+
+        episodes = []
+        for doc, meta, dist in zip(
+            results["documents"][0],
+            results["metadatas"][0],
+            results["distances"][0],
+        ):
+            episodes.append({
+                "summary": doc,
+                "task_type": meta.get("task_type"),
+                "outcome": meta.get("outcome"),
+                "timestamp": meta.get("timestamp"),
+                "relevance": 1.0 - dist,   # cosine distance to similarity
+            })
+        return episodes
+
+    def summarise_session(self, messages: list[dict]) -> str:
+        """Generate a compact summary of a session for episodic storage."""
+        conv_text = "\n".join(f"{m['role'].upper()}: {m['content'][:200]}" for m in messages[-10:])
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{
+                "role": "user",
+                "content": f"Summarise this conversation in 2-3 sentences for future memory retrieval:\n{conv_text}",
+            }],
+            max_tokens=150,
+            temperature=0.3,
+        )
+        return response.choices[0].message.content.strip()
+```
+
+## Semantic Memory — Structured Knowledge
+
+Semantic memory stores structured facts: user preferences, configuration knowledge, domain facts the agent has learned. Unlike episodic memory (similarity search), semantic memory uses key-based lookup.
+
+```python
+import sqlite3
+import json
+import datetime
+
+
+class SemanticMemory:
+    """
+    Key-value structured memory backed by SQLite.
+    The agent can read, write, and update facts via tools.
+    """
+
+    def __init__(self, user_id: str, db_path: str = "semantic_memory.db"):
+        self.user_id = user_id
+        self.db_path = db_path
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS facts (
+                    user_id TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    confidence REAL DEFAULT 1.0,
+                    source TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, key)
+                )
+            """)
+
+    def set(self, key: str, value: str, confidence: float = 1.0, source: str = "agent") -> None:
+        """Store or update a fact."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO facts (user_id, key, value, confidence, source, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (self.user_id, key, json.dumps(value), confidence, source, datetime.datetime.utcnow().isoformat()),
+            )
+
+    def get(self, key: str) -> str | None:
+        """Retrieve a fact by key."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT value FROM facts WHERE user_id = ? AND key = ?",
+                (self.user_id, key),
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def get_all(self) -> dict[str, str]:
+        """Return all facts for this user."""
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT key, value FROM facts WHERE user_id = ?",
+                (self.user_id,),
+            ).fetchall()
+        return {row[0]: json.loads(row[1]) for row in rows}
+```
+
+## Memory Write Strategies
+
+**Always write**: after every task, store a summary. Simple but noisy — trivial interactions pollute episodic memory.
+
+**LLM decides**: give the agent a `save_to_memory` tool. The agent calls it only when it judges that the interaction contains reusable knowledge. More selective but depends on LLM judgement.
+
+```python
+SAVE_MEMORY_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "save_to_memory",
+        "description": "Save an important fact or preference to long-term memory for future sessions. Only use this when the information is genuinely reusable.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "A short identifier for the fact"},
+                "value": {"type": "string", "description": "The fact or preference to remember"},
+            },
+            "required": ["key", "value"],
+        },
+    },
+}
+```
+
+## Memory Scoring — Recency × Relevance × Importance
+
+When retrieving episodic memories, score them by a combination of recency, semantic relevance, and importance:
+
+```python
+import math
+import datetime
+
+
+def score_memory(episode: dict, current_timestamp: str) -> float:
+    """
+    Score a retrieved episodic memory for relevance to current context.
+    score = relevance × recency_decay × importance_boost
+    """
+    relevance = episode.get("relevance", 0.5)    # cosine similarity from retrieval
+
+    # Recency decay: exponential decay with half-life of 7 days
+    ep_time = datetime.datetime.fromisoformat(episode["timestamp"])
+    curr_time = datetime.datetime.fromisoformat(current_timestamp)
+    days_ago = (curr_time - ep_time).total_seconds() / 86400.0
+    half_life_days = 7.0
+    recency = math.exp(-math.log(2) * days_ago / half_life_days)
+
+    # Importance boost: successful outcomes are more important than failures
+    importance = 1.2 if episode.get("outcome") == "success" else 0.8
+
+    return relevance * recency * importance
+```
+
+## Complete Memory-Augmented Agent
+
+```python
+import json
+
+
+class MemoryAugmentedAgent:
+    """
+    A ReAct-style agent with episodic + semantic memory.
+    At session start: retrieves relevant past episodes and known user facts.
+    At session end: stores a summary in episodic memory.
+    """
+
+    def __init__(self, user_id: str, tool_registry: dict):
+        self.user_id = user_id
+        self.tools = tool_registry
+        self.episodic = EpisodicMemory(user_id)
+        self.semantic = SemanticMemory(user_id)
+        self.buffer = ConversationBuffer(max_messages=30)
+
+    def _build_memory_context(self, user_message: str) -> str:
+        """Retrieve relevant episodic and semantic context for the current query."""
+        episodes = self.episodic.retrieve_relevant(user_message, k=3)
+        facts = self.semantic.get_all()
+
+        context_parts = []
+        if facts:
+            facts_text = "\n".join(f"  - {k}: {v}" for k, v in facts.items())
+            context_parts.append(f"Known user preferences and facts:\n{facts_text}")
+
+        if episodes:
+            ep_text = "\n".join(
+                f"  - [{ep['timestamp'][:10]}] {ep['summary']}"
+                for ep in sorted(episodes, key=lambda e: e["relevance"], reverse=True)
+            )
+            context_parts.append(f"Relevant past interactions:\n{ep_text}")
+
+        return "\n\n".join(context_parts) if context_parts else ""
+
+    def run(self, user_message: str) -> str:
+        """Process a user message with memory context."""
+        memory_ctx = self._build_memory_context(user_message)
+
+        system_prompt = (
+            "You are a helpful assistant with memory of past interactions.\n\n"
+            + (f"MEMORY CONTEXT:\n{memory_ctx}\n" if memory_ctx else "")
+            + "\nUse this context to personalise your responses. Do not mention this context unless relevant."
+        )
+
+        if not self.buffer.messages:
+            self.buffer.add("system", system_prompt)
+
+        self.buffer.add("user", user_message)
+        # Compress history if approaching token limit
+        self.buffer.messages = compress_history(self.buffer.messages, token_threshold=4000)
+
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=self.buffer.get(),
+            temperature=0.3,
+            max_tokens=500,
+        )
+        assistant_message = response.choices[0].message.content
+        self.buffer.add("assistant", assistant_message)
+        return assistant_message
+
+    def end_session(self, task_type: str = "general", outcome: str = "success") -> None:
+        """Store a session summary in episodic memory."""
+        if len(self.buffer.messages) < 3:
+            return   # not worth storing a trivial session
+        summary = self.episodic.summarise_session(self.buffer.messages)
+        self.episodic.add_interaction(summary, task_type=task_type, outcome=outcome)
+        print(f"Session stored in episodic memory: {summary[:100]}...")
+```
+
+## Key Takeaways
+
+- In-context memory is temporary and bounded; use sliding windows for simple agents and LLM summarisation compression when conversation length matters.
+- Episodic memory persists across sessions via a vector database — retrieve relevant past interactions at session start to provide continuity without stuffing the full history.
+- Semantic memory stores structured facts (user preferences, learned knowledge) as key-value pairs, retrieved by key rather than by similarity.
+- The LLM-decides write strategy (a `save_to_memory` tool) produces cleaner episodic stores than always-write; the agent learns what is worth remembering.
+- Memory scoring (relevance × recency decay × importance) prevents stale or irrelevant episodes from dominating retrieval.
+- Compress conversation history before it overflows the context window — LLM summarisation retains key facts while cutting tokens by 60–80%.
+- Separate episodic memory by user_id — never allow one user's memories to be retrieved by another user.
+- End every session by storing a summary — a 2-sentence episodic summary costs one small LLM call and dramatically improves multi-session continuity.

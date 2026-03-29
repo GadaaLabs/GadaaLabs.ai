@@ -1,0 +1,349 @@
+---
+title: "Retrieval Quality — Metrics, Evaluation & Debugging"
+description: "Learn to measure and improve retrieval quality with Hit Rate, MRR, Recall, Precision, and NDCG. Build a golden evaluation set, diagnose vocabulary and domain mismatch failures, and run statistically significant A/B comparisons between retrieval configurations."
+duration: 26
+order: 6
+---
+
+## Why Retrieval Quality Is the RAG Bottleneck
+
+A language model cannot generate a correct, grounded answer from context it was never given. If the retriever fails to return the relevant chunk, no amount of prompt engineering or model quality recovers that information. In practice, retrieval is responsible for the majority of RAG failures — yet most teams spend their tuning budget on prompts.
+
+The reason retrieval quality is underinvested is that it is harder to measure than generation quality. Generation failures are visible: the answer is wrong or hallucinated. Retrieval failures are invisible unless you explicitly measure what was — and was not — returned.
+
+This lesson gives you the measurement infrastructure to make retrieval failures visible and the debugging tools to fix them.
+
+## The Five Core Retrieval Metrics
+
+All five metrics require a golden evaluation set: a collection of (query, relevant_document_ids) pairs annotated by humans or generated automatically.
+
+### Hit Rate@k
+
+The fraction of queries for which at least one relevant document appears in the top-k results. This is the simplest and most commonly reported metric. It answers: "Does my retriever find anything useful?"
+
+### MRR@k — Mean Reciprocal Rank
+
+For each query, find the rank of the first relevant document. The reciprocal rank is 1/rank. MRR is the mean over all queries. A system that always returns the relevant document at rank 1 scores MRR=1.0; one that always returns it at rank 5 scores MRR=0.2.
+
+### Recall@k
+
+The fraction of all relevant documents that appear in the top-k results, averaged over queries. If a query has 3 relevant documents and your retriever returns 2 of them in the top-10, Recall@10 = 0.67 for that query.
+
+### Precision@k
+
+The fraction of returned documents that are relevant. Higher k usually means lower precision because you are retrieving more non-relevant documents along with the relevant ones.
+
+### NDCG@k — Normalised Discounted Cumulative Gain
+
+NDCG accounts for the position of relevant documents: a relevant document at rank 1 is worth more than one at rank 5. It normalises by the ideal ranking (all relevant documents at the top). NDCG is the right metric when you have graded relevance (e.g., "highly relevant" vs "somewhat relevant") or when position matters because the LLM reads context in order.
+
+```python
+import math
+from dataclasses import dataclass, field
+
+
+@dataclass
+class RetrievalResult:
+    """A single retrieval result for evaluation."""
+    query: str
+    retrieved_ids: list[str]      # ordered list of retrieved document IDs
+    relevant_ids: set[str]        # ground-truth set of relevant document IDs
+
+
+def hit_rate_at_k(results: list[RetrievalResult], k: int) -> float:
+    """Fraction of queries where at least one relevant doc is in top-k."""
+    hits = sum(
+        1 for r in results
+        if any(doc_id in r.relevant_ids for doc_id in r.retrieved_ids[:k])
+    )
+    return hits / len(results) if results else 0.0
+
+
+def mrr_at_k(results: list[RetrievalResult], k: int) -> float:
+    """Mean reciprocal rank of the first relevant doc in top-k results."""
+    reciprocal_ranks = []
+    for r in results:
+        rr = 0.0
+        for rank, doc_id in enumerate(r.retrieved_ids[:k], start=1):
+            if doc_id in r.relevant_ids:
+                rr = 1.0 / rank
+                break   # only the first relevant document counts for MRR
+        reciprocal_ranks.append(rr)
+    return sum(reciprocal_ranks) / len(reciprocal_ranks) if reciprocal_ranks else 0.0
+
+
+def recall_at_k(results: list[RetrievalResult], k: int) -> float:
+    """Mean recall: fraction of relevant docs found in top-k, averaged over queries."""
+    recalls = []
+    for r in results:
+        if not r.relevant_ids:
+            continue
+        retrieved_relevant = sum(1 for doc_id in r.retrieved_ids[:k] if doc_id in r.relevant_ids)
+        recalls.append(retrieved_relevant / len(r.relevant_ids))
+    return sum(recalls) / len(recalls) if recalls else 0.0
+
+
+def precision_at_k(results: list[RetrievalResult], k: int) -> float:
+    """Mean precision: fraction of top-k results that are relevant, averaged over queries."""
+    precisions = []
+    for r in results:
+        retrieved = r.retrieved_ids[:k]
+        if not retrieved:
+            continue
+        relevant_count = sum(1 for doc_id in retrieved if doc_id in r.relevant_ids)
+        precisions.append(relevant_count / len(retrieved))
+    return sum(precisions) / len(precisions) if precisions else 0.0
+
+
+def dcg_at_k(retrieved_ids: list[str], relevant_ids: set[str], k: int) -> float:
+    """Discounted cumulative gain: reward for finding relevant docs, penalised by rank."""
+    dcg = 0.0
+    for rank, doc_id in enumerate(retrieved_ids[:k], start=1):
+        if doc_id in relevant_ids:
+            # Binary relevance: gain = 1, discount = log2(rank + 1)
+            dcg += 1.0 / math.log2(rank + 1)
+    return dcg
+
+
+def ndcg_at_k(results: list[RetrievalResult], k: int) -> float:
+    """Normalised DCG: DCG divided by ideal DCG (all relevant docs at top ranks)."""
+    ndcg_scores = []
+    for r in results:
+        if not r.relevant_ids:
+            continue
+        # Actual DCG
+        actual_dcg = dcg_at_k(r.retrieved_ids, r.relevant_ids, k)
+        # Ideal DCG: pretend all relevant docs appeared at ranks 1, 2, 3, ...
+        ideal_retrieved = list(r.relevant_ids)[:k]
+        ideal_dcg = dcg_at_k(ideal_retrieved, r.relevant_ids, k)
+        ndcg_scores.append(actual_dcg / ideal_dcg if ideal_dcg > 0 else 0.0)
+    return sum(ndcg_scores) / len(ndcg_scores) if ndcg_scores else 0.0
+
+
+def evaluate_retriever(results: list[RetrievalResult], k: int = 10) -> dict[str, float]:
+    """Run all five metrics and return a summary dict."""
+    return {
+        f"hit_rate@{k}": hit_rate_at_k(results, k),
+        f"mrr@{k}": mrr_at_k(results, k),
+        f"recall@{k}": recall_at_k(results, k),
+        f"precision@{k}": precision_at_k(results, k),
+        f"ndcg@{k}": ndcg_at_k(results, k),
+    }
+```
+
+## Building a Golden Evaluation Set
+
+A golden set is your single most valuable retrieval engineering asset. Invest time in it once; it pays dividends every time you tune a parameter.
+
+### Manual Annotation
+
+Select 50–100 representative queries from production logs or domain experts. For each query, identify which document chunks contain the correct answer. This produces high-quality signal but is labour-intensive.
+
+### Automated Generation
+
+For each chunk in your corpus, prompt an LLM to generate 2–3 questions that can only be answered from that specific chunk. This scales to thousands of queries automatically. Quality is lower than manual annotation but sufficient for relative comparisons.
+
+```python
+import json
+from groq import Groq
+
+client = Groq()
+
+GENERATION_PROMPT = """You are creating evaluation questions for a RAG system.
+
+Given the following document chunk, generate exactly {n} questions.
+Each question must be:
+1. Answerable only from the provided text
+2. Specific (not answerable by general knowledge)
+3. Varied in phrasing
+
+Return a JSON array of question strings only.
+
+CHUNK:
+{chunk_text}"""
+
+
+def generate_questions_for_chunk(
+    chunk_id: str,
+    chunk_text: str,
+    n: int = 3,
+) -> list[dict]:
+    """Generate n evaluation questions for a single chunk."""
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{
+            "role": "user",
+            "content": GENERATION_PROMPT.format(n=n, chunk_text=chunk_text[:1500]),
+        }],
+        response_format={"type": "json_object"},
+        temperature=0.7,
+    )
+    questions = json.loads(response.choices[0].message.content)
+    # Normalise: model may return {"questions": [...]} or [...]
+    if isinstance(questions, dict):
+        questions = next(iter(questions.values()))
+    return [{"question": q, "relevant_chunk_id": chunk_id} for q in questions[:n]]
+
+
+def build_golden_set(chunks: list[dict], questions_per_chunk: int = 2) -> list[dict]:
+    """Build a golden evaluation set from a list of chunks."""
+    golden_set = []
+    for chunk in chunks:
+        try:
+            questions = generate_questions_for_chunk(
+                chunk_id=chunk["id"],
+                chunk_text=chunk["text"],
+                n=questions_per_chunk,
+            )
+            golden_set.extend(questions)
+        except Exception as e:
+            print(f"Skipping chunk {chunk['id']}: {e}")
+    return golden_set
+```
+
+## The Recall-Precision Tradeoff
+
+Increasing k always raises Recall (you retrieve more documents, more relevant ones are included) and always lowers Precision (the fraction of retrieved documents that are relevant decreases). The right k depends on your context window budget and how much noise the LLM can tolerate:
+
+- k=3: high precision, lower recall — good if your chunks are large and your LLM context is small.
+- k=10: balanced — the standard choice.
+- k=20+: high recall, more noise — only use if you have a reranker to filter down afterward.
+
+## Diagnosing Retrieval Failures
+
+When Recall@10 is below your target (typically &gt;0.7), the failure usually falls into one of two buckets.
+
+### Vocabulary Mismatch
+
+The user query uses different words than the document. "How do I restart the service?" vs "reboot the daemon". Dense embeddings should handle synonyms — but if the mismatch is domain-specific jargon, the general embedding model may not have seen enough examples to associate them.
+
+**Debug**: embed the failed query and the target document, compute cosine similarity directly.
+
+```python
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+
+def diagnose_retrieval_failure(query: str, target_chunk: str) -> dict:
+    """Compute the embedding similarity for a failed retrieval pair."""
+    q_vec = model.encode([query], normalize_embeddings=True)[0]
+    d_vec = model.encode([target_chunk], normalize_embeddings=True)[0]
+    cosine_sim = float(np.dot(q_vec, d_vec))
+
+    return {
+        "cosine_similarity": cosine_sim,
+        "diagnosis": (
+            "vocabulary_mismatch"
+            if cosine_sim < 0.75
+            else "ranking_issue"  # doc is similar but lost in ranking
+        ),
+        "recommendation": (
+            "Add BM25 hybrid retrieval or fine-tune embeddings"
+            if cosine_sim < 0.75
+            else "Increase ef_search or use a reranker"
+        ),
+    }
+```
+
+**Fix**: add BM25 hybrid retrieval. BM25 matches exact keywords regardless of embedding distance. Combine dense and sparse scores with Reciprocal Rank Fusion (covered in Lesson 8).
+
+### Domain Mismatch
+
+The embedding model was trained on general web text and performs poorly on specialised domain vocabulary (medical, legal, code, financial). Cosine similarity between query and relevant document may be in the 0.6–0.75 range — above noise but below the retrieval threshold.
+
+**Fix**: fine-tune the embedding model on domain-specific (query, positive_passage, negative_passage) triplets using the MultipleNegativesRankingLoss from sentence-transformers.
+
+## UMAP Visualisation of Retrieval Failures
+
+Visualising your query and document embeddings in 2D with UMAP reveals structural problems. If queries cluster far from their relevant documents, you have a systematic alignment problem. If a subset of queries clusters near irrelevant documents, you have a topical mis-specialisation.
+
+```python
+import umap
+import matplotlib.pyplot as plt
+import numpy as np
+
+def visualise_query_doc_alignment(
+    queries: list[str],
+    documents: list[str],
+    relevant_pairs: list[tuple[int, int]],  # (query_idx, doc_idx)
+) -> None:
+    """UMAP plot of query-document embedding alignment."""
+    model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+    q_vecs = model.encode(queries, normalize_embeddings=True)
+    d_vecs = model.encode(documents, normalize_embeddings=True)
+
+    all_vecs = np.vstack([q_vecs, d_vecs])
+    reducer = umap.UMAP(n_components=2, random_state=42, metric="cosine")
+    coords = reducer.fit_transform(all_vecs)
+
+    n_q = len(queries)
+    q_coords = coords[:n_q]
+    d_coords = coords[n_q:]
+
+    plt.figure(figsize=(10, 8))
+    plt.scatter(q_coords[:, 0], q_coords[:, 1], c="blue", label="Queries", alpha=0.7, s=40)
+    plt.scatter(d_coords[:, 0], d_coords[:, 1], c="orange", label="Documents", alpha=0.5, s=20)
+
+    # Draw lines connecting relevant pairs
+    for q_idx, d_idx in relevant_pairs:
+        plt.plot(
+            [q_coords[q_idx, 0], d_coords[d_idx, 0]],
+            [q_coords[q_idx, 1], d_coords[d_idx, 1]],
+            "g-", alpha=0.3, linewidth=0.8,
+        )
+
+    plt.legend()
+    plt.title("Query-Document Embedding Alignment")
+    plt.tight_layout()
+    plt.savefig("query_doc_alignment.png", dpi=150)
+    plt.close()
+```
+
+## Retrieval A/B Testing
+
+Before deploying a configuration change (different chunk size, different embedding model, different k), measure its effect on your golden set with statistical significance.
+
+```python
+from scipy import stats
+
+
+def ab_test_retrievers(
+    config_a_results: list[RetrievalResult],
+    config_b_results: list[RetrievalResult],
+    k: int = 10,
+) -> dict:
+    """Compare two retriever configurations with a paired t-test."""
+    assert len(config_a_results) == len(config_b_results), "Must evaluate on same queries"
+
+    # Per-query hit at k (1 if hit, 0 if miss) for each config
+    hits_a = [1 if any(d in r.relevant_ids for d in r.retrieved_ids[:k]) else 0
+              for r in config_a_results]
+    hits_b = [1 if any(d in r.relevant_ids for d in r.retrieved_ids[:k]) else 0
+              for r in config_b_results]
+
+    # Paired t-test: each pair is (hit_a[i], hit_b[i]) for the same query
+    t_stat, p_value = stats.ttest_rel(hits_b, hits_a)
+
+    return {
+        f"hit_rate@{k}_A": sum(hits_a) / len(hits_a),
+        f"hit_rate@{k}_B": sum(hits_b) / len(hits_b),
+        "delta": sum(hits_b) / len(hits_b) - sum(hits_a) / len(hits_a),
+        "p_value": p_value,
+        "significant": p_value < 0.05,
+        "winner": "B" if p_value < 0.05 and sum(hits_b) > sum(hits_a) else (
+                  "A" if p_value < 0.05 else "no_significant_difference"
+        ),
+    }
+```
+
+## Key Takeaways
+
+- Retrieval quality is the primary RAG bottleneck — a wrong context cannot be recovered by the language model.
+- Use five metrics: Hit Rate@k (coverage), MRR@k (rank of first hit), Recall@k (completeness), Precision@k (noise), NDCG@k (position-weighted quality).
+- Build a golden evaluation set once — automated generation via LLM scales it to thousands of queries.
+- Diagnose failures by computing direct cosine similarity between the failed query and target document: below 0.75 means vocabulary/domain mismatch.
+- Vocabulary mismatch is fixed with BM25 hybrid retrieval; domain mismatch requires domain-specific embedding fine-tuning.
+- Always A/B test configuration changes on your golden set before deploying; use a paired t-test to confirm statistical significance.
+- Recall@k and Precision@k move in opposite directions as you change k; choose k based on your context window budget and reranking capacity.
+- A UMAP visualisation of query and document embeddings reveals structural alignment problems that aggregate metrics hide.

@@ -1,0 +1,464 @@
+---
+title: "Bias-Variance Tradeoff, Overfitting & Regularisation"
+description: "Understand the mathematical decomposition of prediction error, diagnose high-bias vs high-variance models, and apply L1, L2, and ElasticNet regularisation correctly."
+duration: 22
+order: 8
+---
+
+## The Bias-Variance Decomposition
+
+Every model's expected prediction error on unseen data can be decomposed into three components:
+
+**Expected MSE = Bias² + Variance + Irreducible Noise**
+
+- **Bias**: error from wrong assumptions — the model systematically misses the true relationship
+- **Variance**: error from sensitivity to small training-set fluctuations — the model changes dramatically with different samples
+- **Irreducible noise**: inherent randomness in the data that no model can eliminate
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+from sklearn.pipeline import make_pipeline
+
+rng = np.random.default_rng(42)
+
+# True function: cubic + noise
+def true_f(x):
+    return 0.5 * x**3 - x**2 + 2
+
+n_datasets = 100
+n_test = 200
+x_test = np.linspace(-3, 3, n_test)
+y_test_true = true_f(x_test)
+
+def bias_variance_demo(degree, n_train=20):
+    predictions = []
+    for _ in range(n_datasets):
+        x_train = rng.uniform(-3, 3, n_train)
+        y_train = true_f(x_train) + rng.normal(0, 1.5, n_train)
+        model = make_pipeline(PolynomialFeatures(degree), LinearRegression())
+        model.fit(x_train.reshape(-1, 1), y_train)
+        pred = model.predict(x_test.reshape(-1, 1))
+        predictions.append(pred)
+
+    preds = np.array(predictions)           # (100, 200)
+    mean_pred = preds.mean(axis=0)          # avg prediction across datasets
+    bias_sq   = np.mean((mean_pred - y_test_true)**2)
+    variance  = np.mean(preds.var(axis=0))
+    return bias_sq, variance
+
+degrees = [1, 3, 7, 15]
+for d in degrees:
+    b2, v = bias_variance_demo(d)
+    print(f"Degree {d:2d}: Bias²={b2:.2f}  Variance={v:.2f}  Total={b2+v:.2f}")
+```
+
+Output shows the classic tradeoff:
+- Degree 1: high bias (can't fit the cubic), low variance
+- Degree 3: balanced — roughly matches the true function
+- Degree 15: low bias, **very high variance** — memorises each dataset
+
+---
+
+## Learning Curves
+
+Learning curves plot training and validation error as a function of training set size. They are the most direct way to diagnose whether you have a bias or variance problem.
+
+```python
+from sklearn.model_selection import learning_curve
+from sklearn.linear_model import Ridge
+from sklearn.datasets import make_regression
+
+X, y = make_regression(n_samples=1000, n_features=20, noise=25, random_state=42)
+
+def plot_learning_curve(model, X, y, title=""):
+    train_sizes, train_scores, val_scores = learning_curve(
+        model, X, y,
+        train_sizes=np.linspace(0.05, 1.0, 15),
+        cv=5, scoring="neg_mean_squared_error", n_jobs=-1
+    )
+    train_mse = -train_scores.mean(axis=1)
+    val_mse   = -val_scores.mean(axis=1)
+    train_std = train_scores.std(axis=1)
+    val_std   = val_scores.std(axis=1)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(train_sizes, train_mse, "o-", label="Train MSE", color="#7c3aed")
+    ax.plot(train_sizes, val_mse,   "o-", label="Val MSE",   color="#06b6d4")
+    ax.fill_between(train_sizes,
+                    train_mse - train_std, train_mse + train_std, alpha=0.15, color="#7c3aed")
+    ax.fill_between(train_sizes,
+                    val_mse - val_std,   val_mse + val_std,     alpha=0.15, color="#06b6d4")
+    ax.set_xlabel("Training set size")
+    ax.set_ylabel("MSE")
+    ax.set_title(title)
+    ax.legend()
+    plt.tight_layout()
+    plt.show()
+
+# High-bias model (underfit)
+plot_learning_curve(Ridge(alpha=1e6), X, y, "High Bias: Both errors converge HIGH")
+
+# Good model
+plot_learning_curve(Ridge(alpha=1.0), X, y, "Good Fit: Low val error, small gap")
+```
+
+### Reading the Curves
+
+| Pattern | Diagnosis | Fix |
+|---------|-----------|-----|
+| Both curves converge HIGH | High bias (underfitting) | More complex model, better features |
+| Large gap between train and val | High variance (overfitting) | More data, regularisation, simpler model |
+| Val curve still decreasing at right edge | Need more data | Collect more samples |
+| Both converge LOW, small gap | Good fit | You're done |
+
+---
+
+## Validation Curves
+
+Validation curves show how training and validation error vary with a single hyperparameter — they reveal the sweet spot between under- and over-fitting.
+
+```python
+from sklearn.model_selection import validation_curve
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.pipeline import make_pipeline
+from sklearn.linear_model import LinearRegression
+
+X_1d, y_1d = make_regression(n_samples=200, n_features=1, noise=20, random_state=42)
+
+degrees = np.arange(1, 16)
+train_scores, val_scores = validation_curve(
+    make_pipeline(PolynomialFeatures(), LinearRegression()),
+    X_1d, y_1d,
+    param_name="polynomialfeatures__degree",
+    param_range=degrees,
+    cv=5, scoring="neg_mean_squared_error"
+)
+
+train_mse = -train_scores.mean(axis=1)
+val_mse   = -val_scores.mean(axis=1)
+
+plt.figure(figsize=(8, 5))
+plt.plot(degrees, train_mse, "o-", label="Train MSE", color="#7c3aed")
+plt.plot(degrees, val_mse,   "o-", label="Val MSE",   color="#06b6d4")
+plt.axvline(degrees[np.argmin(val_mse)], ls="--", color="#f87171", label="Optimal degree")
+plt.xlabel("Polynomial Degree")
+plt.ylabel("MSE")
+plt.title("Validation Curve — Finding Optimal Polynomial Degree")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+print(f"Optimal degree: {degrees[np.argmin(val_mse)]}")
+```
+
+---
+
+## L2 Regularisation (Ridge)
+
+Ridge adds a penalty proportional to the **sum of squared coefficients** to the loss function:
+
+`Loss = MSE + α × Σβᵢ²`
+
+The penalty shrinks all coefficients toward zero but never to exactly zero. It solves the multicollinearity problem by distributing the coefficient mass across correlated features.
+
+```python
+from sklearn.linear_model import Ridge, RidgeCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.datasets import make_regression
+
+X, y = make_regression(n_samples=200, n_features=50, n_informative=10,
+                       noise=20, random_state=42)
+
+# Always scale before Ridge — penalty is affected by feature scale
+pipe = Pipeline([
+    ("scaler", StandardScaler()),
+    ("ridge", Ridge()),
+])
+
+# RidgeCV finds the best alpha via cross-validation
+alphas = np.logspace(-3, 5, 50)
+ridge_cv = Pipeline([
+    ("scaler", StandardScaler()),
+    ("ridge", RidgeCV(alphas=alphas, cv=5, scoring="neg_mean_squared_error")),
+])
+ridge_cv.fit(X, y)
+best_alpha = ridge_cv.named_steps["ridge"].alpha_
+print(f"Best alpha: {best_alpha:.4f}")
+
+# Coefficient shrinkage path
+coefs = []
+for alpha in alphas:
+    pipe.set_params(ridge__alpha=alpha)
+    pipe.fit(X, y)
+    coefs.append(pipe.named_steps["ridge"].coef_)
+
+coefs = np.array(coefs)
+plt.figure(figsize=(10, 5))
+for i in range(coefs.shape[1]):
+    plt.plot(alphas, coefs[:, i], alpha=0.4, linewidth=1)
+plt.axvline(best_alpha, ls="--", color="red", label=f"Best α={best_alpha:.2f}")
+plt.xscale("log")
+plt.xlabel("α (regularisation strength)")
+plt.ylabel("Coefficient value")
+plt.title("Ridge Coefficient Shrinkage Path")
+plt.legend()
+plt.tight_layout()
+plt.show()
+```
+
+---
+
+## L1 Regularisation (Lasso)
+
+Lasso adds a penalty proportional to the **absolute values** of coefficients:
+
+`Loss = MSE + α × Σ|βᵢ|`
+
+The key difference: Lasso drives some coefficients to **exactly zero**, performing automatic feature selection. This is because the L1 norm has corners at zero — the gradient descent solution "snaps" to zero for unimportant features.
+
+```python
+from sklearn.linear_model import Lasso, LassoCV
+
+lasso_cv = Pipeline([
+    ("scaler", StandardScaler()),
+    ("lasso", LassoCV(alphas=alphas, cv=5, max_iter=10000)),
+])
+lasso_cv.fit(X, y)
+best_alpha_lasso = lasso_cv.named_steps["lasso"].alpha_
+coef_lasso = lasso_cv.named_steps["lasso"].coef_
+
+n_nonzero = np.sum(coef_lasso != 0)
+print(f"Best alpha: {best_alpha_lasso:.4f}")
+print(f"Non-zero coefficients: {n_nonzero} / {len(coef_lasso)}")
+
+# Compare Ridge vs Lasso sparsity
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+pipe_ridge = Pipeline([("scaler", StandardScaler()), ("ridge", Ridge(alpha=best_alpha))])
+pipe_ridge.fit(X, y)
+
+axes[0].stem(pipe_ridge.named_steps["ridge"].coef_, markerfmt="C0o", linefmt="C0-", basefmt="k-")
+axes[0].set_title(f"Ridge: all {len(coef_lasso)} features retained")
+axes[0].set_xlabel("Feature index")
+
+axes[1].stem(coef_lasso, markerfmt="C1o", linefmt="C1-", basefmt="k-")
+axes[1].set_title(f"Lasso: {n_nonzero} / {len(coef_lasso)} non-zero")
+axes[1].set_xlabel("Feature index")
+
+plt.suptitle("Ridge vs Lasso: Sparsity Comparison")
+plt.tight_layout()
+plt.show()
+```
+
+---
+
+## ElasticNet: Combining L1 and L2
+
+ElasticNet mixes both penalties: `Loss = MSE + α×ρ×Σ|βᵢ| + α×(1-ρ)/2×Σβᵢ²`
+
+where `ρ` (l1_ratio) controls the mix. Use ElasticNet when:
+- You have many correlated features (Lasso arbitrarily selects one; Ridge keeps all)
+- You want sparsity but not as aggressive as pure Lasso
+
+```python
+from sklearn.linear_model import ElasticNetCV
+
+enet_cv = Pipeline([
+    ("scaler", StandardScaler()),
+    ("enet", ElasticNetCV(
+        l1_ratio=[0.1, 0.3, 0.5, 0.7, 0.9, 0.95, 1.0],
+        alphas=np.logspace(-4, 2, 30),
+        cv=5, max_iter=10000
+    )),
+])
+enet_cv.fit(X, y)
+best_l1   = enet_cv.named_steps["enet"].l1_ratio_
+best_a    = enet_cv.named_steps["enet"].alpha_
+n_nonzero = np.sum(enet_cv.named_steps["enet"].coef_ != 0)
+print(f"Best l1_ratio: {best_l1}, alpha: {best_a:.4f}, non-zero: {n_nonzero}")
+```
+
+---
+
+## Geometric Intuition: Why Lasso Creates Sparsity
+
+```
+L2 (Ridge) constraint:  β₁² + β₂² ≤ r²   (circle)
+L1 (Lasso) constraint:  |β₁| + |β₂| ≤ r  (diamond / rhombus)
+
+The MSE contours are ellipses. The constrained minimum is where
+the first ellipse touches the constraint boundary.
+
+For L2: the circle has no corners — the touching point is rarely at an axis.
+For L1: the diamond HAS corners at (β₁=0, β₂≠0) and (β₁≠0, β₂=0).
+         The touching point is very often at a corner → sparse solution.
+```
+
+---
+
+## Regularisation for Neural Networks: Dropout
+
+Dropout randomly zeroes a fraction `p` of neurons during each training forward pass. At inference, all neurons are active (scaled by `1-p`). This prevents neurons from co-adapting — they can't rely on any specific other neuron being present.
+
+```python
+import torch
+import torch.nn as nn
+
+class RegularisedNet(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, dropout_p=0.3):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_p),      # <-- zero 30% of neurons during training
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_p),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+# Dropout is automatically disabled during model.eval()
+model = RegularisedNet(20, 64, 1)
+model.train()   # Dropout active
+_ = model(torch.randn(32, 20))
+
+model.eval()    # Dropout disabled
+_ = model(torch.randn(32, 20))
+```
+
+---
+
+## Early Stopping
+
+For iterative methods (gradient descent, boosting), early stopping halts training when validation error stops improving:
+
+```python
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+
+X_tr, X_val, y_tr, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+
+gbm = GradientBoostingRegressor(
+    n_estimators=1000,
+    learning_rate=0.05,
+    max_depth=4,
+    subsample=0.8,
+    random_state=42,
+)
+gbm.fit(X_tr, y_tr)
+
+# Staged prediction lets us see error at each tree
+val_errors = [
+    mean_squared_error(y_val, pred)
+    for pred in gbm.staged_predict(X_val)
+]
+
+best_n = np.argmin(val_errors) + 1
+print(f"Optimal n_estimators: {best_n} (min val MSE: {val_errors[best_n-1]:.2f})")
+
+plt.figure(figsize=(9, 4))
+plt.plot(val_errors, color="#06b6d4", linewidth=1.5, label="Val MSE")
+plt.axvline(best_n - 1, ls="--", color="#f87171", label=f"Best={best_n}")
+plt.xlabel("Number of trees")
+plt.ylabel("Val MSE")
+plt.title("Early Stopping — Gradient Boosting")
+plt.legend()
+plt.tight_layout()
+plt.show()
+```
+
+XGBoost has native early stopping:
+
+```python
+import xgboost as xgb
+
+dtrain = xgb.DMatrix(X_tr, label=y_tr)
+dval   = xgb.DMatrix(X_val,   label=y_val)
+
+params = {
+    "objective": "reg:squarederror",
+    "learning_rate": 0.05,
+    "max_depth": 4,
+    "subsample": 0.8,
+    "eval_metric": "rmse",
+}
+
+model = xgb.train(
+    params, dtrain,
+    num_boost_round=1000,
+    evals=[(dval, "val")],
+    early_stopping_rounds=30,   # stop if val doesn't improve for 30 rounds
+    verbose_eval=100,
+)
+print(f"Best iteration: {model.best_iteration}")
+```
+
+---
+
+## Diagnosing and Fixing: A Practical Decision Tree
+
+```
+Measure train error and val error:
+
+High train error + High val error
+  → High BIAS (underfitting)
+  → Fix: increase model capacity, add features, reduce regularisation
+
+Low train error + High val error
+  → High VARIANCE (overfitting)
+  → Fix: add regularisation, reduce complexity, get more data,
+         use dropout/early stopping
+
+Both errors HIGH and converging
+  → High bias, more data won't help
+  → Fix: better features, more complex model
+
+Both LOW, large gap
+  → Overfitting
+  → Fix: L1/L2 regularisation, early stopping, more data
+```
+
+```python
+from sklearn.linear_model import LinearRegression, Ridge, Lasso
+from sklearn.preprocessing import PolynomialFeatures, StandardScaler
+from sklearn.pipeline import make_pipeline
+from sklearn.model_selection import cross_val_score
+
+X_s, y_s = make_regression(n_samples=150, n_features=1, noise=15, random_state=42)
+
+models = {
+    "Degree 1 (underfit)": make_pipeline(PolynomialFeatures(1), LinearRegression()),
+    "Degree 8 (overfit)":  make_pipeline(PolynomialFeatures(8), LinearRegression()),
+    "Degree 8 + Ridge":    make_pipeline(PolynomialFeatures(8), StandardScaler(), Ridge(alpha=10)),
+    "Degree 8 + Lasso":    make_pipeline(PolynomialFeatures(8), StandardScaler(), Lasso(alpha=0.5)),
+}
+
+print(f"{'Model':<28} {'Train R²':>10} {'CV R²':>10}")
+print("-" * 52)
+for name, m in models.items():
+    m.fit(X_s, y_s)
+    train_r2 = m.score(X_s, y_s)
+    cv_r2    = cross_val_score(m, X_s, y_s, cv=5).mean()
+    print(f"{name:<28} {train_r2:>10.3f} {cv_r2:>10.3f}")
+```
+
+---
+
+## Key Takeaways
+
+- The bias-variance decomposition shows that **total error = bias² + variance + noise** — you can only control the first two
+- **Learning curves** (error vs training size) diagnose bias vs variance; high bias = both errors converge high; high variance = large train/val gap
+- **Validation curves** (error vs hyperparameter) find the optimal regularisation strength
+- **Ridge (L2)** shrinks all coefficients toward zero, never to exactly zero — use when you want to keep all features but prevent large coefficients
+- **Lasso (L1)** drives some coefficients to exactly zero — use when you need feature selection or a sparse model
+- **ElasticNet** combines both — best for groups of correlated features
+- **Dropout** prevents co-adaptation in neural networks; **early stopping** prevents overfitting in iterative methods
+- When validation error is high: try regularisation first; if both errors are high, try a more complex model or better features

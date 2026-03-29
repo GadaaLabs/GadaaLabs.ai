@@ -37,7 +37,6 @@ export function DashboardProgress({ userId, courses, quizSlugs }: Props) {
     const quizKey = `gadaalabs_quiz_results_${userId}`;
     try {
       const quizData = JSON.parse(localStorage.getItem(quizKey) ?? "{}");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCompletedQuizzes(Object.keys(quizData));
     } catch { /* ignore */ }
   }, [userId]);

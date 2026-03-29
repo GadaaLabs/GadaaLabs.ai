@@ -84,6 +84,7 @@ export async function GET(req: Request) {
     .filter((r) => r.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, 12)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     .map(({ score: _s, ...rest }) => rest);
 
   return Response.json(scored);

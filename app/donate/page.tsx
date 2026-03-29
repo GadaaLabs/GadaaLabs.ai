@@ -80,7 +80,6 @@ export default function DonatePage() {
       const url = await startCheckout({ tier: slug, mode: "subscription" });
       if (url) { window.location.assign(url); return; }
     } catch { /* handled below */ }
-    // eslint-disable-next-line react-hooks/immutability
     setLoadingTier(null);
   };
 
@@ -90,7 +89,6 @@ export default function DonatePage() {
       const url = await startCheckout({ amount, mode: "payment" });
       if (url) { window.location.assign(url); return; }
     } catch { /* handled below */ }
-    // eslint-disable-next-line react-hooks/immutability
     setLoadingAmount(null);
   };
 

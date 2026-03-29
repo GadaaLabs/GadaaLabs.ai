@@ -1,0 +1,424 @@
+---
+title: "RAG Evaluation — RAGAS, Faithfulness & Groundedness"
+description: "Build a complete RAG evaluation pipeline: implement the evaluation triad (context relevance, faithfulness, answer relevance) as LLM-as-judge functions, use RAGAS for automated scoring, detect hallucinations with NLI, and integrate quality gates into CI."
+duration: 26
+order: 9
+---
+
+## The Evaluation Challenge
+
+Evaluating RAG output is harder than evaluating classification or regression. There is no single correct answer to "What causes Redis connection timeouts?" — multiple valid answers exist, phrased differently, with varying levels of detail. Traditional accuracy metrics do not apply.
+
+The challenge has three dimensions:
+
+1. **Reference-free evaluation**: you often cannot write a ground-truth answer for every production query. You need metrics that do not require a reference answer.
+2. **Multi-component failure modes**: the answer can fail because the retrieved context was wrong, because the LLM ignored the context, or because the answer doesn't actually address the question. Each failure requires a different metric.
+3. **Evaluator quality**: LLM-as-judge prompts are themselves imperfect — they can disagree with each other, be sensitive to prompt wording, and produce inconsistent scores.
+
+The answer is not to wait for a perfect evaluation method — it is to measure all three dimensions simultaneously with the RAG evaluation triad.
+
+## The RAG Evaluation Triad
+
+### Context Relevance
+
+Is the retrieved context relevant to the user's query? This catches retrieval failures: the system returned documents, but they don't contain the information needed to answer the question.
+
+### Faithfulness (Groundedness)
+
+Does the generated answer use only information present in the retrieved context? This catches hallucinations: the LLM generated plausible-sounding statements that are not supported by the provided documents.
+
+### Answer Relevance
+
+Does the answer actually address the user's question? This catches non-answers: the LLM found relevant context and stayed grounded, but still gave a vague or tangential response.
+
+## Implementing LLM-as-Judge Functions
+
+```python
+import json
+from groq import Groq
+
+client = Groq()
+
+CONTEXT_RELEVANCE_PROMPT = """You are evaluating a RAG system. Given a user query and retrieved context,
+assess whether the context contains the information needed to answer the query.
+
+USER QUERY: {query}
+
+RETRIEVED CONTEXT:
+{context}
+
+Score the context relevance on a scale of 1-5:
+1 = Context is completely irrelevant — does not relate to the query at all
+2 = Context is marginally related but lacks the specific information needed
+3 = Context partially addresses the query
+4 = Context mostly addresses the query with minor gaps
+5 = Context fully contains the information needed to answer the query
+
+Respond with a JSON object: {{"score": <int>, "reasoning": "<one sentence>"}}"""
+
+
+FAITHFULNESS_PROMPT = """You are checking whether an AI-generated answer is faithful to its source context.
+A faithful answer contains ONLY claims that are directly supported by the provided context.
+
+USER QUERY: {query}
+
+RETRIEVED CONTEXT:
+{context}
+
+AI ANSWER:
+{answer}
+
+For each claim in the answer, check whether it is entailed by the context.
+Then give an overall faithfulness score:
+1 = Answer contains major unsupported claims (hallucinations)
+2 = Answer has several claims not in the context
+3 = Answer has minor unsupported details
+4 = Answer is mostly faithful with trivial additions
+5 = Every claim in the answer is directly supported by the context
+
+Respond with JSON: {{"score": <int>, "unsupported_claims": [<strings>], "reasoning": "<one sentence>"}}"""
+
+
+ANSWER_RELEVANCE_PROMPT = """You are evaluating whether an AI answer addresses the user's question.
+
+USER QUERY: {query}
+
+AI ANSWER:
+{answer}
+
+Score the answer relevance on a scale of 1-5:
+1 = Answer completely ignores the question
+2 = Answer is tangentially related but misses the point
+3 = Answer partially addresses the question
+4 = Answer mostly addresses the question with minor gaps
+5 = Answer directly and completely addresses the question
+
+Respond with JSON: {{"score": <int>, "reasoning": "<one sentence>"}}"""
+
+
+def evaluate_context_relevance(query: str, context: str) -> dict:
+    """Score whether the retrieved context is relevant to the query."""
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{
+            "role": "user",
+            "content": CONTEXT_RELEVANCE_PROMPT.format(query=query, context=context[:3000]),
+        }],
+        response_format={"type": "json_object"},
+        temperature=0.0,
+    )
+    return json.loads(response.choices[0].message.content)
+
+
+def evaluate_faithfulness(query: str, context: str, answer: str) -> dict:
+    """Score whether the answer is grounded in the provided context."""
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{
+            "role": "user",
+            "content": FAITHFULNESS_PROMPT.format(
+                query=query, context=context[:3000], answer=answer
+            ),
+        }],
+        response_format={"type": "json_object"},
+        temperature=0.0,
+    )
+    return json.loads(response.choices[0].message.content)
+
+
+def evaluate_answer_relevance(query: str, answer: str) -> dict:
+    """Score whether the answer addresses the user's question."""
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{
+            "role": "user",
+            "content": ANSWER_RELEVANCE_PROMPT.format(query=query, answer=answer),
+        }],
+        response_format={"type": "json_object"},
+        temperature=0.0,
+    )
+    return json.loads(response.choices[0].message.content)
+```
+
+## Hallucination Detection with NLI
+
+Natural Language Inference (NLI) models classify whether one sentence entails, contradicts, or is neutral to another. You can use an NLI model to check each sentence in the generated answer against the retrieved context — a claim-level faithfulness check that does not require an LLM call.
+
+```python
+from transformers import pipeline
+
+# facebook/bart-large-mnli is a strong 400 MB NLI model
+nli_pipeline = pipeline(
+    "text-classification",
+    model="facebook/bart-large-mnli",
+    device=-1,  # -1 = CPU; set to 0 for GPU
+)
+
+
+def check_claim_entailment(claim: str, context: str) -> dict:
+    """
+    Check if a single claim is entailed by the context using NLI.
+    Returns entailment probability and label.
+    """
+    # BART-MNLI uses the format: "premise. hypothesis."
+    # The model outputs scores for CONTRADICTION, NEUTRAL, ENTAILMENT
+    result = nli_pipeline(
+        f"{context[:512]}",
+        candidate_labels=["entailment", "neutral", "contradiction"],
+        hypothesis_template="{}",
+    )
+    # result is actually a zero-shot classification; map to entailment check
+    scores = {r["label"]: r["score"] for r in result["scores"]} if isinstance(result, list) else {}
+    return {
+        "claim": claim,
+        "entailment_score": result[0]["score"] if isinstance(result, list) else 0.0,
+        "label": result[0]["label"] if isinstance(result, list) else "neutral",
+    }
+
+
+def split_into_claims(answer: str) -> list[str]:
+    """Split an answer into individual claim sentences."""
+    import re
+    # Simple sentence splitter — use spacy for production
+    sentences = re.split(r'(?<=[.!?])\s+', answer.strip())
+    return [s for s in sentences if len(s.split()) > 4]
+
+
+def nli_faithfulness_score(answer: str, context: str) -> dict:
+    """
+    Compute faithfulness by checking NLI entailment for each sentence.
+    Returns per-claim results and an overall fraction of supported claims.
+    """
+    claims = split_into_claims(answer)
+    results = []
+    for claim in claims:
+        entailment = check_claim_entailment(claim, context)
+        results.append(entailment)
+
+    supported = sum(1 for r in results if "entail" in r["label"].lower())
+    faithfulness = supported / len(results) if results else 1.0
+
+    return {
+        "faithfulness": faithfulness,
+        "supported_claims": supported,
+        "total_claims": len(results),
+        "claim_results": results,
+    }
+```
+
+## RAGAS — Framework-Level Evaluation
+
+RAGAS is the de facto standard evaluation framework for RAG pipelines. It computes faithfulness, answer relevancy, context precision, and context recall from a dataset of (question, answer, contexts, ground_truth) tuples.
+
+```python
+# pip install ragas datasets
+from datasets import Dataset
+from ragas import evaluate
+from ragas.metrics import (
+    faithfulness,
+    answer_relevancy,
+    context_precision,
+    context_recall,
+)
+
+
+def run_ragas_evaluation(eval_data: list[dict]) -> dict:
+    """
+    Run RAGAS evaluation on a batch of RAG outputs.
+
+    Each item in eval_data must have:
+      - question: str
+      - answer: str (the generated answer)
+      - contexts: list[str] (the retrieved chunks)
+      - ground_truth: str (reference answer — required for context_recall)
+    """
+    dataset = Dataset.from_list(eval_data)
+
+    results = evaluate(
+        dataset,
+        metrics=[
+            faithfulness,       # are all answer claims supported by context?
+            answer_relevancy,   # does the answer address the question?
+            context_precision,  # are the retrieved contexts relevant?
+            context_recall,     # does context cover the ground truth?
+        ],
+    )
+
+    # results is a dict with metric names as keys and float scores as values
+    return {
+        "faithfulness": results["faithfulness"],
+        "answer_relevancy": results["answer_relevancy"],
+        "context_precision": results["context_precision"],
+        "context_recall": results["context_recall"],
+    }
+
+
+# Example usage
+sample_eval_data = [
+    {
+        "question": "What is HNSW?",
+        "answer": "HNSW is a graph-based ANN algorithm that builds a hierarchical navigable small world graph for fast approximate nearest neighbour search.",
+        "contexts": ["HNSW (Hierarchical Navigable Small World) is a graph-based index that builds a multi-layer structure for approximate nearest neighbour search with sub-linear query time."],
+        "ground_truth": "HNSW is a hierarchical graph structure for approximate nearest neighbour search.",
+    }
+]
+```
+
+## The Evaluation Harness
+
+Combine all evaluation approaches into a production harness:
+
+```python
+import sqlite3
+import datetime
+import pandas as pd
+from dataclasses import dataclass
+
+
+@dataclass
+class EvalRecord:
+    query: str
+    context: str
+    answer: str
+    context_relevance: float
+    faithfulness: float
+    answer_relevance: float
+    timestamp: str = ""
+
+
+class EvalHarness:
+    """Complete RAG evaluation harness with SQLite persistence."""
+
+    def __init__(self, db_path: str = "rag_eval.db"):
+        self.db_path = db_path
+        self._init_db()
+
+    def _init_db(self) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS evaluations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query TEXT NOT NULL,
+                    context_relevance REAL,
+                    faithfulness REAL,
+                    answer_relevance REAL,
+                    timestamp TEXT NOT NULL
+                )
+            """)
+
+    def evaluate_single(self, query: str, context: str, answer: str) -> EvalRecord:
+        """Evaluate a single RAG output and persist the result."""
+        cr = evaluate_context_relevance(query, context)
+        faith = evaluate_faithfulness(query, context, answer)
+        ar = evaluate_answer_relevance(query, answer)
+
+        record = EvalRecord(
+            query=query,
+            context=context,
+            answer=answer,
+            context_relevance=cr["score"] / 5.0,
+            faithfulness=faith["score"] / 5.0,
+            answer_relevance=ar["score"] / 5.0,
+            timestamp=datetime.datetime.utcnow().isoformat(),
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO evaluations (query, context_relevance, faithfulness, answer_relevance, timestamp) VALUES (?, ?, ?, ?, ?)",
+                (query, record.context_relevance, record.faithfulness, record.answer_relevance, record.timestamp),
+            )
+        return record
+
+    def run_batch(
+        self,
+        questions: list[str],
+        contexts: list[str],
+        answers: list[str],
+    ) -> pd.DataFrame:
+        """Evaluate a batch and return a DataFrame of scores."""
+        records = []
+        for q, ctx, ans in zip(questions, contexts, answers):
+            try:
+                record = self.evaluate_single(q, ctx, ans)
+                records.append({
+                    "query": q,
+                    "context_relevance": record.context_relevance,
+                    "faithfulness": record.faithfulness,
+                    "answer_relevance": record.answer_relevance,
+                })
+            except Exception as e:
+                print(f"Eval failed for query '{q[:50]}': {e}")
+        return pd.DataFrame(records)
+
+    def get_summary_stats(self) -> dict:
+        """Retrieve aggregate metrics from all stored evaluations."""
+        with sqlite3.connect(self.db_path) as conn:
+            df = pd.read_sql("SELECT * FROM evaluations", conn)
+        return {
+            "n_evaluated": len(df),
+            "avg_context_relevance": df["context_relevance"].mean(),
+            "avg_faithfulness": df["faithfulness"].mean(),
+            "avg_answer_relevance": df["answer_relevance"].mean(),
+            "faithfulness_below_threshold": (df["faithfulness"] < 0.6).sum(),
+        }
+```
+
+## CI Integration
+
+Run evaluation on every pull request that touches the RAG pipeline. Fail the build if faithfulness drops below threshold.
+
+```python
+# eval_ci.py — run in CI pipeline
+import sys
+
+
+def run_ci_evaluation(rag_system, golden_set: list[dict], thresholds: dict) -> bool:
+    """
+    Run evaluation on the golden set.
+    Return True if all thresholds pass, False otherwise.
+    """
+    harness = EvalHarness(db_path=":memory:")  # in-memory for CI
+    questions = [item["question"] for item in golden_set]
+    contexts = []
+    answers = []
+
+    for item in golden_set:
+        ctx, ans = rag_system.query(item["question"])
+        contexts.append(ctx)
+        answers.append(ans)
+
+    results = harness.run_batch(questions, contexts, answers)
+    stats = results.mean()
+
+    print(f"Faithfulness:       {stats['faithfulness']:.3f} (threshold: {thresholds['faithfulness']})")
+    print(f"Context Relevance:  {stats['context_relevance']:.3f} (threshold: {thresholds['context_relevance']})")
+    print(f"Answer Relevance:   {stats['answer_relevance']:.3f} (threshold: {thresholds['answer_relevance']})")
+
+    passed = (
+        stats["faithfulness"] >= thresholds["faithfulness"]
+        and stats["context_relevance"] >= thresholds["context_relevance"]
+        and stats["answer_relevance"] >= thresholds["answer_relevance"]
+    )
+
+    if not passed:
+        print("EVALUATION FAILED: one or more thresholds not met")
+        sys.exit(1)
+
+    print("EVALUATION PASSED")
+    return True
+
+
+# Example invocation
+# run_ci_evaluation(my_rag, golden_set, {"faithfulness": 0.75, "context_relevance": 0.70, "answer_relevance": 0.70})
+```
+
+## Key Takeaways
+
+- RAG evaluation requires three orthogonal metrics: context relevance (retrieval quality), faithfulness (no hallucinations), and answer relevance (actually answered the question).
+- LLM-as-judge with structured prompts returning JSON scores 1–5 is the most practical approach for all three metrics — use a 70B model for the judge.
+- NLI-based faithfulness checking (BART-MNLI) provides claim-level grounding verification without an LLM call — fast and deployable in CI.
+- RAGAS wraps all four metrics (faithfulness, answer relevancy, context precision, context recall) in a standard dataset API.
+- Build an evaluation harness that persists every score to SQLite — tracking trends over time reveals regressions before they reach users.
+- Set CI quality gates: fail the build if faithfulness drops below 0.75 or context relevance below 0.70 on your golden set.
+- Reference-free metrics (faithfulness, answer relevance) are more useful in production because they don't require ground-truth answers for every query.
+- Sample 10% of production queries for live evaluation rather than evaluating every query — that sample is sufficient to detect systemic regressions.

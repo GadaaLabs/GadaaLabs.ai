@@ -1,0 +1,317 @@
+---
+title: "Reranking — Cross-Encoders, ColBERT & Contextual Compression"
+description: "Understand why bi-encoder retrieval is approximate and how cross-encoders, ColBERT, and the Cohere Rerank API recover relevance. Implement a full retrieve-then-rerank pipeline with latency measurement and Reciprocal Rank Fusion."
+duration: 24
+order: 8
+---
+
+## Why Bi-Encoder Retrieval Is Approximate
+
+The bi-encoder architecture — the one used by sentence-transformers models like BGE or E5 — encodes the query and each document independently and then computes a dot product or cosine similarity between the resulting vectors. Independent encoding is what makes it fast: documents can be pre-embedded and indexed, and at query time only the query needs to be embedded.
+
+The cost of this independence is relevance quality. When the query and document are encoded separately, there is no cross-attention between their tokens. The model cannot notice that the word "bank" in the query means "riverbank" while the document discusses "financial bank". It cannot weight the word "not" in "does NOT support async" against "supports async I/O". All of these nuances require the model to see both texts together.
+
+A cross-encoder sees both texts together. It processes `[CLS] query [SEP] document [SEP]` as a single sequence through a transformer encoder. Full self-attention flows between every query token and every document token. The output is a single relevance score. This produces much more accurate relevance judgements — but it is O(n × d) per query, where n is the number of candidate documents and d is the average document length. You cannot use a cross-encoder to search millions of documents directly.
+
+The solution is retrieve-then-rerank: use the fast bi-encoder to retrieve the top-50 candidates, then use the accurate cross-encoder to rerank those 50 candidates, then take the top-5 for the LLM.
+
+## Cross-Encoder Models
+
+**cross-encoder/ms-marco-MiniLM-L-6-v2**: 6-layer MiniLM, very fast (CPU: ~5 ms per (query, doc) pair), trained on MS MARCO passage ranking. Good for production when CPU reranking is the constraint.
+
+**cross-encoder/ms-marco-electra-base**: ELECTRA base, more accurate, ~3× slower. Use when accuracy matters more than latency.
+
+**BAAI/bge-reranker-large**: strong multilingual reranker, excellent for non-English content.
+
+```python
+from sentence_transformers import CrossEncoder
+import time
+
+# Load once at startup — this is a 90 MB model
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", max_length=512)
+
+
+def rerank_with_cross_encoder(
+    query: str,
+    candidates: list[dict],
+    top_k: int = 5,
+) -> list[dict]:
+    """
+    Rerank candidate documents using a cross-encoder.
+
+    Args:
+        query: the user query string
+        candidates: list of dicts with at least a "text" key
+        top_k: number of top documents to return after reranking
+
+    Returns:
+        top_k documents sorted by cross-encoder relevance score, descending
+    """
+    if not candidates:
+        return []
+
+    # Build (query, passage) pairs for the cross-encoder
+    pairs = [(query, c["text"]) for c in candidates]
+
+    t0 = time.perf_counter()
+    # predict() returns a float score per pair (higher = more relevant)
+    scores = reranker.predict(pairs, batch_size=32, show_progress_bar=False)
+    latency_ms = (time.perf_counter() - t0) * 1000
+
+    # Attach scores and sort
+    for candidate, score in zip(candidates, scores):
+        candidate["rerank_score"] = float(score)
+
+    sorted_candidates = sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)
+    print(f"Reranking {len(candidates)} candidates took {latency_ms:.1f} ms")
+    return sorted_candidates[:top_k]
+```
+
+## Full Retrieve-Then-Rerank Pipeline
+
+```python
+from sentence_transformers import SentenceTransformer
+
+embed_model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+
+
+def retrieve_and_rerank(
+    query: str,
+    retriever_fn,      # fn(embedding, k) -> list[dict with id, text, score]
+    k_retrieve: int = 50,
+    k_final: int = 5,
+) -> dict:
+    """
+    Full pipeline: embed query → retrieve top-50 → rerank → return top-5.
+    Returns timings so you can monitor each stage's latency.
+    """
+    timings = {}
+
+    # Stage 1: embed the query
+    t0 = time.perf_counter()
+    query_vec = embed_model.encode([query], normalize_embeddings=True)[0].tolist()
+    timings["embed_ms"] = (time.perf_counter() - t0) * 1000
+
+    # Stage 2: ANN retrieval — fast, approximate
+    t0 = time.perf_counter()
+    candidates = retriever_fn(query_vec, k=k_retrieve)
+    timings["retrieve_ms"] = (time.perf_counter() - t0) * 1000
+
+    # Stage 3: cross-encoder reranking — slow, accurate
+    t0 = time.perf_counter()
+    final_results = rerank_with_cross_encoder(query, candidates, top_k=k_final)
+    timings["rerank_ms"] = (time.perf_counter() - t0) * 1000
+
+    timings["total_ms"] = sum(timings.values())
+
+    return {"results": final_results, "timings": timings}
+```
+
+Typical latency breakdown on a 4-core CPU:
+- Embed query: ~20 ms
+- ANN retrieval (HNSW, 1M vectors): ~5 ms
+- Cross-encoder rerank (50 docs, MiniLM): ~180 ms
+- Total: ~205 ms — well within a 3 s total budget before generation
+
+## Cohere Rerank API
+
+If you prefer a managed reranking service with no model hosting overhead, the Cohere Rerank API is the production choice. The v3.0 model outperforms MiniLM on most benchmarks.
+
+```python
+import cohere
+
+co = cohere.Client(api_key="COHERE_API_KEY")
+
+
+def cohere_rerank(
+    query: str,
+    candidates: list[dict],
+    top_k: int = 5,
+    model: str = "rerank-english-v3.0",
+) -> list[dict]:
+    """Rerank using the Cohere Rerank API."""
+    documents = [c["text"] for c in candidates]
+
+    response = co.rerank(
+        model=model,
+        query=query,
+        documents=documents,
+        top_n=top_k,
+        return_documents=False,  # we keep the originals
+    )
+
+    # response.results: list of RerankResult(index, relevance_score)
+    reranked = []
+    for result in response.results:
+        doc = dict(candidates[result.index])
+        doc["rerank_score"] = result.relevance_score
+        reranked.append(doc)
+
+    return reranked
+```
+
+**Latency**: Cohere Rerank API typically returns in 150–400 ms depending on document count and length. For low-latency requirements (&lt;200 ms total), use a local MiniLM reranker instead.
+
+## ColBERT — Token-Level Late Interaction
+
+ColBERT is a middle ground between bi-encoders and cross-encoders. It encodes the query and document separately — like a bi-encoder — but at the token level, producing a matrix of token embeddings rather than a single pooled vector.
+
+At query time, for each query token, ColBERT finds its maximum similarity to any document token (the MaxSim operation). The document score is the sum of these per-query-token maximum similarities. This captures fine-grained token-level matches without requiring a joint forward pass.
+
+MaxSim formula: `score(q, d) = Σᵢ max_j cos(qᵢ, dⱼ)` where qᵢ are query token vectors and dⱼ are document token vectors.
+
+ColBERT is roughly 10× slower than a bi-encoder but 5–10× faster than a full cross-encoder. It fits well as a first-stage reranker for very large candidate sets.
+
+```python
+# ColBERT via the RAGatouille library (wraps the official ColBERT implementation)
+from ragatouille import RAGPretrainedModel
+
+colbert = RAGPretrainedModel.from_pretrained("colbert-ir/colbertv2.0")
+
+# Index documents (this creates a ColBERT-specific index)
+colbert.index(
+    collection=["document text 1", "document text 2", ...],
+    index_name="my_docs",
+    max_document_length=256,
+    split_documents=True,
+)
+
+# Search
+results = colbert.search(
+    query="how does ColBERT compute relevance?",
+    k=10,
+)
+```
+
+## Reciprocal Rank Fusion
+
+When you have multiple retrieval sources (dense embedding search, BM25, ColBERT), you need a principled way to merge their ranked results. Reciprocal Rank Fusion (RRF) is robust and simple:
+
+```
+RRF(d) = Σᵢ 1 / (k + rankᵢ(d))
+```
+
+where k=60 is a constant that dampens the effect of very high ranks, and the sum is over all retrieval sources.
+
+```python
+def reciprocal_rank_fusion(
+    ranked_lists: list[list[str]],
+    k: int = 60,
+) -> list[tuple[str, float]]:
+    """
+    Merge multiple ranked lists using RRF.
+
+    Args:
+        ranked_lists: each inner list is a ranked sequence of document IDs
+                      from one retrieval source, best-first
+        k: constant (default 60) — dampens the advantage of top ranks
+
+    Returns:
+        list of (doc_id, rrf_score) sorted descending
+    """
+    scores: dict[str, float] = {}
+    for ranked_list in ranked_lists:
+        for rank, doc_id in enumerate(ranked_list, start=1):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+```
+
+## Contextual Compression
+
+Even after reranking, each chunk may contain irrelevant sentences alongside the relevant ones. Contextual compression extracts only the sentences directly relevant to the query, shrinking the context passed to the LLM. This reduces token usage and can improve answer quality by removing distracting content.
+
+```python
+COMPRESS_PROMPT = """You are a document extraction assistant.
+
+Given a USER QUERY and a DOCUMENT CHUNK, extract only the sentences from the chunk
+that are directly relevant to answering the query.
+
+Return ONLY the extracted sentences verbatim. If nothing is relevant, return an empty string.
+Do not paraphrase or summarise.
+
+USER QUERY: {query}
+
+DOCUMENT CHUNK:
+{chunk}
+
+Relevant sentences:"""
+
+from groq import Groq
+
+groq_client = Groq()
+
+
+def compress_chunk(query: str, chunk_text: str) -> str:
+    """Extract only query-relevant sentences from a chunk."""
+    response = groq_client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{
+            "role": "user",
+            "content": COMPRESS_PROMPT.format(query=query, chunk=chunk_text),
+        }],
+        temperature=0.0,
+        max_tokens=300,
+    )
+    compressed = response.choices[0].message.content.strip()
+    # Fall back to original if compression returned empty
+    return compressed if len(compressed) > 20 else chunk_text
+
+
+def compress_results(query: str, results: list[dict]) -> list[dict]:
+    """Apply contextual compression to a list of reranked results."""
+    compressed = []
+    for r in results:
+        original_len = len(r["text"].split())
+        compressed_text = compress_chunk(query, r["text"])
+        compressed_len = len(compressed_text.split())
+        compressed.append({
+            **r,
+            "text": compressed_text,
+            "compression_ratio": compressed_len / original_len if original_len > 0 else 1.0,
+        })
+    return compressed
+```
+
+Typical compression ratios: 40–60% of the original text is retained after compression, cutting context tokens by 40–60%.
+
+## Full Reranking Pipeline
+
+```python
+def full_reranking_pipeline(
+    query: str,
+    dense_results: list[dict],
+    sparse_results: list[dict],    # BM25 results
+    top_k: int = 5,
+    compress: bool = False,
+) -> dict:
+    """
+    Complete pipeline: RRF merge → cross-encoder rerank → optional compression.
+    """
+    # Merge dense and BM25 results with RRF
+    dense_ids = [r["id"] for r in dense_results]
+    sparse_ids = [r["id"] for r in sparse_results]
+    merged_ids_scores = reciprocal_rank_fusion([dense_ids, sparse_ids])
+
+    # Build result map for lookup
+    result_map = {r["id"]: r for r in dense_results + sparse_results}
+    candidates = [result_map[doc_id] for doc_id, _ in merged_ids_scores if doc_id in result_map]
+
+    # Cross-encoder reranking on top-50 merged candidates
+    reranked = rerank_with_cross_encoder(query, candidates[:50], top_k=top_k)
+
+    if compress:
+        reranked = compress_results(query, reranked)
+
+    return {"results": reranked, "candidate_count": len(candidates)}
+```
+
+## Key Takeaways
+
+- Bi-encoders are fast because they encode query and document independently, but this independence prevents cross-attention — the source of relevance approximation errors.
+- A cross-encoder reads query and document jointly via full self-attention, producing much more accurate relevance scores at O(n) cost per query.
+- The retrieve-then-rerank pattern combines bi-encoder speed (retrieve top-50 in ~5 ms) with cross-encoder accuracy (rerank in ~200 ms) for a total overhead of ~205 ms.
+- MiniLM-L-6 is the right CPU reranker for most applications; ELECTRA-base or BGE-reranker-large when accuracy is paramount.
+- ColBERT operates at the token level with MaxSim scoring — faster than cross-encoders, more accurate than bi-encoders — useful for large candidate sets.
+- Cohere Rerank v3.0 is a strong managed alternative; use it when you cannot host a local reranker.
+- Reciprocal Rank Fusion (k=60) merges ranked lists from multiple sources robustly without requiring score calibration.
+- Contextual compression extracts only the relevant sentences from each chunk, reducing LLM context tokens by 40–60% while maintaining answer quality.

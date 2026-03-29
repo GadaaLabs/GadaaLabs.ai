@@ -1,0 +1,374 @@
+---
+title: "Query Transformations — HyDE, Step-Back & Multi-Query"
+description: "Fix the vocabulary mismatch between short user queries and long document chunks. Implement HyDE, step-back prompting, multi-query retrieval, sub-question decomposition, and query routing — and measure each transformation's effect on Recall@5."
+duration: 24
+order: 7
+---
+
+## Why Raw User Queries Retrieve Poorly
+
+The bi-encoder retrieval model is trained to align query and document embeddings. But there is a fundamental asymmetry: documents are long, richly detailed, and written in formal prose; user queries are short, vague, and often colloquial.
+
+A user asks: "why is my service slow?" — four words, no domain vocabulary. The relevant document chunk is 200 words describing network I/O bottlenecks, connection pool exhaustion, and database query latency. The bi-encoder has to map a 4-word query and a 200-word document to nearby points in the same vector space. It often fails, not because the model is bad, but because the query gives the model too little to work with.
+
+Query transformations address this by rewriting or expanding the user's query before retrieval so that the query vocabulary better matches the document vocabulary.
+
+## HyDE — Hypothetical Document Embeddings
+
+The insight behind HyDE is simple: the query "why is my service slow?" is short and vague, but an answer to that question would use the same technical vocabulary as documents about the same topic. So instead of embedding the query directly, you:
+
+1. Ask an LLM to generate a hypothetical answer — a plausible but not necessarily correct answer to the question.
+2. Embed the hypothetical answer.
+3. Use that embedding to retrieve from the actual document corpus.
+
+The hypothetical answer might say "service latency can increase due to database connection pool exhaustion, unindexed queries, or network I/O blocking the event loop" — vocabulary that directly matches technical documentation. The retriever now finds relevant documents even if it would have missed the original short query.
+
+```python
+import json
+from groq import Groq
+from sentence_transformers import SentenceTransformer
+
+groq_client = Groq()
+embed_model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+
+HYDE_PROMPT = """You are a technical documentation assistant.
+
+Generate a concise, factual paragraph (3-5 sentences) that would answer the following question.
+Write as if you are a section of technical documentation — use precise terminology.
+Do NOT say "I don't know"; always generate a plausible answer.
+
+Question: {query}
+
+Answer:"""
+
+
+def generate_hypothesis(query: str) -> str:
+    """Generate a hypothetical document that would answer the query."""
+    response = groq_client.chat.completions.create(
+        model="llama-3.1-8b-instant",   # small model is fine; quality matters less than vocabulary
+        messages=[{"role": "user", "content": HYDE_PROMPT.format(query=query)}],
+        temperature=0.3,
+        max_tokens=200,
+    )
+    return response.choices[0].message.content.strip()
+
+
+def hyde_retrieve(query: str, retriever_fn, k: int = 5) -> list[dict]:
+    """HyDE retrieval: embed a hypothetical answer instead of the raw query."""
+    hypothesis = generate_hypothesis(query)
+    # Embed the hypothesis, not the original query
+    hypothesis_embedding = embed_model.encode([hypothesis], normalize_embeddings=True)[0].tolist()
+    results = retriever_fn(hypothesis_embedding, k=k)
+    return results
+
+
+def standard_retrieve(query: str, retriever_fn, k: int = 5) -> list[dict]:
+    """Standard retrieval: embed the raw query directly."""
+    query_embedding = embed_model.encode([query], normalize_embeddings=True)[0].tolist()
+    return retriever_fn(query_embedding, k=k)
+```
+
+### When HyDE Helps vs Hurts
+
+HyDE helps when:
+- Queries are vague or colloquial ("why is X broken?", "how does Y work?")
+- The domain vocabulary gap between users and documents is large
+- The LLM generates a plausible hypothesis with correct terminology
+
+HyDE hurts when:
+- The LLM confidently hallucinates the wrong vocabulary — the hypothesis embeds near the wrong documents
+- The query is already specific and precise (code snippets, exact error messages, proper nouns) — the hypothesis adds noise
+- Latency is critical — HyDE adds an extra LLM call (typically 200–400 ms)
+
+Measure on your golden set before enabling HyDE. A well-tuned standard retriever on a good embedding model often outperforms HyDE on precise technical queries.
+
+## Step-Back Prompting
+
+Step-back prompting addresses a different failure mode: the query is too specific for any single document to answer directly. A question like "what caused the IndexError on line 42 of my script?" may not match any document chunk because no document discusses that specific script.
+
+The technique: use an LLM to generate a more general "step-back" question, retrieve for the general question, and include both the specific and general contexts in the final answer.
+
+```python
+STEP_BACK_PROMPT = """Given a specific question, generate a more general question that captures
+the underlying concept. The general question should be answerable from reference documentation.
+
+Examples:
+Specific: "Why does my Redis connection time out after 30 seconds?"
+General: "What causes Redis connection timeouts and how are they configured?"
+
+Specific: "Why is my torch.cuda.is_available() returning False?"
+General: "What are the common causes of CUDA not being detected in PyTorch?"
+
+Now generate a general question for:
+Specific: "{specific_query}"
+General:"""
+
+
+def step_back_retrieve(
+    specific_query: str,
+    retriever_fn,
+    embed_fn,
+    k: int = 5,
+) -> dict[str, list[dict]]:
+    """Retrieve for both the specific and general versions of a query."""
+    # Generate the generalised query
+    response = groq_client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": STEP_BACK_PROMPT.format(specific_query=specific_query)}],
+        temperature=0.2,
+        max_tokens=80,
+    )
+    general_query = response.choices[0].message.content.strip()
+
+    # Retrieve for both
+    specific_vec = embed_fn(specific_query)
+    general_vec = embed_fn(general_query)
+
+    return {
+        "specific_results": retriever_fn(specific_vec, k=k),
+        "general_results": retriever_fn(general_vec, k=k),
+        "general_query": general_query,
+    }
+```
+
+## Multi-Query Retrieval
+
+A single query formulation may miss relevant documents that would be found with a synonym or different phrasing. Multi-query generates N variants of the user's query, retrieves for each variant independently, takes the union of results, and merges them with Reciprocal Rank Fusion.
+
+```python
+MULTI_QUERY_PROMPT = """Generate {n} different phrasings of the following question.
+Each phrasing should:
+- Use different vocabulary or sentence structure
+- Preserve the original intent
+- Be suitable for searching technical documentation
+
+Return a JSON array of strings.
+
+Original question: "{query}"
+Phrasings:"""
+
+
+def generate_query_variants(query: str, n: int = 4) -> list[str]:
+    """Generate n alternative phrasings of the query."""
+    response = groq_client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": MULTI_QUERY_PROMPT.format(n=n, query=query)}],
+        response_format={"type": "json_object"},
+        temperature=0.8,   # higher temperature for more diverse phrasings
+        max_tokens=300,
+    )
+    data = json.loads(response.choices[0].message.content)
+    if isinstance(data, dict):
+        data = next(iter(data.values()))
+    return [query] + [v for v in data[:n] if v != query]
+
+
+def reciprocal_rank_fusion(
+    ranked_lists: list[list[str]],
+    k: int = 60,
+) -> list[tuple[str, float]]:
+    """Merge multiple ranked lists using RRF. k=60 is the standard constant."""
+    scores: dict[str, float] = {}
+    for ranked_list in ranked_lists:
+        for rank, doc_id in enumerate(ranked_list, start=1):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+
+def multi_query_retrieve(
+    query: str,
+    retriever_fn,
+    embed_fn,
+    k_per_query: int = 10,
+    top_k_final: int = 5,
+    n_variants: int = 4,
+) -> list[dict]:
+    """Multi-query retrieval with RRF merging."""
+    variants = generate_query_variants(query, n=n_variants)
+
+    all_ranked_lists = []
+    result_map: dict[str, dict] = {}
+
+    for variant in variants:
+        vec = embed_fn(variant)
+        results = retriever_fn(vec, k=k_per_query)
+        ranked_ids = [r["id"] for r in results]
+        all_ranked_lists.append(ranked_ids)
+        # Store result objects for retrieval after RRF
+        for r in results:
+            result_map[r["id"]] = r
+
+    # Merge rankings with RRF
+    merged = reciprocal_rank_fusion(all_ranked_lists)
+    top_ids = [doc_id for doc_id, _ in merged[:top_k_final]]
+    return [result_map[doc_id] for doc_id in top_ids if doc_id in result_map]
+```
+
+## Sub-Question Decomposition
+
+Compound questions require answering multiple sub-questions before synthesising a final answer. "Compare the latency and cost of Pinecone vs Qdrant for 10M vectors" decomposes into: (1) Pinecone latency at 10M vectors, (2) Qdrant latency at 10M vectors, (3) Pinecone pricing, (4) Qdrant pricing.
+
+```python
+DECOMPOSE_PROMPT = """Break the following complex question into simple atomic sub-questions.
+Each sub-question should be independently answerable from a single document.
+Return a JSON array of sub-question strings (maximum 5).
+
+Complex question: "{question}"
+Sub-questions:"""
+
+
+def decompose_and_retrieve(
+    compound_question: str,
+    retriever_fn,
+    embed_fn,
+    k: int = 3,
+) -> dict:
+    """Decompose a compound question and retrieve for each sub-question."""
+    response = groq_client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": DECOMPOSE_PROMPT.format(question=compound_question)}],
+        response_format={"type": "json_object"},
+        max_tokens=200,
+    )
+    data = json.loads(response.choices[0].message.content)
+    sub_questions = data if isinstance(data, list) else next(iter(data.values()))
+
+    sub_results = {}
+    for sq in sub_questions[:5]:
+        vec = embed_fn(sq)
+        sub_results[sq] = retriever_fn(vec, k=k)
+
+    return {"sub_questions": sub_questions, "results_by_sub_question": sub_results}
+```
+
+## Query Routing
+
+Not all queries should go to the same index. A multi-source RAG system might have separate indexes for product documentation, code examples, support tickets, and FAQs. Routing the query to the right index improves both recall and precision.
+
+```python
+ROUTING_PROMPT = """Classify the following user query into exactly one category.
+
+Categories:
+- "product_docs": questions about product features, configuration, or API reference
+- "code_examples": requests for code samples or implementation guidance
+- "troubleshooting": error messages, debugging, or "why is X not working" questions
+- "general": everything else
+
+Return a JSON object with keys "category" and "confidence" (0.0-1.0).
+
+Query: "{query}"
+Classification:"""
+
+
+def classify_query(query: str) -> dict:
+    """Route a query to the appropriate index."""
+    response = groq_client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": ROUTING_PROMPT.format(query=query)}],
+        response_format={"type": "json_object"},
+        max_tokens=50,
+        temperature=0.0,
+    )
+    return json.loads(response.choices[0].message.content)
+```
+
+## A Pluggable QueryPipeline
+
+Combine all transformations into a pipeline where each transformation is optional:
+
+```python
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Callable
+
+class TransformMode(Enum):
+    NONE = "none"
+    HYDE = "hyde"
+    MULTI_QUERY = "multi_query"
+    STEP_BACK = "step_back"
+    DECOMPOSE = "decompose"
+
+
+@dataclass
+class QueryPipelineConfig:
+    mode: TransformMode = TransformMode.NONE
+    n_variants: int = 4          # for multi-query
+    k_per_query: int = 10        # retrieved per variant
+    top_k_final: int = 5         # final results returned
+    route_queries: bool = False
+
+
+class QueryPipeline:
+    """Pluggable query transformation and retrieval pipeline."""
+
+    def __init__(
+        self,
+        retriever_fn: Callable,
+        embed_fn: Callable,
+        config: QueryPipelineConfig | None = None,
+    ):
+        self.retriever_fn = retriever_fn
+        self.embed_fn = embed_fn
+        self.config = config or QueryPipelineConfig()
+
+    def run(self, query: str) -> list[dict]:
+        if self.config.route_queries:
+            route = classify_query(query)
+            # In production: select retriever_fn based on route["category"]
+
+        mode = self.config.mode
+        k = self.config.top_k_final
+
+        if mode == TransformMode.NONE:
+            vec = self.embed_fn(query)
+            return self.retriever_fn(vec, k=k)
+
+        elif mode == TransformMode.HYDE:
+            return hyde_retrieve(query, self.retriever_fn, k=k)
+
+        elif mode == TransformMode.MULTI_QUERY:
+            return multi_query_retrieve(
+                query,
+                self.retriever_fn,
+                self.embed_fn,
+                k_per_query=self.config.k_per_query,
+                top_k_final=k,
+                n_variants=self.config.n_variants,
+            )
+
+        elif mode == TransformMode.STEP_BACK:
+            result = step_back_retrieve(query, self.retriever_fn, self.embed_fn, k=k)
+            # Merge specific and general results, deduplicate
+            seen = set()
+            merged = []
+            for r in result["specific_results"] + result["general_results"]:
+                if r["id"] not in seen:
+                    seen.add(r["id"])
+                    merged.append(r)
+            return merged[:k]
+
+        elif mode == TransformMode.DECOMPOSE:
+            result = decompose_and_retrieve(query, self.retriever_fn, self.embed_fn, k=3)
+            # Flatten and deduplicate sub-question results
+            seen = set()
+            merged = []
+            for sub_results in result["results_by_sub_question"].values():
+                for r in sub_results:
+                    if r["id"] not in seen:
+                        seen.add(r["id"])
+                        merged.append(r)
+            return merged[:k]
+
+        return []
+```
+
+## Key Takeaways
+
+- Raw user queries are short, vague, and vocabulary-mismatched to document chunks; query transformations close this gap.
+- HyDE generates a hypothetical document to embed instead of the raw query — most effective for vague natural language queries, counterproductive for precise technical queries.
+- Step-back prompting generalises an overly specific query to retrieve background context; combine with the original query for best results.
+- Multi-query generates N phrasings, retrieves independently, and merges with RRF — the most robust technique because it captures diverse vocabulary without depending on LLM quality.
+- Sub-question decomposition is essential for compound questions; retrieve independently for each sub-question, then synthesise.
+- Query routing reduces noise by directing queries to the most relevant index; even simple LLM classification improves quality for multi-source corpora.
+- Always measure each transformation on your golden set with Recall@5 before and after — not all transformations help all query types.
+- Multi-query adds 4× the embedding + retrieval compute; HyDE adds one LLM call; step-back adds one LLM call — budget accordingly.
