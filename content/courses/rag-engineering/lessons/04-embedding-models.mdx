@@ -1,0 +1,462 @@
+---
+title: "Embedding Models — Dense, Sparse & Late Interaction"
+description: "Understand how transformer embeddings work, compare dense vs sparse vs late-interaction models, navigate the MTEB benchmark, implement hybrid retrieval with RRF, and fine-tune embeddings for domain-specific recall."
+duration: 26
+order: 4
+---
+
+## How Embeddings Work
+
+An embedding model is a transformer encoder that converts a piece of text into a fixed-length vector of real numbers. The key claim is that texts with similar meaning produce vectors that are geometrically close — small cosine distance or large dot product — and texts with different meanings produce vectors that are far apart.
+
+The mechanics: the transformer encoder processes the input tokens through multiple layers of self-attention. Each token produces a hidden state vector. To get a single vector for the entire input, you apply a pooling operation over all token hidden states. The most common pooling strategy is **mean pooling** — computing the element-wise average of all token vectors, weighted by the attention mask to ignore padding tokens.
+
+```python
+import torch
+from transformers import AutoTokenizer, AutoModel
+
+def mean_pool(token_embeddings: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    """Mean pooling over token embeddings, ignoring padding tokens."""
+    # Expand attention_mask to match token_embeddings dimensions
+    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+    # Sum embeddings weighted by mask, then divide by sum of mask values
+    sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, dim=1)
+    sum_mask = torch.clamp(input_mask_expanded.sum(dim=1), min=1e-9)
+    return sum_embeddings / sum_mask
+
+def embed_texts(texts: list[str], model_name: str = "BAAI/bge-large-en-v1.5") -> torch.Tensor:
+    """Embed a list of texts using a HuggingFace encoder model."""
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+    model.eval()
+
+    encoded = tokenizer(
+        texts,
+        padding=True,
+        truncation=True,
+        max_length=512,
+        return_tensors="pt",
+    )
+
+    with torch.no_grad():
+        output = model(**encoded)
+
+    embeddings = mean_pool(output.last_hidden_state, encoded["attention_mask"])
+    # L2 normalise so dot product equals cosine similarity
+    embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+    return embeddings
+```
+
+After normalisation, the dot product between two embedding vectors is exactly the cosine similarity. This matters because many vector databases default to dot product distance and assume unit-norm vectors.
+
+## Dense Embedding Models
+
+Dense embeddings are the standard approach: each dimension of the output vector carries information, and the full vector encodes the semantic meaning of the text.
+
+### sentence-transformers Library
+
+The sentence-transformers library provides a clean interface to dozens of pre-trained dense embedding models:
+
+```python
+from sentence_transformers import SentenceTransformer
+import numpy as np
+
+# Fast, lightweight: 384-dim, good for CPU inference
+model_mini = SentenceTransformer("all-MiniLM-L6-v2")
+
+# Higher quality: 768-dim, needs GPU for throughput
+model_mpnet = SentenceTransformer("all-mpnet-base-v2")
+
+# Best open-source general retrieval: 1024-dim
+model_bge = SentenceTransformer("BAAI/bge-large-en-v1.5")
+
+def benchmark_models(queries: list[str], corpus: list[str]) -> dict:
+    """Compare embedding throughput across models."""
+    import time
+    results = {}
+
+    for name, model in [
+        ("MiniLM-L6", model_mini),
+        ("mpnet-base", model_mpnet),
+    ]:
+        start = time.time()
+        corpus_embs = model.encode(corpus, batch_size=64, normalize_embeddings=True)
+        query_embs = model.encode(queries, normalize_embeddings=True)
+        elapsed = time.time() - start
+
+        # Compute similarity matrix (queries x corpus)
+        scores = query_embs @ corpus_embs.T
+
+        results[name] = {
+            "embedding_dim": corpus_embs.shape[1],
+            "time_seconds": elapsed,
+            "docs_per_second": len(corpus) / elapsed,
+        }
+
+    return results
+```
+
+### Choosing a Dense Model
+
+The right model depends on your latency, accuracy, and infrastructure requirements:
+
+| Model | Dimensions | Speed | Quality | Best for |
+|---|---|---|---|---|
+| all-MiniLM-L6-v2 | 384 | Very fast | Good | High-throughput CPU inference |
+| all-mpnet-base-v2 | 768 | Medium | Better | Balanced quality and speed |
+| BAAI/bge-large-en-v1.5 | 1024 | Slow | Best open-source | Quality-critical applications |
+| text-embedding-ada-002 | 1536 | API call | Very good | No GPU, managed service |
+| Cohere embed-v3 | 1024 | API call | Excellent multilingual | Non-English documents |
+
+BGE-large-en-v1.5 is consistently at or near the top of the MTEB retrieval leaderboard for open-source models and is the recommended default when you have GPU infrastructure.
+
+## Sparse Embeddings
+
+Dense embeddings represent semantic meaning, but they sometimes miss exact keyword matches. Sparse embeddings work differently: instead of a dense vector of floats, they produce a sparse vector where most dimensions are zero and non-zero dimensions correspond to specific vocabulary terms.
+
+### BM25
+
+BM25 (Best Match 25) is the foundational sparse retrieval algorithm. It scores documents by how well they match the query terms, using term frequency (TF) and inverse document frequency (IDF) with length normalisation.
+
+```python
+from rank_bm25 import BM25Okapi
+import nltk
+
+class BM25Retriever:
+    def __init__(self, documents: list[str]):
+        self.documents = documents
+        # Tokenise and lowercase
+        tokenised = [doc.lower().split() for doc in documents]
+        self.bm25 = BM25Okapi(tokenised)
+
+    def retrieve(self, query: str, k: int = 10) -> list[dict]:
+        query_tokens = query.lower().split()
+        scores = self.bm25.get_scores(query_tokens)
+        top_indices = scores.argsort()[::-1][:k]
+        return [
+            {"index": int(i), "text": self.documents[i], "score": float(scores[i])}
+            for i in top_indices
+            if scores[i] > 0
+        ]
+```
+
+BM25 excels at keyword queries ("what is the maximum retry count") but struggles with semantic queries ("how do I handle transient network errors") where the query vocabulary differs from the document vocabulary.
+
+### SPLADE
+
+SPLADE (Sparse Lexical and Expansion model) learns a sparse representation using the masked language model head of a BERT-style model. It combines the vocabulary coverage of sparse methods with some semantic understanding:
+
+```python
+from transformers import AutoModelForMaskedLM, AutoTokenizer
+import torch
+import scipy.sparse as sp
+
+class SPLADEEncoder:
+    def __init__(self, model_name: str = "naver/splade-cocondenser-ensembledistil"):
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForMaskedLM.from_pretrained(model_name)
+        self.model.eval()
+
+    def encode(self, text: str) -> dict[int, float]:
+        """
+        Returns a sparse representation: {token_id: weight}.
+        """
+        tokens = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=256)
+        with torch.no_grad():
+            output = self.model(**tokens)
+
+        # SPLADE aggregation: max(0, logit) then max-pool over sequence
+        logits = output.logits[0]  # (seq_len, vocab_size)
+        relu = torch.relu(logits)
+        sparse_vec = torch.max(relu, dim=0).values  # (vocab_size,)
+
+        # Keep only non-zero entries
+        nonzero = sparse_vec.nonzero().squeeze(1)
+        return {
+            int(idx): float(sparse_vec[idx])
+            for idx in nonzero
+        }
+
+    def decode_sparse(self, sparse_vec: dict[int, float], top_k: int = 20) -> dict[str, float]:
+        """Convert token IDs back to readable tokens for inspection."""
+        sorted_items = sorted(sparse_vec.items(), key=lambda x: -x[1])[:top_k]
+        return {
+            self.tokenizer.decode([token_id]).strip(): weight
+            for token_id, weight in sorted_items
+        }
+```
+
+SPLADE produces sparse vectors where each non-zero entry corresponds to a vocabulary token. Documents can have non-zero weights for tokens they do not literally contain — SPLADE learns to expand documents with related terms, bridging the vocabulary gap.
+
+## Hybrid Retrieval with Reciprocal Rank Fusion
+
+Dense and sparse retrieval are complementary. Dense retrieval excels at semantic matching; sparse retrieval excels at keyword precision. Combining them with Reciprocal Rank Fusion (RRF) consistently outperforms either alone.
+
+RRF merges multiple ranked lists into a single ranking without requiring normalised scores — only rank positions matter:
+
+```python
+def reciprocal_rank_fusion(
+    ranked_lists: list[list[str]],
+    k: int = 60,
+) -> list[tuple[str, float]]:
+    """
+    Merge multiple ranked result lists using Reciprocal Rank Fusion.
+
+    Args:
+        ranked_lists: Each list is a ranked list of document IDs (best first).
+        k: RRF smoothing parameter (60 is the standard default).
+
+    Returns:
+        List of (doc_id, rrf_score) sorted by descending score.
+    """
+    scores: dict[str, float] = {}
+
+    for ranked_list in ranked_lists:
+        for rank, doc_id in enumerate(ranked_list, start=1):
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+
+    return sorted(scores.items(), key=lambda x: -x[1])
+
+class HybridRetriever:
+    """
+    Combine dense vector search and BM25 sparse search using RRF.
+    """
+    def __init__(
+        self,
+        documents: list[dict],
+        embed_model: SentenceTransformer,
+    ):
+        self.documents = {doc["id"]: doc for doc in documents}
+        self.embed_model = embed_model
+
+        texts = [doc["text"] for doc in documents]
+        ids = [doc["id"] for doc in documents]
+
+        # Build BM25 index
+        self.bm25 = BM25Retriever(texts)
+        self.doc_ids = ids
+
+        # Build dense index
+        self.embeddings = embed_model.encode(texts, normalize_embeddings=True)
+        self.dense_ids = ids
+
+    def retrieve(self, query: str, k: int = 10) -> list[dict]:
+        # Dense retrieval
+        query_emb = self.embed_model.encode([query], normalize_embeddings=True)[0]
+        dense_scores = self.embeddings @ query_emb
+        dense_top_k = dense_scores.argsort()[::-1][:k * 2]
+        dense_ranked = [self.dense_ids[i] for i in dense_top_k]
+
+        # Sparse (BM25) retrieval
+        bm25_results = self.bm25.retrieve(query, k=k * 2)
+        sparse_ranked = [r["index"] for r in bm25_results]
+        sparse_ranked = [self.doc_ids[i] for i in sparse_ranked]
+
+        # Fuse with RRF
+        fused = reciprocal_rank_fusion([dense_ranked, sparse_ranked])
+        top_ids = [doc_id for doc_id, _ in fused[:k]]
+
+        return [self.documents[doc_id] for doc_id in top_ids if doc_id in self.documents]
+```
+
+## Late Interaction: ColBERT
+
+Dense bi-encoders compress both query and document into single vectors, losing fine-grained token-level information. Cross-encoders (covered in lesson 8) attend to every pair of query-document tokens but require running the model on each document at query time.
+
+ColBERT finds a middle ground: encode query and document separately into per-token embedding matrices, then compute a MaxSim score.
+
+```python
+from sentence_transformers import SentenceTransformer
+import numpy as np
+
+class ColBERTScorer:
+    """
+    Simplified ColBERT late interaction scoring.
+    Encodes queries and documents to token-level embeddings,
+    then computes MaxSim: sum of max dot-products per query token.
+    """
+
+    def __init__(self, model_name: str = "colbert-ir/colbertv2.0"):
+        # ColBERT models produce per-token embeddings
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModel.from_pretrained(model_name)
+        self.model.eval()
+
+    def _encode_tokens(self, texts: list[str], max_length: int = 128) -> list[np.ndarray]:
+        """Encode texts to per-token embedding matrices."""
+        encoded = self.tokenizer(
+            texts, padding=True, truncation=True,
+            max_length=max_length, return_tensors="pt"
+        )
+        with torch.no_grad():
+            output = self.model(**encoded)
+
+        token_embs = output.last_hidden_state.numpy()  # (batch, seq_len, dim)
+        masks = encoded["attention_mask"].numpy()      # (batch, seq_len)
+
+        # Return only non-padding token embeddings per text
+        results = []
+        for i in range(len(texts)):
+            valid = masks[i].astype(bool)
+            emb = token_embs[i][valid]  # (valid_tokens, dim)
+            # Normalise each token vector
+            norms = np.linalg.norm(emb, axis=1, keepdims=True)
+            emb = emb / np.maximum(norms, 1e-9)
+            results.append(emb)
+
+        return results
+
+    def score(self, query: str, document: str) -> float:
+        """Compute ColBERT MaxSim score between a query and a document."""
+        query_embs, doc_embs = self._encode_tokens([query, document])
+
+        # MaxSim: for each query token, find its max similarity with any doc token
+        sim_matrix = query_embs @ doc_embs.T  # (q_tokens, d_tokens)
+        max_sims = sim_matrix.max(axis=1)     # (q_tokens,)
+        return float(max_sims.sum())
+```
+
+ColBERT stores per-token embeddings for every document at index time. This is 32–128 vectors per document (one per token) rather than one, so storage cost is 32–128x higher than a bi-encoder. In exchange, you get accuracy close to a cross-encoder at latency much closer to a bi-encoder.
+
+## The MTEB Benchmark
+
+The Massive Text Embedding Benchmark (MTEB) evaluates embedding models across 56 tasks including retrieval, clustering, classification, and semantic similarity. For RAG, focus on the **retrieval** and **reranking** subtasks.
+
+How to read MTEB results:
+- The primary retrieval metric is NDCG@10 (Normalised Discounted Cumulative Gain at 10 results)
+- Higher is better; state-of-the-art models score 55–65 on the retrieval average
+- Models are tested on multiple datasets (BEIR benchmark); no single model dominates all domains
+- Domain-specific models (legal, biomedical, code) often outperform general models within their domain
+
+The leaderboard does not include domain-specific fine-tuning, which can add 10–20 NDCG points on your specific corpus.
+
+## Fine-Tuning Embeddings
+
+Pre-trained embedding models are trained on general web text. Your documents may use specialised vocabulary, abbreviations, or conventions that the pre-trained model has never encountered. Fine-tuning on domain-specific data can dramatically improve recall.
+
+```python
+from sentence_transformers import SentenceTransformer, InputExample, losses
+from torch.utils.data import DataLoader
+
+def fine_tune_embeddings(
+    base_model_name: str,
+    train_triplets: list[dict],   # [{"anchor": str, "positive": str, "negative": str}]
+    output_path: str,
+    epochs: int = 3,
+    batch_size: int = 32,
+    warmup_steps: int = 100,
+) -> SentenceTransformer:
+    """
+    Fine-tune an embedding model using MultipleNegativesRankingLoss.
+
+    train_triplets: anchor query, positive (relevant) document, negative (irrelevant) document.
+    MNRL treats each positive pair as a batch of negatives against all other positives.
+    """
+    model = SentenceTransformer(base_model_name)
+
+    # Convert triplets to InputExample format
+    # MNRL only needs (anchor, positive) pairs — it uses other pairs in the batch as negatives
+    train_examples = [
+        InputExample(texts=[t["anchor"], t["positive"]])
+        for t in train_triplets
+    ]
+
+    train_dataloader = DataLoader(train_examples, shuffle=True, batch_size=batch_size)
+
+    # MultipleNegativesRankingLoss: efficient contrastive learning
+    train_loss = losses.MultipleNegativesRankingLoss(model)
+
+    model.fit(
+        train_objectives=[(train_dataloader, train_loss)],
+        epochs=epochs,
+        warmup_steps=warmup_steps,
+        output_path=output_path,
+        show_progress_bar=True,
+    )
+
+    return model
+
+def generate_training_triplets_with_llm(
+    documents: list[str],
+    groq_api_key: str,
+    questions_per_doc: int = 3,
+) -> list[dict]:
+    """
+    Use an LLM to generate training triplets from your document corpus.
+    For each document, generate questions that can only be answered from that document.
+    Other documents in the batch serve as negatives.
+    """
+    import requests
+    import json
+    import random
+
+    triplets = []
+
+    for i, doc in enumerate(documents):
+        prompt = f"""Generate {questions_per_doc} questions that can ONLY be answered using the following document.
+The questions should require reading the document to answer — not general knowledge.
+Return JSON: {{"questions": ["question 1", "question 2", ...]}}
+
+Document:
+{doc[:1500]}"""
+
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {groq_api_key}"},
+            json={
+                "model": "llama-3.1-8b-instant",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+                "response_format": {"type": "json_object"},
+            },
+        )
+
+        try:
+            result = json.loads(response.json()["choices"][0]["message"]["content"])
+            questions = result.get("questions", [])
+        except (KeyError, json.JSONDecodeError):
+            continue
+
+        # Pick a random different document as the negative
+        negative_idx = random.choice([j for j in range(len(documents)) if j != i])
+
+        for question in questions:
+            triplets.append({
+                "anchor": question,
+                "positive": doc,
+                "negative": documents[negative_idx],
+            })
+
+    return triplets
+```
+
+Domain-specific fine-tuning consistently improves retrieval recall by 10–20 percentage points on domain data. The key requirement is good training data: question-document pairs where the question can only be answered from the specific document. The LLM-based triplet generation function above is an efficient way to bootstrap training data from your existing corpus.
+
+## L2 Normalisation and Dot Product
+
+A subtle but important detail: cosine similarity and dot product are equivalent only for unit-norm vectors. If your embedding model does not normalise outputs, you must normalise manually before storing in your vector database:
+
+```python
+def normalise_embeddings(embeddings: np.ndarray) -> np.ndarray:
+    """L2-normalise each row of an embedding matrix."""
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    return embeddings / np.maximum(norms, 1e-9)
+
+# Always normalise before storing or comparing
+embeddings = model.encode(texts)  # raw, may not be unit norm
+embeddings = normalise_embeddings(embeddings)
+
+# Now dot product == cosine similarity
+similarity = embeddings[0] @ embeddings[1]
+```
+
+Most sentence-transformers models accept a `normalize_embeddings=True` parameter that handles this automatically.
+
+## Key Takeaways
+
+- Transformer encoders produce embeddings by mean-pooling token hidden states; L2 normalisation ensures dot product equals cosine similarity — always normalise before storing
+- Dense models (all-MiniLM-L6-v2 for speed, BGE-large-en for quality) capture semantic meaning but miss keyword matches; sparse models (BM25 for simplicity, SPLADE for semantic expansion) capture exact terms but miss paraphrases
+- Hybrid retrieval combining dense + sparse with Reciprocal Rank Fusion consistently outperforms either approach alone; RRF requires only rank positions, not calibrated scores
+- ColBERT late interaction scores queries against per-token document embeddings (MaxSim), providing accuracy close to cross-encoders at latency and storage costs between bi-encoders and cross-encoders
+- MTEB is the standard embedding benchmark; focus on the retrieval subtask NDCG@10 score, and remember that domain-specific performance differs significantly from the general benchmark
+- Fine-tuning on domain-specific triplets (anchor query, positive doc, negative doc) using MultipleNegativesRankingLoss improves retrieval recall by 10–20 percentage points; use LLM-generated questions to bootstrap training data from your own corpus

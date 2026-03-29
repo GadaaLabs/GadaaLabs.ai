@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getArticleBySlug, getAllArticleSlugs } from "@/lib/articles";
 import { MDXContent } from "@/components/content/MDXContent";
+import { ReadingProgress } from "@/components/content/ReadingProgress";
 import { ArrowLeft, Clock, Calendar, Tag } from "lucide-react";
 
 export async function generateStaticParams() {
@@ -41,6 +42,8 @@ export default async function ArticlePage({
   const d = difficultyColor[article.difficulty];
 
   return (
+    <>
+    <ReadingProgress />
     <div className="mx-auto max-w-7xl px-6 py-10">
       <div className="flex gap-10">
         {/* Main content */}
@@ -168,5 +171,6 @@ export default async function ArticlePage({
         </aside>
       </div>
     </div>
+    </>
   );
 }

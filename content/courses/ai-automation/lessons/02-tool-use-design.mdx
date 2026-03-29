@@ -1,0 +1,567 @@
+---
+title: "Tool Use & Function Calling — Design, Validation & Error Handling"
+description: "Design tool schemas that guide accurate model behaviour, validate inputs with Pydantic, return structured errors agents can reason about, and build a complete production toolkit."
+duration: 26
+order: 2
+---
+
+## The JSON Schema for Tool Definitions
+
+When you call the Groq (or OpenAI-compatible) API with tools, you pass an array of tool definitions. Each definition is a JSON Schema object that tells the model what the tool does, what arguments it accepts, and what it returns. The model reads these definitions to decide which tool to call and what arguments to pass.
+
+A minimal tool definition has three fields under the `function` key:
+
+```python
+tool_definition = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "The city name, e.g. 'London' or 'New York'."
+                }
+            },
+            "required": ["city"]
+        }
+    }
+}
+```
+
+**Name conventions**: use `snake_case`, and follow the pattern `verb_noun`. `get_weather` is clearer than `weather`. `search_documents` is clearer than `docs`. `execute_python` is clearer than `run`. The name is part of the model's reasoning — it reads the name as a signal about what the tool does.
+
+**Description conventions**: This is the most important field. The model reads the description to decide whether to call this tool and how to use it. A good description answers three questions: what does this tool do, when should the model use it, and what does it return. A poor description causes wrong tool selection and hallucinated arguments.
+
+Bad description: `"Searches the web"` — gives no guidance on when to use it or what it returns.
+
+Good description: `"Search the web for current factual information about a topic. Use this when you need information you don't already know, especially recent events, prices, documentation, or any data that changes over time. Returns a list of result snippets with titles and URLs."` — tells the model when to reach for this tool and what to expect back.
+
+**Parameters schema**: use `type` (string, number, integer, boolean, array, object), `description` for each parameter (same rules as the top-level description — be specific), `enum` for constrained choices, and `required` for parameters that must always be present.
+
+## Tool Design Principles
+
+### Single Responsibility
+
+Each tool should do exactly one thing. Do not build a `database_tool` that can both read and write records. Build a `query_database` tool and a separate `execute_sql` tool. Single-responsibility tools are easier for the model to select correctly, easier for you to validate, and easier to apply different permission levels to (query is safe; write requires approval).
+
+### Precise Descriptions Prevent Wrong Selection
+
+When two tools have similar descriptions, the model will sometimes pick the wrong one. The fix is to make descriptions clearly distinguish the tools. Compare:
+
+Bad:
+```python
+# Tool A description: "Search for information"
+# Tool B description: "Look up data"
+```
+
+Good:
+```python
+# Tool A description: "Search the public web for general information. Use for questions
+#   about recent events, public documentation, and general knowledge. Returns web snippets."
+# Tool B description: "Query the internal product database. Use only for questions about
+#   customers, orders, and inventory. Requires a SQL SELECT statement. Returns rows as JSON."
+```
+
+### Avoid Overlapping Tools
+
+If two tools can both accomplish the same thing, the model will randomly pick between them, making behaviour inconsistent. If you have both `get_user_by_id` and `lookup_user`, merge them. If the overlap is intentional (e.g., cached vs live data), make the distinction explicit in the descriptions.
+
+## Parameters: Types, Enums, and Nested Objects
+
+```python
+tool_definition = {
+    "type": "function",
+    "function": {
+        "name": "search_documents",
+        "description": (
+            "Search the internal document repository for documents matching a query. "
+            "Use for finding internal policies, procedures, and technical documentation. "
+            "Returns a list of matching document titles and excerpts."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Full-text search query. Be specific.",
+                },
+                "document_type": {
+                    "type": "string",
+                    "enum": ["policy", "procedure", "technical", "report", "all"],
+                    "description": "Filter by document type. Use 'all' to search across all types.",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return. Default 5, max 20.",
+                },
+                "filters": {
+                    "type": "object",
+                    "description": "Optional additional filters.",
+                    "properties": {
+                        "department": {
+                            "type": "string",
+                            "description": "Filter by department name.",
+                        },
+                        "after_date": {
+                            "type": "string",
+                            "description": "Only return documents created after this date (ISO 8601).",
+                        },
+                    },
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+```
+
+`enum` is one of the most useful constraints you can apply. When a parameter has a fixed set of valid values, `enum` prevents the model from hallucinating a value that is not in the set. The model knows it must choose one of the listed options.
+
+Optional parameters (those not in `required`) should have defaults documented in the description. The model may or may not include them; your handler must handle their absence gracefully.
+
+Nested object parameters work well for grouping related optional fields (like `filters` above). The model can include the `filters` object with any subset of its fields, or omit it entirely.
+
+## Implementing Tool Handlers with Pydantic Validation
+
+Type hints and Pydantic models transform tool handlers from fragile functions into robust, self-documenting code.
+
+```python
+from pydantic import BaseModel, Field, validator
+from typing import Optional, Literal
+import json
+
+
+class SearchDocumentsInput(BaseModel):
+    query: str = Field(..., min_length=1, max_length=500, description="Search query")
+    document_type: Literal["policy", "procedure", "technical", "report", "all"] = Field(
+        default="all"
+    )
+    max_results: int = Field(default=5, ge=1, le=20)
+    filters: Optional[dict] = None
+
+    @validator("query")
+    def query_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError("Query cannot be empty or whitespace only")
+        return v.strip()
+
+
+def search_documents(raw_args: str) -> str:
+    """
+    Tool handler with Pydantic validation.
+    Accepts raw JSON string (as the model produces it) and returns a string result.
+    """
+    try:
+        args_dict = json.loads(raw_args)
+    except json.JSONDecodeError as e:
+        return json.dumps({
+            "error": "invalid_json",
+            "message": f"Could not parse arguments: {e}",
+            "suggestion": "Ensure arguments are valid JSON."
+        })
+
+    try:
+        args = SearchDocumentsInput(**args_dict)
+    except Exception as e:
+        return json.dumps({
+            "error": "validation_error",
+            "message": str(e),
+            "suggestion": f"Check that all required fields are present and have correct types."
+        })
+
+    # Actual implementation
+    results = _execute_search(args.query, args.document_type, args.max_results, args.filters)
+    return json.dumps(results)
+
+
+def _execute_search(query: str, doc_type: str, max_results: int, filters: Optional[dict]) -> dict:
+    """The actual search logic — separated for testability."""
+    # In production: call your search index (Elasticsearch, Pinecone, etc.)
+    return {
+        "query": query,
+        "results": [
+            {"title": f"Sample doc about {query}", "excerpt": "...", "url": "/docs/1"},
+        ],
+        "total_found": 1,
+    }
+```
+
+The critical design decision: **return structured errors, not exceptions**. When a tool raises an exception, the agent loop crashes. When a tool returns a structured error dict, the model receives it as a tool result and can reason about what went wrong. The model might retry with corrected arguments, try a different tool, or tell the user what failed. That reasoning is only possible if the error is a string the model can read.
+
+## Error Handling: What to Return When a Tool Fails
+
+Tool errors fall into three categories with different appropriate responses.
+
+**Validation errors** (bad arguments from the model): Return a structured error that explains what was wrong and how to fix it. Include the field name, the received value, and the expected format.
+
+```python
+# Bad: let it crash
+result = database.query(args["sql"])  # KeyError if "sql" not in args
+
+# Good: validate first, return structured error
+if "sql" not in args:
+    return json.dumps({
+        "error": "missing_required_parameter",
+        "parameter": "sql",
+        "message": "The 'sql' parameter is required.",
+        "example": "SELECT * FROM users WHERE id = 1"
+    })
+```
+
+**External service errors** (API down, network timeout): Return an error with the reason and a suggestion for how the agent might proceed.
+
+```python
+try:
+    result = requests.get(url, timeout=5)
+    result.raise_for_status()
+except requests.Timeout:
+    return json.dumps({
+        "error": "timeout",
+        "message": f"Request to {url} timed out after 5 seconds.",
+        "suggestion": "Try again, or use a different data source."
+    })
+except requests.HTTPError as e:
+    return json.dumps({
+        "error": "http_error",
+        "status_code": e.response.status_code,
+        "message": str(e),
+        "suggestion": "Check that the URL is correct and the resource exists."
+    })
+```
+
+**Logic errors** (tool ran but result is empty or unexpected): Return the empty result, not an error. An empty search result is a valid result — the model should know there were no results and decide what to do (try a different query, inform the user, etc.).
+
+```python
+results = search_index.query(query)
+if not results:
+    return json.dumps({
+        "results": [],
+        "message": "No documents matched this query.",
+        "suggestion": "Try broader search terms or a different document_type."
+    })
+return json.dumps({"results": results})
+```
+
+## Tool Output Formatting
+
+Tool outputs go directly into the model's context window. Every character you return costs tokens and consumes context space. Keep tool outputs focused on the information the model needs for its next reasoning step.
+
+**Rules for tool output formatting:**
+
+Keep it under 500 characters when possible. If the tool naturally returns a lot of data (a database query that returns 1,000 rows), summarise or paginate. Return only what the model needs to reason next.
+
+Use consistent structure. If a tool sometimes returns `{"results": [...]}` and sometimes returns `[...]`, the model has to handle both shapes. Pick one and stick to it.
+
+Include only reasoning-relevant information. A web search result does not need to include the full HTML of the page — it needs the title, URL, and a relevant excerpt. A database query for "total revenue in Q3" does not need all 10,000 individual transactions — it needs the aggregate.
+
+Return metadata the model might need. For search results, include `total_found` so the model knows if there are more results to fetch. For file reads, include the file size so the model knows if it got a truncated view.
+
+```python
+# Bad: returns too much, inconsistent structure
+return str(database_rows)  # "[Row(id=1, name='...', created=..., updated=..., ...]"
+
+# Good: structured, focused, consistent
+return json.dumps({
+    "rows": [{"id": r.id, "name": r.name} for r in database_rows[:10]],
+    "total_rows": len(database_rows),
+    "truncated": len(database_rows) > 10
+})
+```
+
+## Tool Selection Failures and Fixes
+
+Two common failure modes occur in practice.
+
+**Model picks the wrong tool**: The model calls `search_web` when it should call `query_database`. Root cause: descriptions are too similar or too vague. Fix: add context about when NOT to use a tool.
+
+```python
+# Add negative guidance to the description
+"description": (
+    "Search the public web for general information. "
+    "Do NOT use this for internal company data, customer records, or product inventory — "
+    "use query_database for those. "
+    "Returns web snippets with URLs."
+)
+```
+
+**Model hallucinates arguments**: The model calls `query_database(sql="SELECT * FROM customers WHERE magic_field = 'value'")` where `magic_field` does not exist. Root cause: the model does not know the schema. Fix: include the schema in the tool description.
+
+```python
+"description": (
+    "Execute a SQL SELECT query against the product database. "
+    "Available tables: users(id, email, name, created_at), "
+    "orders(id, user_id, total, status, created_at), "
+    "products(id, name, price, inventory_count). "
+    "Returns rows as a JSON array. Read-only: only SELECT queries are allowed."
+)
+```
+
+## Building a Complete Production Toolkit
+
+Here is a complete production-quality toolkit with five tools, proper validation, and consistent error handling.
+
+```python
+import json
+import os
+import subprocess
+from pathlib import Path
+from typing import Optional
+from pydantic import BaseModel, Field
+
+import requests
+
+
+ALLOWED_READ_DIR = Path("/workspace/data")
+
+
+# --- Tool 1: web_search ---
+
+class WebSearchInput(BaseModel):
+    query: str = Field(..., min_length=1, max_length=300)
+
+
+def web_search(raw_args: str) -> str:
+    """Search the web using the Brave Search API."""
+    try:
+        args = WebSearchInput(**json.loads(raw_args))
+    except Exception as e:
+        return json.dumps({"error": "validation_error", "message": str(e)})
+
+    api_key = os.environ.get("BRAVE_API_KEY")
+    if not api_key:
+        return json.dumps({"error": "configuration_error", "message": "BRAVE_API_KEY not set"})
+
+    try:
+        resp = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            headers={"Accept": "application/json", "X-Subscription-Token": api_key},
+            params={"q": args.query, "count": 5},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        results = [
+            {"title": r["title"], "snippet": r["description"], "url": r["url"]}
+            for r in data.get("web", {}).get("results", [])
+        ]
+        return json.dumps({"results": results, "total": len(results)})
+    except requests.Timeout:
+        return json.dumps({"error": "timeout", "suggestion": "Try again in a moment."})
+    except Exception as e:
+        return json.dumps({"error": "search_failed", "message": str(e)})
+
+
+# --- Tool 2: execute_python ---
+
+class ExecutePythonInput(BaseModel):
+    code: str = Field(..., min_length=1, max_length=5000)
+    timeout_seconds: int = Field(default=10, ge=1, le=30)
+
+
+def execute_python(raw_args: str) -> str:
+    """Execute Python code in a subprocess sandbox."""
+    try:
+        args = ExecutePythonInput(**json.loads(raw_args))
+    except Exception as e:
+        return json.dumps({"error": "validation_error", "message": str(e)})
+
+    try:
+        result = subprocess.run(
+            ["python3", "-c", args.code],
+            capture_output=True,
+            text=True,
+            timeout=args.timeout_seconds,
+        )
+        return json.dumps({
+            "stdout": result.stdout[:2000],
+            "stderr": result.stderr[:500] if result.stderr else None,
+            "exit_code": result.returncode,
+        })
+    except subprocess.TimeoutExpired:
+        return json.dumps({
+            "error": "timeout",
+            "message": f"Code execution exceeded {args.timeout_seconds}s.",
+        })
+    except Exception as e:
+        return json.dumps({"error": "execution_failed", "message": str(e)})
+
+
+# --- Tool 3: read_file ---
+
+class ReadFileInput(BaseModel):
+    path: str = Field(..., min_length=1)
+    max_chars: int = Field(default=3000, ge=100, le=10000)
+
+
+def read_file(raw_args: str) -> str:
+    """Read a file within the allowed workspace directory."""
+    try:
+        args = ReadFileInput(**json.loads(raw_args))
+    except Exception as e:
+        return json.dumps({"error": "validation_error", "message": str(e)})
+
+    target = Path(args.path).resolve()
+
+    # Security: only allow reads within the allowed directory
+    if not str(target).startswith(str(ALLOWED_READ_DIR)):
+        return json.dumps({
+            "error": "permission_denied",
+            "message": f"Access outside {ALLOWED_READ_DIR} is not allowed.",
+        })
+
+    try:
+        content = target.read_text()
+        truncated = len(content) > args.max_chars
+        return json.dumps({
+            "content": content[:args.max_chars],
+            "truncated": truncated,
+            "total_chars": len(content),
+        })
+    except FileNotFoundError:
+        return json.dumps({"error": "not_found", "message": f"File not found: {args.path}"})
+    except Exception as e:
+        return json.dumps({"error": "read_failed", "message": str(e)})
+
+
+# --- Tool 4: write_file ---
+
+class WriteFileInput(BaseModel):
+    path: str = Field(..., min_length=1)
+    content: str = Field(..., max_length=50000)
+
+
+def write_file(raw_args: str) -> str:
+    """Write content to a file within the allowed workspace directory."""
+    try:
+        args = WriteFileInput(**json.loads(raw_args))
+    except Exception as e:
+        return json.dumps({"error": "validation_error", "message": str(e)})
+
+    target = Path(args.path).resolve()
+
+    if not str(target).startswith(str(ALLOWED_READ_DIR)):
+        return json.dumps({"error": "permission_denied", "message": "Access outside workspace denied."})
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(args.content)
+        return json.dumps({"success": True, "path": str(target), "bytes_written": len(args.content)})
+    except Exception as e:
+        return json.dumps({"error": "write_failed", "message": str(e)})
+
+
+# --- Tool 5: query_database ---
+
+class QueryDatabaseInput(BaseModel):
+    sql: str = Field(..., min_length=1, max_length=2000)
+    max_rows: int = Field(default=20, ge=1, le=100)
+
+    @property
+    def is_safe(self) -> bool:
+        """Only allow SELECT statements."""
+        stripped = self.sql.strip().upper()
+        return stripped.startswith("SELECT") and not any(
+            kw in stripped for kw in ["DROP", "DELETE", "INSERT", "UPDATE", "TRUNCATE", "ALTER"]
+        )
+
+
+def query_database(raw_args: str) -> str:
+    """Execute a read-only SQL query against the application database."""
+    try:
+        args = QueryDatabaseInput(**json.loads(raw_args))
+    except Exception as e:
+        return json.dumps({"error": "validation_error", "message": str(e)})
+
+    if not args.is_safe:
+        return json.dumps({
+            "error": "forbidden_operation",
+            "message": "Only SELECT queries are allowed.",
+            "suggestion": "Use write_file or a separate mutation tool for data modifications.",
+        })
+
+    # In production: use your actual database connection
+    # import sqlite3
+    # conn = sqlite3.connect(os.environ["DATABASE_URL"])
+    return json.dumps({
+        "rows": [],
+        "row_count": 0,
+        "message": "Database not configured in this example.",
+    })
+
+
+# --- Tool registry ---
+
+PRODUCTION_TOOLS = {
+    "web_search": {
+        "fn": web_search,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": (
+                    "Search the public web for current factual information. "
+                    "Use for recent events, public documentation, prices, and general knowledge. "
+                    "Do NOT use for internal company data — use query_database instead. "
+                    "Returns: list of {title, snippet, url} objects."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Specific search query."}
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+    },
+    "execute_python": {
+        "fn": execute_python,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "execute_python",
+                "description": (
+                    "Execute a Python code snippet and return stdout/stderr. "
+                    "Use for data processing, calculations, and file manipulation. "
+                    "Limited to 30 seconds. No network access. "
+                    "Returns: {stdout, stderr, exit_code}."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "Valid Python 3 code."},
+                        "timeout_seconds": {
+                            "type": "integer",
+                            "description": "Max execution time. Default 10, max 30.",
+                        },
+                    },
+                    "required": ["code"],
+                },
+            },
+        },
+    },
+}
+```
+
+## Tool Versioning and Deprecation
+
+As your agent system matures, tools evolve. New parameters get added, schemas change, old tools get replaced. A versioning strategy prevents breaking changes from disrupting running agents.
+
+Name new versions with a suffix: `search_documents_v2`. Keep `search_documents` (v1) working but add a deprecation notice in its description: "DEPRECATED: use search_documents_v2 instead. Will be removed 2025-12-01."
+
+Log tool usage by version in your observability system. When you see `search_documents` usage drop to zero, it is safe to remove.
+
+For backwards compatibility, use Pydantic's `model_validator` to handle both old and new argument shapes in the same handler during the transition period.
+
+## Key Takeaways
+
+- The tool description is read by the model — it must answer what the tool does, when to use it, and what it returns. Vague descriptions cause wrong tool selection.
+- Use `snake_case` `verb_noun` names. Use `enum` for constrained parameter values. Document defaults in parameter descriptions.
+- Implement handlers with Pydantic validation. Return structured error dicts instead of raising exceptions — the agent must be able to continue after a tool failure.
+- Keep tool outputs under 500 characters when possible. Return only the information the model needs for its next reasoning step.
+- Prevent wrong tool selection with explicit "Do NOT use for X" guidance in descriptions. Prevent hallucinated arguments by including schema information in descriptions.
+- Apply security constraints at the tool level: directory allowlists for file access, read-only enforcement for database queries, timeouts for code execution.
+- Version tools with suffixes and deprecation notices in descriptions. Log usage by version before removing old tools.

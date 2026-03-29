@@ -1,0 +1,484 @@
+---
+title: "Probability Theory & Distributions for ML"
+description: "Master the core probability distributions used in machine learning — from Bernoulli to Beta — with scipy.stats, parameter estimation via MLE, QQ plots, the Central Limit Theorem, and KL divergence."
+duration: 22
+order: 2
+---
+
+Probability is the language in which every machine learning model is written. Whether you are reading a logistic regression output, tuning a Naive Bayes classifier, or interpreting a Bayesian A/B test, you are speaking probability. This lesson makes that language fluent — not with abstract measure theory, but with the distributions you will encounter repeatedly in real data science work, implemented directly in Python.
+
+## Probability Axioms and Sample Spaces
+
+A **sample space** S is the set of all possible outcomes of an experiment. An **event** A is a subset of S. Probability assigns a number P(A) to each event satisfying three axioms:
+
+1. Non-negativity: P(A) >= 0 for all events A
+2. Normalization: P(S) = 1
+3. Additivity: for mutually exclusive events A and B, P(A or B) = P(A) + P(B)
+
+Everything in probability — every distribution, every theorem — follows from these three axioms. The practical implication is that probabilities must sum (or integrate) to 1, which constrains how models can output scores and how we interpret them.
+
+**Conditional probability** captures how probability changes when we gain information. P(A|B) — the probability of A given that B occurred — is defined as:
+
+P(A|B) = P(A and B) / P(B)
+
+This is not just a formula; it is a belief-updating operation. When B is observed, the sample space shrinks to B, and we renormalize.
+
+**Independence** means observing B gives us no information about A: P(A|B) = P(A), or equivalently P(A and B) = P(A) * P(B). Independence is stronger than **mutual exclusivity** — two events are mutually exclusive when P(A and B) = 0, meaning they cannot both occur. Mutually exclusive events with nonzero probability are always dependent (knowing one occurred rules out the other).
+
+```python
+import numpy as np
+import scipy.stats as stats
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+
+rng = np.random.default_rng(42)
+
+# Demonstrate conditional probability with a coin flip experiment
+# P(second flip = H | first flip = H) for a fair coin = 0.5 (independent)
+n_trials = 100_000
+flips = rng.integers(0, 2, size=(n_trials, 2))  # 0=T, 1=H
+
+first_heads = flips[:, 0] == 1
+both_heads   = (flips[:, 0] == 1) & (flips[:, 1] == 1)
+
+p_second_given_first = both_heads.sum() / first_heads.sum()
+print(f"P(second=H | first=H) ≈ {p_second_given_first:.4f}")  # ~0.5 — independent
+```
+
+## Bernoulli Distribution
+
+The simplest distribution: a single trial with success probability p.
+
+- PMF: P(X = 1) = p, P(X = 0) = 1 - p
+- Mean: p
+- Variance: p(1 - p)
+
+It models one click, one email open, one patient outcome. Every row of a binary target column in a classification dataset is a Bernoulli draw.
+
+```python
+from scipy.stats import bernoulli
+
+p = 0.3
+dist = bernoulli(p)
+
+print(f"PMF P(X=1) = {dist.pmf(1):.2f}")
+print(f"Mean       = {dist.mean():.2f}")
+print(f"Variance   = {dist.var():.4f}")
+
+# Fit to observed binary data (MLE: p_hat = mean of observations)
+data = rng.choice([0, 1], size=1000, p=[0.7, 0.3])
+p_hat = data.mean()
+print(f"MLE estimate of p: {p_hat:.3f}")
+```
+
+## Binomial Distribution
+
+Extend Bernoulli to n independent trials. The Binomial(n, p) distribution counts the number of successes k in n trials.
+
+PMF: P(X = k) = C(n, k) * p^k * (1-p)^(n-k)
+
+- Mean: n * p
+- Variance: n * p * (1 - p)
+
+Use it to model: how many of 1000 emails are opened, how many of 200 patients respond to treatment, how many of 50 A/B test conversions occur in a bucket.
+
+```python
+from scipy.stats import binom
+
+n, p = 20, 0.3
+dist = binom(n, p)
+
+k_values = np.arange(0, n + 1)
+pmf_values = dist.pmf(k_values)
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+axes[0].bar(k_values, pmf_values, color='steelblue', alpha=0.8, edgecolor='white')
+axes[0].axvline(dist.mean(), color='red', linestyle='--', label=f'Mean = {dist.mean():.1f}')
+axes[0].set_title('Binomial(n=20, p=0.3) PMF')
+axes[0].set_xlabel('k (number of successes)')
+axes[0].set_ylabel('P(X = k)')
+axes[0].legend()
+
+# CDF: probability of at most k successes
+axes[1].step(k_values, dist.cdf(k_values), where='post', color='steelblue')
+axes[1].set_title('Binomial CDF')
+axes[1].set_xlabel('k')
+axes[1].set_ylabel('P(X <= k)')
+
+plt.tight_layout()
+plt.savefig('binomial_distribution.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+# Practical: probability that exactly 8 of 20 emails are opened
+print(f"P(X=8) = {dist.pmf(8):.4f}")
+# Probability that at most 5 emails are opened
+print(f"P(X<=5) = {dist.cdf(5):.4f}")
+# Probability that more than 10 are opened
+print(f"P(X>10) = {1 - dist.cdf(10):.4f}")
+```
+
+When n is large and p is small (np stays moderate), Binomial converges to Poisson. The cutoff of thumb: n >= 20 and p <= 0.05.
+
+## Poisson Distribution
+
+The Poisson(lambda) distribution counts rare events in a fixed interval — requests per second, bugs per thousand lines of code, customer arrivals per hour.
+
+PMF: P(X = k) = e^(-lambda) * lambda^k / k!
+
+- Mean: lambda
+- Variance: lambda (mean equals variance — a diagnostic check for Poisson data)
+
+```python
+from scipy.stats import poisson
+
+lam = 4.5  # average events per interval
+dist = poisson(lam)
+
+k_values = np.arange(0, 20)
+
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.bar(k_values, dist.pmf(k_values), color='coral', alpha=0.8, edgecolor='white')
+ax.axvline(lam, color='red', linestyle='--', label=f'lambda = {lam}')
+ax.set_title(f'Poisson(lambda={lam}) PMF')
+ax.set_xlabel('k')
+ax.set_ylabel('P(X = k)')
+ax.legend()
+plt.tight_layout()
+plt.savefig('poisson_distribution.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+# Fit Poisson to data: MLE estimate is simply the sample mean
+count_data = rng.poisson(lam=4.5, size=500)
+lambda_hat = count_data.mean()
+print(f"True lambda: {lam}, MLE estimate: {lambda_hat:.3f}")
+print(f"Sample variance: {count_data.var():.3f}")  # Should be close to lambda_hat
+
+# When to use Poisson vs Binomial
+# Binomial: n=10000 trials, p=0.00045 → lambda = n*p = 4.5
+n_large, p_small = 10_000, 0.00045
+binom_approx = binom(n_large, p_small)
+print(f"\nP(X=5) via Binomial: {binom_approx.pmf(5):.6f}")
+print(f"P(X=5) via Poisson:  {dist.pmf(5):.6f}")  # Nearly identical
+```
+
+## Normal Distribution
+
+The Normal(mu, sigma) distribution is the workhorse of statistics. Its ubiquity comes from the Central Limit Theorem — sums of independent random variables converge to Normal regardless of the original distribution.
+
+PDF: f(x) = (1 / (sigma * sqrt(2*pi))) * exp(-((x - mu)^2) / (2 * sigma^2))
+
+The **empirical rule**: 68% of data falls within 1 sigma of the mean, 95% within 2 sigma, 99.7% within 3 sigma. These cutoffs are everywhere in outlier detection, confidence interval construction, and hypothesis testing.
+
+```python
+from scipy.stats import norm
+
+mu, sigma = 0, 1  # standard normal
+dist = norm(mu, sigma)
+
+x = np.linspace(-4, 4, 400)
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+axes[0].plot(x, dist.pdf(x), color='steelblue', linewidth=2)
+for n_sigma, color in [(1, 'gold'), (2, 'orange'), (3, 'red')]:
+    axes[0].fill_between(
+        x, dist.pdf(x),
+        where=(np.abs(x) <= n_sigma),
+        alpha=0.3, color=color,
+        label=f'±{n_sigma}σ: {dist.cdf(n_sigma) - dist.cdf(-n_sigma):.1%}'
+    )
+axes[0].set_title('Normal(0, 1) PDF — Empirical Rule')
+axes[0].legend()
+
+axes[1].plot(x, dist.cdf(x), color='steelblue', linewidth=2)
+axes[1].axhline(0.025, color='red', linestyle=':', label='2.5% / 97.5%')
+axes[1].axhline(0.975, color='red', linestyle=':')
+axes[1].set_title('Normal CDF')
+axes[1].legend()
+
+plt.tight_layout()
+plt.savefig('normal_distribution.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+# Fitting a Normal to data: MLE estimates
+data = rng.normal(loc=5.2, scale=1.8, size=500)
+mu_hat, sigma_hat = norm.fit(data)
+print(f"MLE mu: {mu_hat:.3f}, MLE sigma: {sigma_hat:.3f}")
+
+# Percent-point function (inverse CDF) — critical values
+print(f"\n95th percentile (z-score): {dist.ppf(0.95):.4f}")   # 1.645
+print(f"97.5th percentile:         {dist.ppf(0.975):.4f}")  # 1.960
+```
+
+## Log-Normal Distribution
+
+When a variable is the product of many small positive factors, its logarithm is Normal — and the variable itself is Log-Normal. Income distributions, asset prices, system latency, and biological measurements are commonly log-normal.
+
+Key property: if log(X) ~ Normal(mu, sigma), then X ~ LogNormal(mu, sigma).
+
+```python
+from scipy.stats import lognorm
+
+# lognorm in scipy: parameterised by s=sigma, scale=exp(mu)
+mu_underlying, sigma_underlying = 2.0, 0.5
+dist = lognorm(s=sigma_underlying, scale=np.exp(mu_underlying))
+
+x = np.linspace(0.01, 30, 400)
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+axes[0].plot(x, dist.pdf(x), color='purple', linewidth=2)
+axes[0].set_title('Log-Normal PDF (right-skewed)')
+axes[0].set_xlabel('x')
+
+# Taking log transforms a log-normal back to normal
+log_data = rng.normal(mu_underlying, sigma_underlying, size=1000)
+raw_data = np.exp(log_data)
+
+axes[1].hist(raw_data, bins=50, density=True, alpha=0.6, color='purple', label='Raw data')
+axes[1].plot(x, dist.pdf(x), 'r-', linewidth=2, label='Fitted PDF')
+axes[1].set_title('Empirical log-normal data')
+axes[1].legend()
+
+plt.tight_layout()
+plt.savefig('lognormal_distribution.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+# Fit log-normal to data
+s_hat, loc_hat, scale_hat = lognorm.fit(raw_data, floc=0)
+print(f"Fitted sigma: {s_hat:.3f}, fitted mu: {np.log(scale_hat):.3f}")
+```
+
+## Exponential Distribution
+
+The Exponential(lambda) distribution models the time between events in a Poisson process — waiting time for the next server request, time between customer arrivals, time until component failure.
+
+Its defining property is **memorylessness**: P(X > s + t | X > s) = P(X > t). Having waited already does not change the remaining wait time. This is often unrealistic for failure times (machines wear out), which is why Weibull distributions are used in reliability engineering.
+
+```python
+from scipy.stats import expon
+
+# scipy parameterises Exponential via scale = 1/lambda
+lam = 0.5  # rate
+dist = expon(scale=1/lam)
+
+x = np.linspace(0, 10, 300)
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.plot(x, dist.pdf(x), color='green', linewidth=2, label=f'Exp(lambda={lam})')
+ax.fill_between(x, dist.pdf(x), alpha=0.2, color='green')
+ax.set_title('Exponential PDF')
+ax.set_xlabel('Time until next event')
+ax.legend()
+plt.tight_layout()
+plt.savefig('exponential_distribution.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+# Fit to inter-arrival times
+inter_arrivals = rng.exponential(scale=2.0, size=300)
+scale_hat = inter_arrivals.mean()  # MLE for exponential is the sample mean
+print(f"MLE lambda: {1/scale_hat:.4f} (true: 0.5)")
+```
+
+## Beta Distribution
+
+The Beta(alpha, beta) distribution lives on [0, 1], making it the natural model for probabilities, proportions, and rates. In Bayesian A/B testing, it is the conjugate prior for the Binomial — the posterior after observing successes and failures is still Beta.
+
+Interpretation: Beta(alpha, beta) can be thought of as representing a state of belief after seeing (alpha - 1) successes and (beta - 1) failures from a uniform prior.
+
+```python
+from scipy.stats import beta as beta_dist
+
+fig, ax = plt.subplots(figsize=(9, 5))
+x = np.linspace(0.001, 0.999, 400)
+
+configs = [
+    (1, 1, 'Uniform (no prior info)'),
+    (2, 8, 'Low conversion (alpha=2, beta=8)'),
+    (8, 2, 'High conversion (alpha=8, beta=2)'),
+    (50, 50, 'Concentrated at 0.5 (lots of data)'),
+    (5, 2, 'Slightly right-skewed'),
+]
+
+for alpha, b, label in configs:
+    dist = beta_dist(alpha, b)
+    ax.plot(x, dist.pdf(x), linewidth=2, label=f'Beta({alpha},{b}) — {label}')
+
+ax.set_title('Beta Distributions — Modeling Probabilities')
+ax.set_xlabel('p (conversion rate)')
+ax.set_ylabel('Density')
+ax.legend(fontsize=8)
+plt.tight_layout()
+plt.savefig('beta_distribution.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+# Bayesian update: start with Beta(1,1) uniform prior
+# Observe 15 clicks, 85 non-clicks
+alpha_prior, beta_prior = 1, 1
+clicks, non_clicks = 15, 85
+alpha_post = alpha_prior + clicks
+beta_post  = beta_prior + non_clicks
+
+posterior = beta_dist(alpha_post, beta_post)
+ci_low, ci_high = posterior.ppf(0.025), posterior.ppf(0.975)
+print(f"Posterior mean: {posterior.mean():.3f}")
+print(f"95% credible interval: [{ci_low:.3f}, {ci_high:.3f}]")
+```
+
+## Uniform Distribution
+
+When you have no information favouring any value in a range, use Uniform(a, b). It is the maximum entropy distribution over a bounded interval and serves as a non-informative prior in Bayesian analysis.
+
+```python
+from scipy.stats import uniform
+
+dist = uniform(loc=2, scale=8)  # Uniform on [2, 10], scale = b - a
+print(f"Mean:     {dist.mean():.1f}")
+print(f"Variance: {dist.var():.4f}")
+print(f"P(X < 5): {dist.cdf(5):.3f}")  # (5-2)/(10-2) = 0.375
+```
+
+## Maximum Likelihood Estimation
+
+MLE finds the parameter values that maximise the probability of observing the data. For each distribution, scipy provides `.fit()` which runs MLE under the hood.
+
+```python
+# MLE for multiple distributions on the same dataset
+true_data = rng.gamma(a=3.0, scale=2.0, size=500)
+
+# Try fitting Normal and Gamma
+mu_hat, sigma_hat = norm.fit(true_data)
+from scipy.stats import gamma as gamma_dist
+a_hat, loc_hat, scale_hat = gamma_dist.fit(true_data, floc=0)
+
+print("Fitting gamma-distributed data:")
+print(f"  Normal fit:  mu={mu_hat:.2f}, sigma={sigma_hat:.2f}")
+print(f"  Gamma fit:   a={a_hat:.2f}, scale={scale_hat:.2f}")
+
+# Log-likelihood comparison (higher is better)
+ll_norm  = norm.logpdf(true_data, mu_hat, sigma_hat).sum()
+ll_gamma = gamma_dist.logpdf(true_data, a_hat, loc_hat, scale_hat).sum()
+print(f"\nLog-likelihood Normal: {ll_norm:.2f}")
+print(f"Log-likelihood Gamma:  {ll_gamma:.2f}")  # Should be higher
+```
+
+## QQ Plots for Normality Checking
+
+A QQ plot (quantile-quantile plot) compares the quantiles of your data against the theoretical quantiles of a Normal distribution. If the data is Normal, the points fall on a straight line. Deviations from the line reveal skew, heavy tails, or truncation.
+
+```python
+from scipy.stats import probplot
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+
+datasets = [
+    (rng.normal(0, 1, 300),       'Normal data (should be linear)'),
+    (rng.exponential(1, 300),     'Exponential data (right-skewed)'),
+    (rng.standard_t(df=3, size=300), 't(df=3) — heavy tails'),
+]
+
+for ax, (data, title) in zip(axes, datasets):
+    probplot(data, dist='norm', plot=ax)
+    ax.set_title(title)
+    ax.get_lines()[1].set_color('red')
+
+plt.tight_layout()
+plt.savefig('qq_plots.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+Interpreting QQ plots:
+- Points curving upward at the right tail: right skew (log-transform candidate)
+- S-shape (points above the line at both ends): heavy tails
+- Points below the line at both extremes: light tails (platykurtic)
+
+## The Central Limit Theorem
+
+The CLT states that the sampling distribution of the sample mean converges to Normal as n increases, regardless of the population distribution. This is why Normal distributions appear everywhere — not because data is Normal, but because averages are.
+
+```python
+fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+
+population_samples = rng.exponential(scale=1, size=100_000)
+sample_sizes = [1, 5, 10, 30, 100, 500]
+
+for ax, n in zip(axes.flatten(), sample_sizes):
+    sample_means = [
+        rng.choice(population_samples, size=n).mean()
+        for _ in range(2000)
+    ]
+    ax.hist(sample_means, bins=40, density=True, color='steelblue',
+            alpha=0.7, edgecolor='white')
+
+    # Overlay theoretical Normal
+    mu_theory = 1.0
+    sigma_theory = 1.0 / np.sqrt(n)
+    x_range = np.linspace(min(sample_means), max(sample_means), 200)
+    ax.plot(x_range, norm.pdf(x_range, mu_theory, sigma_theory),
+            'r-', linewidth=2)
+    ax.set_title(f'n = {n}')
+    ax.set_xlabel('Sample mean')
+
+plt.suptitle('CLT: Sampling Distribution of Mean (from Exponential population)',
+             fontsize=13, y=1.01)
+plt.tight_layout()
+plt.savefig('central_limit_theorem.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+By n=30 the sampling distribution looks approximately Normal even for the heavily skewed Exponential population. This is why statistical tests that assume Normality of means often work in practice even when the raw data is not Normal — provided n is large enough.
+
+## KL Divergence — Measuring Distribution Differences
+
+The Kullback-Leibler divergence measures how much one probability distribution differs from another. It is the expected log-ratio of probabilities under distribution P.
+
+KL(P || Q) = sum over x of P(x) * log(P(x) / Q(x))
+
+KL divergence is not symmetric (KL(P||Q) != KL(Q||P)) and equals 0 when the distributions are identical. It appears in variational inference, information theory, and as the theoretical foundation of cross-entropy loss in neural networks.
+
+```python
+# KL divergence between two Binomial distributions
+k = np.arange(0, 21)
+p_dist = binom(20, 0.3).pmf(k)  # P
+q_dist = binom(20, 0.5).pmf(k)  # Q (approximation / reference)
+
+# Clip to avoid log(0)
+p_safe = np.clip(p_dist, 1e-12, None)
+q_safe = np.clip(q_dist, 1e-12, None)
+
+kl_pq = (p_safe * np.log(p_safe / q_safe)).sum()
+kl_qp = (q_safe * np.log(q_safe / p_safe)).sum()
+
+print(f"KL(P || Q) = {kl_pq:.4f}")
+print(f"KL(Q || P) = {kl_qp:.4f}")
+print(f"KL is asymmetric: {kl_pq:.4f} != {kl_qp:.4f}")
+
+# Compare similar distributions
+p2 = binom(20, 0.3).pmf(k)
+q2 = binom(20, 0.31).pmf(k)  # Small difference
+kl_similar = (np.clip(p2, 1e-12, None) * np.log(np.clip(p2, 1e-12, None) / np.clip(q2, 1e-12, None))).sum()
+print(f"\nKL(Binom(0.3) || Binom(0.31)) = {kl_similar:.6f}")  # Very small
+```
+
+## Choosing the Right Distribution
+
+| Situation | Distribution |
+|---|---|
+| Binary outcome (click / no click) | Bernoulli(p) |
+| Count of successes in n trials | Binomial(n, p) |
+| Count of rare events per interval | Poisson(lambda) |
+| Sums and averages of many variables | Normal(mu, sigma) |
+| Multiplicative processes, income, latency | Log-Normal |
+| Time between Poisson events | Exponential(lambda) |
+| A probability / proportion as random variable | Beta(alpha, beta) |
+| No information over bounded range | Uniform(a, b) |
+
+## Key Takeaways
+
+- Probability axioms (non-negativity, normalization, additivity) constrain every model output; conditional probability P(A|B) = P(A and B) / P(B) is the engine of inference.
+- Bernoulli and Binomial model binary and count outcomes; Poisson handles rare events where n is large and p is small, with the diagnostic that mean equals variance.
+- The Normal distribution's dominance stems from the CLT — it is the limit of sample means, not necessarily of raw data, which is why normality assumptions about averages are often safe even with non-normal data.
+- Log-Normal distributions arise from multiplicative processes; income, latency, and prices are better modelled (and transformed with log1p) using log-normal assumptions.
+- MLE via `scipy.stats.dist.fit()` returns the parameter values maximising the probability of the observed data; always compare log-likelihoods across candidate distributions.
+- QQ plots are the fastest diagnostic for distribution shape; deviations from the reference line indicate skew, heavy tails, or truncation that will violate model assumptions downstream.
+- The Beta distribution is the natural model for probabilities-as-unknowns and is the conjugate prior for Bernoulli/Binomial data, enabling closed-form Bayesian updating of conversion rates.
+- KL divergence quantifies the cost of approximating one distribution with another; it is asymmetric, zero when distributions are identical, and is the theoretical foundation of cross-entropy loss.

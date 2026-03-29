@@ -1,0 +1,546 @@
+---
+title: "Chunking Strategies — Fixed, Semantic & Hierarchical"
+description: "Understand why chunk size directly controls retrieval recall. Implement fixed-size, sentence-based, paragraph-based, recursive, semantic, and hierarchical chunking. Evaluate chunk quality with a mini benchmark."
+duration: 26
+order: 3
+---
+
+## Why Chunking Matters
+
+The chunk is the atomic unit of retrieval. When a user asks a question, you retrieve chunks — not entire documents. This means the chunk boundary decisions you make at index time directly determine whether the answer can ever be found.
+
+Two fundamental failure modes dominate poorly designed chunking pipelines:
+
+**Chunks too small (e.g. 200 characters):** A single sentence rarely contains a complete answer. If the answer spans two or three sentences and you split at sentence boundaries, the answer exists across multiple chunks. Retrieving only the top-k chunks means you may retrieve the setup without the conclusion, or the conclusion without the number that makes it meaningful. Small chunks also produce weak embeddings — a 20-word sentence does not encode enough semantic context for the embedding model to precisely represent its meaning.
+
+**Chunks too large (e.g. 4,000 characters):** A dense paragraph from a technical manual may cover three different topics. When you embed 4,000 characters, the resulting vector is a centroid over all the topics in that text. A specific query about one sub-topic will have a lower cosine similarity to that chunk than to a focused chunk about that one topic. Large chunks dilute the retrieval signal and waste context window space on irrelevant content.
+
+The sweet spot for most document types is 256 to 512 tokens with 10–15% overlap. But the right answer depends on your content — code, tables, legal text, and conversational transcripts each benefit from different strategies.
+
+## Fixed-Size Chunking
+
+### Character-Based Splitting
+
+The simplest approach: split the text into chunks of a fixed character count with a fixed overlap.
+
+```python
+def chunk_by_characters(
+    text: str,
+    chunk_size: int = 500,
+    overlap: int = 50,
+) -> list[dict]:
+    """
+    Split text into fixed-size character chunks with overlap.
+    Returns list of {"text": str, "start": int, "end": int}.
+    """
+    chunks = []
+    start = 0
+
+    while start < len(text):
+        end = start + chunk_size
+        chunk_text = text[start:end]
+        chunks.append({
+            "text": chunk_text,
+            "start": start,
+            "end": min(end, len(text)),
+        })
+        start += chunk_size - overlap
+
+    return chunks
+```
+
+Character-based splitting ignores word and sentence boundaries. The result is chunks that begin and end mid-sentence, which degrades embedding quality. Use this only as a baseline.
+
+### Token-Based Splitting
+
+LLMs operate on tokens, not characters. A "chunk size" in characters can vary significantly in token count depending on the vocabulary — code with short identifiers is token-dense, while prose is less dense. Using tiktoken to count tokens gives you precise control over how many tokens reach the LLM's context window.
+
+```python
+import tiktoken
+
+def chunk_by_tokens(
+    text: str,
+    chunk_size: int = 256,
+    overlap: int = 25,
+    encoding_name: str = "cl100k_base",  # GPT-4, Llama 3 compatible
+) -> list[dict]:
+    """
+    Split text into fixed-size token chunks with overlap.
+    Returns list of {"text": str, "token_count": int}.
+    """
+    enc = tiktoken.get_encoding(encoding_name)
+    tokens = enc.encode(text)
+    chunks = []
+    start = 0
+
+    while start < len(tokens):
+        end = start + chunk_size
+        chunk_tokens = tokens[start:end]
+        chunk_text = enc.decode(chunk_tokens)
+        chunks.append({
+            "text": chunk_text,
+            "token_count": len(chunk_tokens),
+            "token_start": start,
+        })
+        start += chunk_size - overlap
+
+    return chunks
+```
+
+Token-based splitting is more predictable than character-based splitting for LLM consumption, but it still breaks at arbitrary points within words or sentences.
+
+## Sentence-Based Chunking
+
+Sentence boundaries are natural semantic units. Grouping N sentences with a one-sentence overlap produces more coherent chunks than fixed-size splitting.
+
+```python
+import nltk
+nltk.download("punkt_tab", quiet=True)
+
+def chunk_by_sentences(
+    text: str,
+    sentences_per_chunk: int = 5,
+    overlap_sentences: int = 1,
+) -> list[dict]:
+    """
+    Split text into chunks of N sentences with sentence-level overlap.
+    """
+    sentences = nltk.sent_tokenize(text)
+    chunks = []
+    start = 0
+
+    while start < len(sentences):
+        end = start + sentences_per_chunk
+        chunk_sentences = sentences[start:end]
+        chunks.append({
+            "text": " ".join(chunk_sentences),
+            "sentence_start": start,
+            "sentence_end": min(end, len(sentences)),
+            "sentence_count": len(chunk_sentences),
+        })
+        start += sentences_per_chunk - overlap_sentences
+
+    return chunks
+```
+
+For higher-quality sentence segmentation (especially for code, lists, and domain-specific text), spaCy is more accurate than NLTK:
+
+```python
+import spacy
+nlp = spacy.load("en_core_web_sm")
+
+def chunk_by_spacy_sentences(
+    text: str,
+    sentences_per_chunk: int = 5,
+    overlap_sentences: int = 1,
+) -> list[dict]:
+    doc = nlp(text)
+    sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+    chunks = []
+    start = 0
+
+    while start < len(sentences):
+        end = start + sentences_per_chunk
+        chunk_sentences = sentences[start:end]
+        chunks.append({
+            "text": " ".join(chunk_sentences),
+            "sentence_start": start,
+        })
+        start += sentences_per_chunk - overlap_sentences
+
+    return chunks
+```
+
+## Paragraph-Based Chunking
+
+Paragraphs are even stronger semantic units than sentences. A paragraph typically has a single topic or argument. Splitting on double newlines respects the author's intended structure.
+
+```python
+def chunk_by_paragraphs(
+    text: str,
+    max_tokens: int = 300,
+    encoding_name: str = "cl100k_base",
+) -> list[dict]:
+    """
+    Split text at paragraph boundaries, merging short paragraphs
+    and splitting long ones to stay under max_tokens.
+    """
+    enc = tiktoken.get_encoding(encoding_name)
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    chunks = []
+    current_parts = []
+    current_tokens = 0
+
+    for para in paragraphs:
+        para_tokens = len(enc.encode(para))
+
+        if para_tokens > max_tokens:
+            # Paragraph is too long: flush current buffer and split the paragraph
+            if current_parts:
+                chunks.append({"text": "\n\n".join(current_parts)})
+                current_parts = []
+                current_tokens = 0
+            # Recursively split the long paragraph by sentences
+            sub_chunks = chunk_by_sentences(para, sentences_per_chunk=4)
+            chunks.extend(sub_chunks)
+        elif current_tokens + para_tokens > max_tokens:
+            # Adding this paragraph would exceed limit: flush and start fresh
+            chunks.append({"text": "\n\n".join(current_parts)})
+            current_parts = [para]
+            current_tokens = para_tokens
+        else:
+            current_parts.append(para)
+            current_tokens += para_tokens
+
+    if current_parts:
+        chunks.append({"text": "\n\n".join(current_parts)})
+
+    return chunks
+```
+
+## Recursive Character Splitting
+
+The recursive splitter is the most robust general-purpose strategy. It tries a sequence of separators in order of decreasing preference, splitting only when a chunk exceeds the target size:
+
+```python
+def recursive_split(
+    text: str,
+    chunk_size: int = 512,
+    chunk_overlap: int = 50,
+    separators: list[str] = None,
+) -> list[str]:
+    """
+    Recursively split text using separators in order of preference.
+    Tries to keep splits at natural boundaries.
+    """
+    if separators is None:
+        separators = ["\n\n", "\n", ". ", " ", ""]
+
+    if len(text) <= chunk_size:
+        return [text] if text.strip() else []
+
+    sep = separators[0]
+    remaining_seps = separators[1:]
+
+    if sep == "":
+        # Base case: split by character
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = start + chunk_size
+            chunks.append(text[start:end])
+            start += chunk_size - chunk_overlap
+        return chunks
+
+    parts = text.split(sep)
+
+    chunks = []
+    current = ""
+
+    for part in parts:
+        candidate = current + sep + part if current else part
+
+        if len(candidate) <= chunk_size:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+                # Carry overlap into the next chunk
+                overlap_text = current[-chunk_overlap:] if chunk_overlap > 0 else ""
+                current = overlap_text + sep + part if overlap_text else part
+            else:
+                # Single part is too big: recurse with next separator
+                sub_chunks = recursive_split(part, chunk_size, chunk_overlap, remaining_seps)
+                chunks.extend(sub_chunks)
+                current = ""
+
+    if current:
+        chunks.append(current)
+
+    return [c for c in chunks if c.strip()]
+```
+
+The separator order `["\n\n", "\n", ". ", " ", ""]` encodes the preference: first try to split at paragraph breaks, then line breaks, then sentence boundaries, then word boundaries, then characters. The algorithm never falls back to a finer split unless necessary.
+
+## Semantic Chunking
+
+Semantic chunking uses embedding similarity between adjacent sentences to find topic boundaries. Where two adjacent sentences are semantically dissimilar, there is likely a topic change — a good place to split.
+
+```python
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+def semantic_chunk(
+    text: str,
+    embed_model: SentenceTransformer,
+    breakpoint_threshold: float = 0.75,
+    min_chunk_tokens: int = 100,
+    max_chunk_tokens: int = 400,
+    encoding_name: str = "cl100k_base",
+) -> list[dict]:
+    """
+    Split text at semantic breakpoints — where adjacent sentence similarity
+    drops below breakpoint_threshold.
+    """
+    enc = tiktoken.get_encoding(encoding_name)
+    sentences = nltk.sent_tokenize(text)
+
+    if len(sentences) < 2:
+        return [{"text": text}]
+
+    # Embed all sentences
+    embeddings = embed_model.encode(sentences, normalize_embeddings=True)
+
+    # Compute cosine similarity between adjacent sentences
+    similarities = []
+    for i in range(len(sentences) - 1):
+        sim = float(np.dot(embeddings[i], embeddings[i + 1]))
+        similarities.append(sim)
+
+    # Find breakpoints where similarity drops below threshold
+    breakpoints = set()
+    for i, sim in enumerate(similarities):
+        if sim < breakpoint_threshold:
+            breakpoints.add(i + 1)
+
+    # Build chunks from breakpoints, merging short chunks
+    groups = []
+    current_group = []
+    for i, sent in enumerate(sentences):
+        if i in breakpoints and current_group:
+            groups.append(current_group)
+            current_group = []
+        current_group.append(sent)
+    if current_group:
+        groups.append(current_group)
+
+    # Merge groups that are too short, split groups that are too long
+    chunks = []
+    for group in groups:
+        group_text = " ".join(group)
+        token_count = len(enc.encode(group_text))
+
+        if token_count < min_chunk_tokens and chunks:
+            # Merge with previous chunk
+            prev = chunks[-1]
+            chunks[-1] = {"text": prev["text"] + " " + group_text}
+        elif token_count > max_chunk_tokens:
+            # Split into token-based sub-chunks
+            sub = chunk_by_tokens(group_text, chunk_size=max_chunk_tokens, overlap=30)
+            chunks.extend(sub)
+        else:
+            chunks.append({"text": group_text})
+
+    return chunks
+```
+
+Semantic chunking is slower (requires embedding every sentence), but it produces semantically coherent chunks that tend to have better retrieval recall than fixed-size methods.
+
+## Hierarchical Chunking
+
+The parent-child architecture is one of the most impactful chunking innovations: store small chunks for retrieval precision, but return large parent chunks to the LLM for context richness.
+
+The intuition: small chunks (100–256 tokens) produce precise embeddings that match specific queries. But small chunks often lack the surrounding context the LLM needs to produce a coherent answer. By linking each small chunk to its parent chunk (512–1024 tokens), you retrieve precisely but answer richly.
+
+```python
+from dataclasses import dataclass, field
+from typing import Optional
+import uuid
+
+@dataclass
+class Chunk:
+    id: str
+    text: str
+    parent_id: Optional[str]
+    document_id: str
+    chunk_index: int
+    token_count: int
+    metadata: dict = field(default_factory=dict)
+
+def hierarchical_chunk(
+    text: str,
+    document_id: str,
+    parent_chunk_size: int = 1024,
+    child_chunk_size: int = 256,
+    child_overlap: int = 25,
+    encoding_name: str = "cl100k_base",
+) -> tuple[list[Chunk], list[Chunk]]:
+    """
+    Create parent-child chunk pairs.
+    Returns (parent_chunks, child_chunks).
+    Child chunks are what you index; parent chunks are what you return to the LLM.
+    """
+    enc = tiktoken.get_encoding(encoding_name)
+
+    # Split into parent chunks
+    parent_texts = recursive_split(text, chunk_size=parent_chunk_size, chunk_overlap=100)
+
+    parent_chunks = []
+    child_chunks = []
+
+    for p_idx, parent_text in enumerate(parent_texts):
+        parent_id = str(uuid.uuid4())
+        parent_token_count = len(enc.encode(parent_text))
+
+        parent_chunks.append(Chunk(
+            id=parent_id,
+            text=parent_text,
+            parent_id=None,
+            document_id=document_id,
+            chunk_index=p_idx,
+            token_count=parent_token_count,
+        ))
+
+        # Split the parent into child chunks
+        child_texts = chunk_by_tokens(
+            parent_text,
+            chunk_size=child_chunk_size,
+            overlap=child_overlap,
+        )
+
+        for c_idx, child_data in enumerate(child_texts):
+            child_chunks.append(Chunk(
+                id=str(uuid.uuid4()),
+                text=child_data["text"],
+                parent_id=parent_id,         # links back to parent
+                document_id=document_id,
+                chunk_index=c_idx,
+                token_count=child_data["token_count"],
+                metadata={"parent_chunk_index": p_idx},
+            ))
+
+    return parent_chunks, child_chunks
+
+def retrieve_with_parent_context(
+    child_chunk_ids: list[str],
+    child_chunks: list[Chunk],
+    parent_chunks: list[Chunk],
+) -> list[str]:
+    """
+    Given retrieved child chunk IDs, look up their parent chunks
+    and return the parent text for LLM context.
+    """
+    parent_map = {c.id: c for c in parent_chunks}
+    child_map = {c.id: c for c in child_chunks}
+
+    seen_parent_ids = set()
+    context_texts = []
+
+    for child_id in child_chunk_ids:
+        child = child_map.get(child_id)
+        if child and child.parent_id not in seen_parent_ids:
+            seen_parent_ids.add(child.parent_id)
+            parent = parent_map.get(child.parent_id)
+            if parent:
+                context_texts.append(parent.text)
+
+    return context_texts
+```
+
+In a production system, you index only the child chunks in the vector database. At retrieval time, you retrieve child chunk IDs, look up their parent IDs, and return the parent text to the LLM. The metadata store (a simple database or dictionary) maps child IDs to parent IDs.
+
+## Chunking for Special Content
+
+### Code Blocks
+
+Code should be split by function or class boundaries, not by character count. Splitting a function mid-way destroys its meaning:
+
+```python
+import ast
+
+def chunk_python_code(source: str) -> list[dict]:
+    """Split Python source code by top-level function and class definitions."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return [{"text": source, "type": "code"}]
+
+    chunks = []
+    lines = source.split("\n")
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            start_line = node.lineno - 1
+            end_line = node.end_lineno
+            chunk_text = "\n".join(lines[start_line:end_line])
+            chunks.append({
+                "text": chunk_text,
+                "type": "code",
+                "name": node.name,
+                "kind": type(node).__name__,
+                "start_line": start_line + 1,
+            })
+
+    return chunks if chunks else [{"text": source, "type": "code"}]
+```
+
+### Tables
+
+Tables must never be split mid-row. A table without its header loses all meaning. Always keep tables intact as a single chunk, even if they exceed your target chunk size.
+
+### Lists
+
+Numbered and bulleted lists convey ordered information. Splitting a 10-item list into two chunks means retrieving either the first half or the second half. When possible, keep lists intact within a single chunk.
+
+## Evaluating Chunk Quality
+
+Before committing to a chunking strategy, measure whether the strategy supports retrieval of your actual questions.
+
+```python
+def evaluate_chunk_coverage(
+    qa_pairs: list[dict],     # [{"question": str, "answer_passage": str}]
+    chunks: list[str],
+    similarity_threshold: float = 0.7,
+    embed_model: SentenceTransformer = None,
+) -> dict:
+    """
+    For each (question, answer_passage) pair, check whether any single chunk
+    contains the answer passage (by string match or embedding similarity).
+    Returns coverage statistics.
+    """
+    if embed_model is None:
+        embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    exact_matches = 0
+    semantic_matches = 0
+    total = len(qa_pairs)
+
+    chunk_embeddings = embed_model.encode(chunks, normalize_embeddings=True)
+
+    for pair in qa_pairs:
+        answer = pair["answer_passage"].strip()
+
+        # Exact string containment check
+        if any(answer in chunk for chunk in chunks):
+            exact_matches += 1
+            semantic_matches += 1
+            continue
+
+        # Semantic similarity check
+        answer_emb = embed_model.encode([answer], normalize_embeddings=True)[0]
+        similarities = np.dot(chunk_embeddings, answer_emb)
+        max_sim = float(similarities.max())
+
+        if max_sim >= similarity_threshold:
+            semantic_matches += 1
+
+    return {
+        "total_qa_pairs": total,
+        "exact_coverage": exact_matches / total,
+        "semantic_coverage": semantic_matches / total,
+        "chunks_evaluated": len(chunks),
+        "avg_chunk_length": sum(len(c) for c in chunks) / len(chunks),
+    }
+```
+
+Build 10–50 question-answer pairs from your actual document corpus (or use an LLM to generate them), run this evaluation across different chunking configurations, and pick the one with the highest coverage.
+
+## Key Takeaways
+
+- Chunk size is the single highest-leverage decision in a RAG pipeline — too small loses context, too large dilutes the embedding signal; 256–512 tokens with 10% overlap is a robust starting point
+- Character-based splitting is fast but breaks at arbitrary points; token-based splitting is more precise for LLM context budgets; sentence-based splitting respects natural language boundaries
+- The recursive character splitter is the most robust general-purpose approach: it tries paragraph, line, sentence, word, and character splits in order, always preferring the coarsest split that fits the chunk size
+- Semantic chunking uses embedding similarity between adjacent sentences to detect topic changes — it produces more coherent chunks at the cost of embedding every sentence at index time
+- Hierarchical (parent-child) chunking is one of the highest-ROI strategies: index small child chunks for precise retrieval, but return large parent chunks to the LLM for rich context
+- Always keep code blocks, tables, and lists intact within a single chunk — splitting them destroys their meaning
+- Evaluate chunk quality empirically by measuring how often your actual answer passages are contained within a single chunk, not by intuition about chunk size

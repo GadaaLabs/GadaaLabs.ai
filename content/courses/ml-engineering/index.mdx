@@ -1,34 +1,52 @@
 ---
-title: "Machine Learning Engineering"
-description: "Build production-grade ML systems from data pipelines to live inference endpoints, with monitoring and CI/CD baked in."
+title: "Machine Learning Engineering — Production ML Systems"
+description: "Build ML systems that actually ship: data pipelines, training infrastructure, experiment tracking, model packaging, inference serving, monitoring, and CI/CD for ML. Everything a senior MLE needs to take a model from notebook to production."
 author: "GadaaLabs"
-tags: ["machine-learning", "mlops", "pytorch", "python"]
-difficulty: "intermediate"
+tags: ["mlops", "pytorch", "python", "ml-engineering", "deployment", "monitoring", "pipelines"]
+difficulty: "advanced"
 lessons:
   - slug: "01-ml-system-design"
-    title: "Designing ML Systems"
-    duration: 15
+    title: "ML System Design — Requirements, Constraints & Architecture"
+    duration: 26
   - slug: "02-data-pipelines"
-    title: "Data Pipelines for ML"
-    duration: 16
-  - slug: "03-training-loops"
-    title: "Training Loops in PyTorch"
-    duration: 18
-  - slug: "04-experiment-tracking"
-    title: "Experiment Tracking with MLflow"
-    duration: 14
-  - slug: "05-model-packaging"
-    title: "Model Packaging and Export"
-    duration: 14
-  - slug: "06-inference-serving"
-    title: "Inference Serving with FastAPI"
-    duration: 16
-  - slug: "07-monitoring-drift"
-    title: "Monitoring and Drift Detection"
-    duration: 15
-  - slug: "08-ml-cicd"
-    title: "CI/CD for Machine Learning"
-    duration: 17
+    title: "Production Data Pipelines for ML"
+    duration: 26
+  - slug: "03-feature-stores"
+    title: "Feature Stores — Offline, Online & Point-in-Time Correctness"
+    duration: 24
+  - slug: "04-training-infrastructure"
+    title: "Training Infrastructure — GPUs, Distributed Training & Optimisation"
+    duration: 28
+  - slug: "05-experiment-tracking"
+    title: "Experiment Tracking, Model Registry & Reproducibility"
+    duration: 24
+  - slug: "06-model-evaluation-testing"
+    title: "ML Model Testing — Beyond Accuracy"
+    duration: 24
+  - slug: "07-model-packaging"
+    title: "Model Packaging — ONNX, TorchScript & Containers"
+    duration: 22
+  - slug: "08-inference-serving"
+    title: "Inference Serving — Latency, Throughput & Scaling"
+    duration: 28
+  - slug: "09-monitoring-drift"
+    title: "Production Monitoring, Data Drift & Model Decay"
+    duration: 26
+  - slug: "10-ml-cicd"
+    title: "CI/CD for ML — Automated Testing & Deployment Pipelines"
+    duration: 24
+  - slug: "11-ab-testing-ml"
+    title: "A/B Testing & Shadow Deployment for ML Models"
+    duration: 22
+  - slug: "12-ml-platform-architecture"
+    title: "ML Platform Architecture — Building for Scale"
+    duration: 26
 ---
 
-Machine learning models only create value when they run reliably in production. This course bridges the gap between research notebooks and real systems: you will design data pipelines that never silently corrupt features, write training loops that reproduce perfectly, track every experiment, package models for fast inference, serve them behind a production API, detect when they degrade in the wild, and automate the entire lifecycle with CI/CD. Each lesson is grounded in the tools practitioners use today — PyTorch, MLflow, ONNX, FastAPI, Evidently, and GitHub Actions.
+This course is not about training models. It is about building the systems that reliably deliver ML value in production, week after week, as data shifts, teams grow, and business requirements evolve. The uncomfortable truth in the industry is that most ML projects fail not because the model was bad, but because the surrounding system was fragile: the training pipeline drifted silently from the serving pipeline, experiment results were unreproducible, the deployment had no rollback plan, and nobody noticed when the model started serving stale predictions three weeks after launch.
+
+Production ML engineering is an intersection of software engineering, data engineering, and systems design. A model that achieves state-of-the-art accuracy on a held-out test set but cannot be retrained in under four hours, cannot be rolled back in under five minutes, and has no drift detection is a liability, not an asset. This course treats ML systems with the same rigour we apply to distributed databases or high-availability APIs — because that is exactly what they are.
+
+Each lesson in this course addresses a concrete layer of the production ML stack: how to design ML systems before writing a single line of model code, how to build data pipelines that are idempotent and verifiable, how to manage features across training and serving without leakage, how to instrument training runs for full reproducibility, how to package and serve models at the latency and throughput your SLA demands, and how to detect when a deployed model starts failing silently. The code throughout is realistic and production-oriented — no toy examples, no hand-waving around the hard parts.
+
+By the end of this course you will be able to design and build an end-to-end ML system from requirements gathering through to a monitored, automatically-retrained production deployment. More importantly, you will understand the failure modes at every layer and how to defend against them — which is what separates a senior ML engineer from someone who can train a model in a notebook.

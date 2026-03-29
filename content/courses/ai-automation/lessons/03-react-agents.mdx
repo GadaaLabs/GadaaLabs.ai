@@ -1,0 +1,383 @@
+---
+title: "ReAct Agents — Reasoning, Acting & Observing"
+description: "Implement the ReAct loop from scratch: interleave reasoning and acting, build robust output parsing, handle malformed tool calls, and configure stop sequences."
+duration: 26
+order: 3
+---
+
+## The ReAct Paper
+
+ReAct (Reasoning + Acting) is a prompting strategy described in the 2022 paper "ReAct: Synergizing Reasoning and Acting in Language Models" by Yao et al. The core insight is that interleaving explicit reasoning steps with tool invocations produces better results than either pure reasoning (chain-of-thought) or pure action (tool calls without reasoning).
+
+In the standard tool-calling API, the model generates a tool call and then waits for a result. The reasoning that led to that tool call is implicit — it happens inside the model's forward pass but is not visible to you or to subsequent steps. ReAct makes that reasoning explicit by asking the model to write a Thought before each Action. This serves two purposes: the written thought improves the quality of the action (the model is more likely to make a correct tool call when it first articulates what it is trying to do), and it gives you a debugging trace of the model's reasoning process.
+
+The structure of a ReAct step is:
+
+```
+Thought: I need to find the current population of Tokyo.
+Action: web_search({"query": "current population of Tokyo 2024"})
+Observation: Tokyo has a population of approximately 13.96 million in the city proper.
+Thought: I have the population. Now I need to compare it with Shanghai.
+Action: web_search({"query": "current population of Shanghai 2024"})
+Observation: Shanghai's population is approximately 24.9 million.
+Thought: I have both numbers. Tokyo has 13.96M and Shanghai has 24.9M. Shanghai is larger.
+Final Answer: Shanghai is larger than Tokyo. Shanghai has approximately 24.9 million people compared to Tokyo's 13.96 million.
+```
+
+The Observation is the tool result. The model does not generate the Observation — you do, by executing the tool. The stop sequence trick (covered later) prevents the model from generating a fake Observation.
+
+## The Thought-Action-Observation Loop
+
+In implementation terms, the ReAct loop works like this:
+
+1. The system prompt defines the Thought/Action/Observation format and provides examples.
+2. You call the LLM with the current conversation.
+3. You stop generation after the model produces an Action line (using a stop sequence).
+4. You parse the Action line to extract the tool name and arguments.
+5. You execute the tool and get a result.
+6. You append "Observation: [result]" to the conversation.
+7. You call the LLM again. Repeat until "Final Answer:" appears.
+
+The scratchpad is the full accumulated text of all Thought/Action/Observation turns. As the task progresses, the scratchpad grows. The model has full visibility into its own reasoning history, which allows it to avoid repeating work and to build on previous observations.
+
+## Implementing ReAct from Scratch
+
+Here is a complete ReAct implementation using the Groq API. No frameworks.
+
+```python
+import json
+import math
+import os
+import re
+from groq import Groq
+
+client = Groq(api_key=os.environ["GROQ_API_KEY"])
+MODEL = "llama-3.3-70b-versatile"
+MAX_ITERATIONS = 10
+
+# --- Tool implementations ---
+
+TOOL_REGISTRY = {}
+
+
+def tool(name: str):
+    """Decorator to register a tool function."""
+    def decorator(fn):
+        TOOL_REGISTRY[name] = fn
+        return fn
+    return decorator
+
+
+@tool("web_search")
+def web_search(query: str) -> str:
+    """Simulated web search."""
+    mock_data = {
+        "population tokyo": "Tokyo population: ~13.96 million (city), ~37 million (metro area).",
+        "population shanghai": "Shanghai population: ~24.9 million (city), ~28 million (metro area).",
+        "python asyncio tutorial": "asyncio is Python's async I/O framework. Use async/await syntax.",
+        "groq llama speed": "Groq's LPU inference achieves 500+ tokens/second for Llama models.",
+    }
+    query_lower = query.lower()
+    for key, val in mock_data.items():
+        if key in query_lower:
+            return val
+    return f"Search results for '{query}': No specific results found. Try rephrasing."
+
+
+@tool("calculator")
+def calculator(expression: str) -> str:
+    """Evaluate a math expression."""
+    try:
+        safe_globals = {k: v for k, v in math.__dict__.items() if not k.startswith("_")}
+        safe_globals.update({"abs": abs, "round": round, "int": int, "float": float})
+        result = eval(expression, {"__builtins__": {}}, safe_globals)
+        return str(result)
+    except Exception as e:
+        return f"Calculation error: {e}. Check the expression syntax."
+
+
+@tool("get_current_date")
+def get_current_date() -> str:
+    """Return the current date."""
+    from datetime import date
+    return date.today().isoformat()
+
+
+# --- ReAct system prompt ---
+
+SYSTEM_PROMPT = """You are a helpful assistant that solves tasks step by step.
+
+You have access to the following tools:
+- web_search(query: str) — Search the web for information. Use when you need facts you don't know.
+- calculator(expression: str) — Evaluate a mathematical expression. Use for any calculation.
+- get_current_date() — Return today's date. Use when you need the current date.
+
+ALWAYS follow this exact format for each step:
+
+Thought: [your reasoning about what to do next]
+Action: tool_name({"arg1": "value1", "arg2": "value2"})
+
+When you have enough information to answer, use:
+Thought: [your final reasoning]
+Final Answer: [your complete answer to the user's question]
+
+Rules:
+- Always write a Thought before every Action or Final Answer.
+- Action arguments must be valid JSON inside the parentheses.
+- Never generate an Observation — that will be provided to you.
+- If a tool returns an error, try a different approach in your next Thought.
+
+Here are two examples:
+
+Example 1:
+User: What is 15% of 340?
+Thought: I need to calculate 15% of 340.
+Action: calculator({"expression": "340 * 0.15"})
+Observation: 51.0
+Thought: 15% of 340 is 51.
+Final Answer: 15% of 340 is 51.
+
+Example 2:
+User: What is the square root of the population of Tokyo (in millions)?
+Thought: I need to find the population of Tokyo first.
+Action: web_search({"query": "population tokyo"})
+Observation: Tokyo population: ~13.96 million (city), ~37 million (metro area).
+Thought: The city population is 13.96 million. I need to find the square root of 13.96.
+Action: calculator({"expression": "math.sqrt(13.96)"})
+Observation: 3.736308...
+Thought: The square root of 13.96 is approximately 3.74.
+Final Answer: The square root of Tokyo's city population (13.96 million) is approximately 3.74.
+"""
+
+
+# --- Output parsing ---
+
+ACTION_PATTERN = re.compile(
+    r"Action:\s*(\w+)\s*\(([^)]*)\)",
+    re.DOTALL
+)
+FINAL_ANSWER_PATTERN = re.compile(
+    r"Final Answer:\s*(.*)",
+    re.DOTALL
+)
+
+
+def parse_action(text: str):
+    """
+    Extract tool name and arguments from a ReAct Action line.
+    Returns (tool_name, args_dict) or (None, None) if no action found.
+    """
+    match = ACTION_PATTERN.search(text)
+    if not match:
+        return None, None
+
+    tool_name = match.group(1).strip()
+    raw_args = match.group(2).strip()
+
+    if not raw_args:
+        # Tool with no arguments (like get_current_date())
+        return tool_name, {}
+
+    try:
+        args = json.loads(raw_args)
+        return tool_name, args
+    except json.JSONDecodeError:
+        # Try to recover: sometimes models produce single-quoted JSON
+        try:
+            # Replace single quotes with double quotes (naive, but often works)
+            fixed = raw_args.replace("'", '"')
+            args = json.loads(fixed)
+            return tool_name, args
+        except json.JSONDecodeError:
+            return tool_name, {"_parse_error": raw_args}
+
+
+def parse_final_answer(text: str):
+    """Extract the final answer if present."""
+    match = FINAL_ANSWER_PATTERN.search(text)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+# --- Tool execution ---
+
+def execute_tool(tool_name: str, args: dict) -> str:
+    """Execute a registered tool with the given arguments."""
+    if tool_name not in TOOL_REGISTRY:
+        available = list(TOOL_REGISTRY.keys())
+        return f"Error: unknown tool '{tool_name}'. Available tools: {available}"
+
+    if "_parse_error" in args:
+        return (
+            f"Error: could not parse arguments for '{tool_name}'. "
+            f"Raw arguments: {args['_parse_error']}. "
+            "Ensure arguments are valid JSON."
+        )
+
+    try:
+        result = TOOL_REGISTRY[tool_name](**args)
+        return str(result)
+    except TypeError as e:
+        return f"Error: wrong arguments for '{tool_name}': {e}"
+    except Exception as e:
+        return f"Error executing '{tool_name}': {type(e).__name__}: {e}"
+
+
+# --- The ReAct agent loop ---
+
+def run_react_agent(user_task: str, verbose: bool = True) -> str:
+    """
+    Run the ReAct agent loop.
+    Returns the final answer or a failure message.
+    """
+    # The scratchpad: accumulated Thought/Action/Observation history
+    scratchpad = ""
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_task},
+    ]
+
+    for iteration in range(MAX_ITERATIONS):
+        if verbose:
+            print(f"\n--- Iteration {iteration + 1} ---")
+
+        # Build the current prompt: append the scratchpad to the user message
+        current_messages = messages.copy()
+        if scratchpad:
+            current_messages.append({
+                "role": "assistant",
+                "content": scratchpad,
+            })
+
+        # Call the LLM. Stop at "Observation:" so the model cannot hallucinate results.
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=current_messages,
+            stop=["Observation:"],   # Stop before generating a fake observation
+            max_tokens=512,
+            temperature=0.0,
+        )
+
+        generated = response.choices[0].message.content
+        if verbose:
+            print(f"Model output:\n{generated}")
+
+        # Append generated text to scratchpad
+        scratchpad += generated
+
+        # Check for final answer
+        final_answer = parse_final_answer(generated)
+        if final_answer:
+            if verbose:
+                print(f"\n[DONE] Final Answer: {final_answer}")
+            return final_answer
+
+        # Parse and execute tool call
+        tool_name, args = parse_action(generated)
+        if tool_name is None:
+            # Model produced neither a final answer nor a valid action
+            # This can happen if the model goes off-format. Try to recover.
+            scratchpad += "\nObservation: No valid action found. Please follow the format exactly.\n"
+            continue
+
+        # Execute the tool
+        observation = execute_tool(tool_name, args)
+        if verbose:
+            print(f"Tool: {tool_name}({args})")
+            print(f"Observation: {observation}")
+
+        # Append the observation to the scratchpad
+        scratchpad += f"\nObservation: {observation}\n"
+
+    # Reached max iterations
+    return (
+        "I was unable to complete this task within the allowed number of steps. "
+        "The task may be too complex or require information I cannot access."
+    )
+
+
+# --- Example usage ---
+
+if __name__ == "__main__":
+    tasks = [
+        "What is 23% of the population of Tokyo (city, in millions)?",
+        "What year is it? Calculate 2024 minus 1969.",
+    ]
+
+    for task in tasks:
+        print(f"\n{'=' * 60}")
+        print(f"Task: {task}")
+        print("=" * 60)
+        result = run_react_agent(task, verbose=True)
+        print(f"\nFinal result: {result}")
+```
+
+## Parsing Robustness
+
+The parser above handles three common failure modes.
+
+**Malformed JSON in action arguments**: The model sometimes produces `{'key': 'value'}` (single quotes) instead of `{"key": "value"}` (double quotes). The parser tries a simple quote replacement. For more complex cases, you can use a more permissive JSON library or ask the model to retry.
+
+**Unknown tool names**: The model occasionally invents tool names, especially if its context window is crowded and the system prompt is pushed far back. When an unknown tool name is detected, the error observation lists the available tools, giving the model the information it needs to correct itself.
+
+**Model goes off-format**: Sometimes the model produces text that is neither a valid Action nor a Final Answer. The handler appends a reminder about the format as an observation. If this happens repeatedly, it usually indicates the model needs a stronger system prompt or more few-shot examples.
+
+## The Stop Sequence
+
+The `stop=["Observation:"]` parameter is critical. Without it, the model will continue generating after `Action: tool_name(args)` and produce a fabricated `Observation:` — essentially hallucinating the tool result. By stopping generation at "Observation:", you force the model to stop and wait for the real result from your code.
+
+Note that the stop sequence itself is not included in the generated text. After you execute the tool, you append the actual observation: `scratchpad += "\nObservation: [result]\n"`. Then on the next iteration, the model sees the real observation and continues.
+
+## Maximum Iteration Guard
+
+The `MAX_ITERATIONS = 10` limit is a hard safety boundary. Without it, two things can cause infinite loops:
+
+A model that consistently produces off-format output will keep being corrected with "follow the format" observations but never make progress. After N iterations, the loop terminates.
+
+A model that genuinely cannot find the answer (the tool keeps returning errors, or the information does not exist) will keep trying variations. Without a limit, this runs forever and consumes your API budget.
+
+In production, log when the max iteration limit is hit. If it happens frequently for a particular task type, the task is likely too complex for the current agent setup and you need either a planning agent (lesson 4) or a human escalation path.
+
+## Tool Error Recovery
+
+One of the key advantages of the ReAct pattern is that tool errors are observable. When `web_search` returns "No results found", the model can reason: "The first search query was too specific. Let me try a broader query." This is qualitatively different from a chain where an empty search result would silently cause downstream steps to produce wrong output.
+
+Here is an example trace showing error recovery:
+
+```
+Thought: I'll search for the CEO of AcmeCorp.
+Action: web_search({"query": "AcmeCorp CEO name"})
+Observation: No results found for 'AcmeCorp CEO name'. Try rephrasing.
+Thought: The specific company name search failed. Let me try a broader approach.
+Action: web_search({"query": "AcmeCorp company leadership"})
+Observation: AcmeCorp was founded in 2019. Current leadership information not available.
+Thought: Web search is not returning useful results. I should inform the user that I cannot find this information.
+Final Answer: I was unable to find the current CEO of AcmeCorp. The web search did not return relevant results. You may want to check the company's official website directly.
+```
+
+The model tried a different query, got a different (but still insufficient) result, reasoned about the situation, and gave a graceful failure response. This is the error recovery behaviour you want.
+
+## Prompt Engineering for ReAct
+
+The system prompt quality significantly affects agent behaviour.
+
+**Include the tool list with signatures.** The model needs to know what tools are available and what arguments they accept. Put this at the top of the system prompt.
+
+**Define the exact format.** Use exact string markers (`Thought:`, `Action:`, `Observation:`, `Final Answer:`). Inconsistency in these markers causes parsing failures.
+
+**Include 2-3 few-shot examples.** One example that uses a single tool and one that uses multiple tools in sequence. Examples show the model the exact format to follow far more effectively than instructions alone.
+
+**State the rules explicitly.** "Never generate an Observation", "Arguments must be valid JSON", "Always write a Thought before every Action". Models follow explicit rules more reliably than inferred ones.
+
+**Keep the prompt concise.** Long system prompts push the few-shot examples and tool descriptions further from the beginning of the context, reducing their influence on generation.
+
+## Key Takeaways
+
+- ReAct interleaves explicit Thought reasoning with tool Actions and observed results, improving tool use accuracy versus implicit reasoning.
+- The scratchpad accumulates the full Thought/Action/Observation history as a readable trace of the agent's reasoning.
+- Stop at "Observation:" to prevent the model from hallucinating tool results. Append the real result from your code.
+- Implement robust parsing: handle malformed JSON arguments, unknown tool names, and off-format model output without crashing the loop.
+- The `MAX_ITERATIONS` guard is mandatory. Log when it is hit — frequent hits indicate tasks that are too complex for the current configuration.
+- Tool error recovery is a key ReAct advantage. The model reads error observations and can try alternative approaches.
+- Two to three few-shot examples in the system prompt are sufficient and significantly improve format adherence.

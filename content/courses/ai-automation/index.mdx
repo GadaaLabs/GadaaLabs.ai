@@ -1,28 +1,52 @@
 ---
-title: "AI Automation"
-description: "Design and ship production AI agents and automated workflows — from ReAct loops to multi-step planners, guardrails, and observability."
+title: "AI Automation — Production Agents & Agentic Systems"
+description: "Build production AI agents from first principles: agent architectures, tool use, multi-step planning, multi-agent systems, memory, guardrails, observability, and enterprise deployment. Go beyond demos to systems that reliably automate real work."
 author: "GadaaLabs"
-tags: ["agents", "llm", "automation", "function-calling", "python"]
+tags: ["agents", "llm", "automation", "function-calling", "python", "multi-agent", "observability"]
 difficulty: "advanced"
 lessons:
-  - slug: "01-agents-vs-chains"
-    title: "Agents vs Chains"
-    duration: 12
-  - slug: "02-function-calling"
-    title: "Function Calling and Tool Use"
-    duration: 14
-  - slug: "03-multi-step-agents"
-    title: "Multi-Step Agents"
-    duration: 16
-  - slug: "04-workflow-automation"
-    title: "Workflow Automation"
-    duration: 15
-  - slug: "05-guardrails-safety"
-    title: "Guardrails and Safety"
-    duration: 14
-  - slug: "06-production-agents"
-    title: "Shipping Agents to Production"
-    duration: 18
+  - slug: "01-agent-foundations"
+    title: "Agent Foundations — What Agents Are & When to Use Them"
+    duration: 22
+  - slug: "02-tool-use-design"
+    title: "Tool Use & Function Calling — Design, Validation & Error Handling"
+    duration: 26
+  - slug: "03-react-agents"
+    title: "ReAct Agents — Reasoning, Acting & Observing"
+    duration: 26
+  - slug: "04-planning-agents"
+    title: "Planning Agents — Task Decomposition & Execution"
+    duration: 26
+  - slug: "05-memory-systems"
+    title: "Agent Memory — Short-Term, Long-Term & Episodic"
+    duration: 24
+  - slug: "06-multi-agent-systems"
+    title: "Multi-Agent Systems — Supervisor, Collaborative & Competitive"
+    duration: 26
+  - slug: "07-guardrails-safety"
+    title: "Guardrails, Safety & Controlled Execution"
+    duration: 24
+  - slug: "08-agent-observability"
+    title: "Agent Observability — Tracing, Logging & Evaluation"
+    duration: 26
+  - slug: "09-workflow-automation"
+    title: "Workflow Automation — Event-Driven & DAG-Based Pipelines"
+    duration: 24
+  - slug: "10-human-in-the-loop"
+    title: "Human-in-the-Loop — Approval, Review & Escalation Patterns"
+    duration: 22
+  - slug: "11-production-agents"
+    title: "Production Agent Deployment — Reliability, Cost & Scaling"
+    duration: 28
+  - slug: "12-enterprise-automation"
+    title: "Enterprise AI Automation — Patterns, Governance & ROI"
+    duration: 26
 ---
 
-AI automation is easy to demo and hard to ship. A single tool call in a notebook looks magical; a multi-step agent handling 10,000 requests per day with reliable error recovery, cost control, and audit logging looks like engineering. This advanced course builds both the conceptual foundations — when to use agents versus chains, how the ReAct loop works, what function calling actually sends over the wire — and the production concerns: guardrails against injection, OpenTelemetry tracing, multi-turn state management, and cost tracking. Every lesson includes code you can run immediately.
+Most agent demos look impressive in a Jupyter notebook and fail completely in production. The gap between a demo that works once and a system that reliably completes thousands of tasks per day comes down to engineering: error handling, state management, observability, guardrails, and operational discipline. This course teaches you to close that gap.
+
+AI agents represent a paradigm shift from deterministic software to probabilistic, goal-directed systems. This creates new engineering challenges: how do you test a system whose outputs are non-deterministic? How do you debug an agent that failed on step 7 of a 12-step task? How do you prevent an agent from taking destructive actions when it misinterprets an instruction? These are the problems this course addresses.
+
+You will build agents from first principles using the Groq API directly — no LangChain abstractions hiding the mechanics. You will implement the ReAct loop from scratch, build a planning agent with JSON-structured task graphs, design a multi-agent system with a supervisor and specialist agents, and add memory that persists across sessions. Then you will harden everything: guardrails that catch prompt injection, tracing with OpenTelemetry, automated evaluation, and deployment as a production service.
+
+The final lessons cover the patterns that make agents work at enterprise scale: human-in-the-loop approval workflows, cost management, horizontal scaling, and the governance frameworks that organisations need before deploying autonomous AI systems.

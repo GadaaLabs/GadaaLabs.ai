@@ -1,0 +1,624 @@
+---
+title: "ML Model Testing — Beyond Accuracy"
+description: "Slice-based evaluation, behavioral testing, shadow mode evaluation, model cards, cost-sensitive metrics, and a complete pytest test suite for production ML models."
+duration: 24
+order: 6
+---
+
+Overall accuracy is a lie. A model with 95% accuracy on an imbalanced dataset may be correct 100% of the time on the majority class and completely wrong on the minority class that actually matters. A model that passes every benchmark in the lab may fail catastrophically on the specific demographic that uses your product most. Model evaluation in production requires going far beyond aggregate metrics — it requires systematic investigation of where the model fails and proof that those failures are acceptable.
+
+## Slice-Based Evaluation
+
+Slice-based evaluation (also called disaggregated evaluation) measures model performance on meaningful subsets of the data. A slice is any filter that creates a subpopulation: a demographic group, a geographic region, a time window, a product category, a device type. Every ML system should evaluate performance on all slices that the business cares about before deployment.
+
+```python
+import pandas as pd
+import numpy as np
+from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_score
+from typing import Optional
+
+def evaluate_slice(
+    df: pd.DataFrame,
+    y_true_col: str,
+    y_pred_col: str,
+    filter_col: Optional[str] = None,
+    filter_val: Optional[object] = None,
+    min_samples: int = 100,
+) -> Optional[dict]:
+    """Compute metrics on a slice of data."""
+    if filter_col and filter_val is not None:
+        slice_df = df[df[filter_col] == filter_val]
+    else:
+        slice_df = df
+
+    if len(slice_df) < min_samples:
+        return None   # Too few samples for reliable evaluation
+
+    y_true = slice_df[y_true_col].values
+    y_pred = slice_df[y_pred_col].values
+    y_pred_binary = (y_pred >= 0.5).astype(int)
+
+    return {
+        "slice":     f"{filter_col}={filter_val}" if filter_col else "overall",
+        "n_samples": len(slice_df),
+        "prevalence": float(y_true.mean()),
+        "auc":        float(roc_auc_score(y_true, y_pred)),
+        "precision":  float(precision_score(y_true, y_pred_binary, zero_division=0)),
+        "recall":     float(recall_score(y_true, y_pred_binary, zero_division=0)),
+        "f1":         float(f1_score(y_true, y_pred_binary, zero_division=0)),
+    }
+
+def slice_evaluation_report(
+    df: pd.DataFrame,
+    y_true_col: str,
+    y_pred_col: str,
+    slice_columns: list[str],
+    min_perf_threshold: float = 0.75,
+) -> pd.DataFrame:
+    """
+    Evaluate model on all slices defined by slice_columns.
+    Flag any slice that falls below min_perf_threshold.
+    """
+    rows = []
+
+    # Overall performance
+    overall = evaluate_slice(df, y_true_col, y_pred_col)
+    if overall:
+        rows.append(overall)
+
+    # Per-slice performance
+    for col in slice_columns:
+        for val in df[col].dropna().unique():
+            result = evaluate_slice(df, y_true_col, y_pred_col, col, val)
+            if result:
+                rows.append(result)
+
+    report = pd.DataFrame(rows)
+
+    # Flag underperforming slices
+    report["below_threshold"] = report["auc"] < min_perf_threshold
+    report["delta_from_overall"] = report["auc"] - report.loc[0, "auc"]
+
+    flagged = report[report["below_threshold"]]
+    if len(flagged) > 0:
+        print(f"WARNING: {len(flagged)} slices below AUC threshold {min_perf_threshold}:")
+        print(flagged[["slice", "n_samples", "auc", "delta_from_overall"]].to_string())
+
+    return report.sort_values("auc")
+
+# Usage
+report = slice_evaluation_report(
+    df=eval_df,
+    y_true_col="churned",
+    y_pred_col="churn_score",
+    slice_columns=["country", "account_tier", "device_type", "signup_year"],
+    min_perf_threshold=0.75,
+)
+```
+
+## Behavioral Testing
+
+Behavioral testing defines expected model behaviors as properties and verifies them explicitly. This approach — adapted from NLP CheckList — defines three types of tests for any ML model.
+
+**MFT (Minimum Functionality Tests):** basic cases the model must always get right. If a customer has purchased 10 times in the last month, their churn score should be low. These are not statistical — they are logical constraints.
+
+**INV (Invariance Tests):** changing an irrelevant feature should not change the prediction. A customer's churn probability should not change if you randomly vary their name or primary key. If it does, the model has learned a spurious correlation.
+
+**DIR (Directional Expectation Tests):** increasing a feature in one direction should change the prediction in a known direction. Higher spend should lower churn probability. More support tickets should raise it. Violations indicate a sign error, multicollinearity issue, or overfitting to noise.
+
+```python
+import numpy as np
+from copy import deepcopy
+
+class ModelBehavioralTester:
+    """Run behavioral tests on any model that has a predict_proba method."""
+
+    def __init__(self, model, feature_names: list[str]) -> None:
+        self.model         = model
+        self.feature_names = feature_names
+
+    def _predict(self, X: np.ndarray) -> np.ndarray:
+        return self.model.predict_proba(X)[:, 1]
+
+    def test_mft(
+        self,
+        test_cases: list[dict],
+        description: str = "MFT",
+    ) -> dict:
+        """
+        Minimum functionality test: each case specifies features and
+        an expected prediction direction (high/low/between).
+        """
+        failures = []
+        for case in test_cases:
+            features = np.array([[case["features"].get(f, 0) for f in self.feature_names]])
+            score = float(self._predict(features)[0])
+            expected = case["expected"]
+
+            if expected == "high"    and score < 0.7:
+                failures.append({"case": case["name"], "score": score, "expected": expected})
+            elif expected == "low"   and score > 0.3:
+                failures.append({"case": case["name"], "score": score, "expected": expected})
+            elif expected == "between" and not (0.3 <= score <= 0.7):
+                failures.append({"case": case["name"], "score": score, "expected": expected})
+
+        return {
+            "test_type":   "MFT",
+            "description": description,
+            "n_cases":     len(test_cases),
+            "n_failures":  len(failures),
+            "failures":    failures,
+            "passed":      len(failures) == 0,
+        }
+
+    def test_invariance(
+        self,
+        X: np.ndarray,
+        feature_to_perturb: str,
+        perturbation_fn,
+        max_delta: float = 0.05,
+        description: str = "INV",
+    ) -> dict:
+        """
+        Invariance test: perturbing an irrelevant feature should not
+        change predictions by more than max_delta.
+        """
+        feat_idx = self.feature_names.index(feature_to_perturb)
+        original_scores = self._predict(X)
+
+        X_perturbed = X.copy()
+        X_perturbed[:, feat_idx] = perturbation_fn(X[:, feat_idx])
+        perturbed_scores = self._predict(X_perturbed)
+
+        deltas = np.abs(perturbed_scores - original_scores)
+        violations = (deltas > max_delta).sum()
+
+        return {
+            "test_type":          "INV",
+            "description":        description,
+            "feature":            feature_to_perturb,
+            "max_delta":          max_delta,
+            "mean_delta":         float(deltas.mean()),
+            "max_observed_delta": float(deltas.max()),
+            "n_violations":       int(violations),
+            "passed":             violations == 0,
+        }
+
+    def test_directional(
+        self,
+        X: np.ndarray,
+        feature_to_increase: str,
+        expected_direction: str,   # "increase" or "decrease"
+        delta: float = 1.0,
+        description: str = "DIR",
+    ) -> dict:
+        """
+        Directional expectation: increasing feature should consistently
+        move prediction in the expected direction.
+        """
+        feat_idx = self.feature_names.index(feature_to_increase)
+        original_scores = self._predict(X)
+
+        X_modified = X.copy()
+        X_modified[:, feat_idx] = X[:, feat_idx] + delta
+        modified_scores = self._predict(X_modified)
+
+        diffs = modified_scores - original_scores
+        if expected_direction == "decrease":
+            violations = (diffs > 0).sum()
+        else:
+            violations = (diffs < 0).sum()
+
+        return {
+            "test_type":       "DIR",
+            "description":     description,
+            "feature":         feature_to_increase,
+            "expected":        expected_direction,
+            "mean_diff":       float(diffs.mean()),
+            "n_violations":    int(violations),
+            "violation_rate":  float(violations / len(X)),
+            "passed":          violations / len(X) < 0.05,   # allow 5% exceptions
+        }
+
+# Usage
+tester = ModelBehavioralTester(churn_model, feature_names=FEATURES)
+
+mft_result = tester.test_mft([
+    {"name": "high_value_active",
+     "features": {"tenure_days": 730, "total_spend_30d": 500, "support_tickets_90d": 0},
+     "expected": "low"},
+    {"name": "new_zero_spend",
+     "features": {"tenure_days": 10, "total_spend_30d": 0, "support_tickets_90d": 5},
+     "expected": "high"},
+])
+
+inv_result = tester.test_invariance(
+    X_test_array,
+    feature_to_perturb="customer_id_hash",   # should be irrelevant
+    perturbation_fn=lambda x: np.random.permutation(x),
+)
+
+dir_result = tester.test_directional(
+    X_test_array,
+    feature_to_increase="support_tickets_90d",
+    expected_direction="increase",  # more support tickets → higher churn score
+)
+```
+
+## Shadow Mode Evaluation
+
+Shadow mode runs a new model candidate in parallel with the current production model. The new model's predictions are logged but never served to users. This lets you compare distributions and catch obvious failures before any users are affected.
+
+```python
+import asyncio
+from dataclasses import dataclass
+from datetime import datetime
+
+@dataclass
+class ShadowPrediction:
+    request_id:     str
+    timestamp:      datetime
+    input_features: dict
+    champion_score: float
+    challenger_score: float
+
+shadow_log: list[ShadowPrediction] = []
+
+async def shadow_serve(
+    features: dict,
+    champion_model,
+    challenger_model,
+    request_id: str,
+) -> float:
+    """
+    Serve the champion's prediction; log challenger's prediction silently.
+    Never expose the challenger's score to the user.
+    """
+    champion_score   = champion_model.predict_single(features)
+    challenger_score = challenger_model.predict_single(features)
+
+    shadow_log.append(ShadowPrediction(
+        request_id=request_id,
+        timestamp=datetime.utcnow(),
+        input_features=features,
+        champion_score=champion_score,
+        challenger_score=challenger_score,
+    ))
+    return champion_score   # user always gets champion
+
+def analyse_shadow_log(log: list[ShadowPrediction]) -> dict:
+    """Compare champion vs challenger score distributions from shadow logs."""
+    import scipy.stats as stats
+    champion_scores   = [p.champion_score   for p in log]
+    challenger_scores = [p.challenger_score for p in log]
+
+    ks_stat, pvalue = stats.ks_2samp(champion_scores, challenger_scores)
+    correlation = float(np.corrcoef(champion_scores, challenger_scores)[0, 1])
+
+    high_disagreement = [
+        p for p in log
+        if abs(p.champion_score - p.challenger_score) > 0.3
+    ]
+    return {
+        "n_requests":         len(log),
+        "champion_mean":      float(np.mean(champion_scores)),
+        "challenger_mean":    float(np.mean(challenger_scores)),
+        "ks_statistic":       round(ks_stat, 4),
+        "ks_pvalue":          round(pvalue, 6),
+        "correlation":        round(correlation, 4),
+        "high_disagreement_pct": len(high_disagreement) / len(log),
+        "safe_to_ab_test":    pvalue > 0.05 and correlation > 0.8,
+    }
+```
+
+## Model Cards
+
+A model card is a standardised document that accompanies every production model. It defines intended use, limitations, training data, evaluation data, and ethical considerations.
+
+```python
+from dataclasses import dataclass, field
+from typing import Optional
+import json
+
+@dataclass
+class ModelCard:
+    model_name:        str
+    model_version:     str
+    date:              str
+    author:            str
+
+    # Intended use
+    intended_use:       str
+    out_of_scope_uses:  list[str]
+
+    # Data
+    training_data:      str   # description of training dataset
+    evaluation_data:    str   # description of evaluation dataset
+
+    # Performance
+    overall_metrics:    dict  # {"auc": 0.87, "precision": 0.72, ...}
+    slice_metrics:      dict  # {"country=US": {"auc": 0.89}, ...}
+
+    # Ethical considerations
+    ethical_considerations: list[str]
+    caveats:               list[str]
+
+    # Environment
+    model_type:        str
+    features_used:     list[str]
+    training_code_sha: Optional[str] = None
+
+    def to_json(self) -> str:
+        return json.dumps(self.__dict__, indent=2)
+
+    def validate(self) -> list[str]:
+        """Return a list of missing required fields."""
+        missing = []
+        if not self.intended_use:
+            missing.append("intended_use")
+        if not self.ethical_considerations:
+            missing.append("ethical_considerations")
+        if not self.slice_metrics:
+            missing.append("slice_metrics (disaggregated evaluation required)")
+        return missing
+
+churn_model_card = ModelCard(
+    model_name="ChurnModelV2",
+    model_version="v2.1.0",
+    date="2025-03-28",
+    author="Growth ML Team",
+    intended_use="Predict 30-day churn probability for B2B SaaS customers with at least 30 days of activity. Used to prioritise outreach by customer success managers.",
+    out_of_scope_uses=[
+        "Do not use for customers with fewer than 30 days of activity",
+        "Do not use for B2C customers (different behavior patterns)",
+        "Do not use for automated account termination decisions",
+    ],
+    training_data="350,000 customer-months from 2022-01-01 to 2024-12-31. Positive label = no renewal within 30 days of contract end date. Excludes accounts that were manually churned by sales team.",
+    evaluation_data="45,000 customer-months from 2025-01-01 to 2025-03-01 (held-out, not used in any training or hyperparameter selection).",
+    overall_metrics={"auc": 0.87, "precision_at_50pct_recall": 0.72, "brier_score": 0.094},
+    slice_metrics={
+        "account_tier=enterprise": {"auc": 0.91, "n": 4200},
+        "account_tier=smb":        {"auc": 0.83, "n": 28000},
+        "country=US":              {"auc": 0.88, "n": 21000},
+        "country=EU":              {"auc": 0.85, "n": 9500},
+        "signup_year=2024":        {"auc": 0.79, "n": 3100},
+    },
+    ethical_considerations=[
+        "Model was evaluated separately for enterprise vs SMB customers; SMB AUC is 8pp lower",
+        "Model should not be the sole input to account termination decisions",
+        "Customer success outreach driven by model should follow the same process for all account tiers",
+    ],
+    caveats=[
+        "Customers who signed up in 2024 have shorter tenure history; model performance is lower for this cohort",
+        "Model was trained on data before the product redesign in Q4 2024; should be retrained after 90 days of post-redesign data",
+    ],
+    model_type="XGBoost classifier",
+    features_used=["tenure_days", "total_spend_30d", "support_tickets_90d", "last_purchase_days", "session_count_7d"],
+    training_code_sha="abc123def",
+)
+```
+
+## Cost-Sensitive Evaluation
+
+For business decisions, raw AUC is insufficient. A missed churn prediction (false negative) might cost $5,000 in lost ARR. A false positive (incorrectly flagging a healthy customer for outreach) might cost $50 of customer success time. The optimal decision threshold is not 0.5.
+
+```python
+def build_cost_matrix(
+    false_negative_cost: float,   # cost of missing a true positive
+    false_positive_cost: float,   # cost of a false alarm
+    true_positive_benefit: float, # benefit of correctly catching a churn
+    true_negative_benefit: float = 0.0,
+) -> dict:
+    return {
+        "fn_cost": false_negative_cost,
+        "fp_cost": false_positive_cost,
+        "tp_benefit": true_positive_benefit,
+        "tn_benefit": true_negative_benefit,
+    }
+
+def find_optimal_threshold(
+    y_true: np.ndarray,
+    y_scores: np.ndarray,
+    cost_matrix: dict,
+    thresholds: np.ndarray = None,
+) -> dict:
+    """Find the prediction threshold that minimises total expected cost."""
+    if thresholds is None:
+        thresholds = np.linspace(0, 1, 201)
+
+    best_threshold  = 0.5
+    best_net_value  = float("-inf")
+    results = []
+
+    for threshold in thresholds:
+        y_pred = (y_scores >= threshold).astype(int)
+        tp = ((y_pred == 1) & (y_true == 1)).sum()
+        fp = ((y_pred == 1) & (y_true == 0)).sum()
+        fn = ((y_pred == 0) & (y_true == 1)).sum()
+        tn = ((y_pred == 0) & (y_true == 0)).sum()
+
+        net_value = (
+            tp * cost_matrix["tp_benefit"]
+            - fp * cost_matrix["fp_cost"]
+            - fn * cost_matrix["fn_cost"]
+            + tn * cost_matrix["tn_benefit"]
+        )
+        results.append({"threshold": threshold, "net_value": net_value,
+                         "tp": tp, "fp": fp, "fn": fn, "tn": tn})
+        if net_value > best_net_value:
+            best_net_value = net_value
+            best_threshold = threshold
+
+    return {
+        "optimal_threshold": best_threshold,
+        "best_net_value":    best_net_value,
+        "all_results":       pd.DataFrame(results),
+    }
+
+# Example: churn model with real business costs
+cost_matrix = build_cost_matrix(
+    false_negative_cost=5000,    # missed churn = $5K lost ARR
+    false_positive_cost=50,      # unnecessary outreach = $50 CSM time
+    true_positive_benefit=3000,  # successful retention = recover $3K ARR
+)
+result = find_optimal_threshold(y_test, y_scores, cost_matrix)
+print(f"Optimal threshold: {result['optimal_threshold']:.2f}")
+print(f"Net business value at optimal: ${result['best_net_value']:,.0f}")
+```
+
+## pytest Test Suite for ML Models
+
+```python
+# tests/test_churn_model.py
+import pytest
+import numpy as np
+import pandas as pd
+from sklearn.metrics import roc_auc_score
+import joblib
+
+MODEL_PATH   = "models/churn_model.pkl"
+TEST_DATA    = "data/prepared/test.parquet"
+FEATURES     = ["tenure_days", "total_spend_30d", "support_tickets_90d",
+                 "last_purchase_days", "session_count_7d"]
+MIN_TEST_AUC = 0.82   # must beat this to pass CI
+
+@pytest.fixture(scope="module")
+def model():
+    return joblib.load(MODEL_PATH)
+
+@pytest.fixture(scope="module")
+def test_data():
+    return pd.read_parquet(TEST_DATA)
+
+class TestPredictionContract:
+    """Tests that verify the model's output contract."""
+
+    def test_prediction_shape(self, model, test_data):
+        X = test_data[FEATURES].values
+        preds = model.predict_proba(X)
+        assert preds.shape == (len(test_data), 2), \
+            f"Expected shape ({len(test_data)}, 2), got {preds.shape}"
+
+    def test_prediction_range(self, model, test_data):
+        X = test_data[FEATURES].values
+        scores = model.predict_proba(X)[:, 1]
+        assert scores.min() >= 0.0, "Scores below 0"
+        assert scores.max() <= 1.0, "Scores above 1"
+
+    def test_no_nan_predictions(self, model, test_data):
+        X = test_data[FEATURES].values
+        scores = model.predict_proba(X)[:, 1]
+        assert not np.isnan(scores).any(), "Model produced NaN predictions"
+
+    def test_no_constant_predictions(self, model, test_data):
+        X = test_data[FEATURES].values
+        scores = model.predict_proba(X)[:, 1]
+        assert scores.std() > 0.01, \
+            f"Model predictions have near-zero variance ({scores.std():.4f})"
+
+class TestKnownInputs:
+    """Tests on curated inputs with known expected outputs."""
+
+    def test_high_engagement_customer_low_churn(self, model):
+        high_engagement = pd.DataFrame([{
+            "tenure_days":        730,
+            "total_spend_30d":    600.0,
+            "support_tickets_90d": 0,
+            "last_purchase_days":  3,
+            "session_count_7d":   15,
+        }])
+        score = model.predict_proba(high_engagement[FEATURES].values)[:, 1][0]
+        assert score < 0.3, f"Expected low churn score, got {score:.3f}"
+
+    def test_disengaged_customer_high_churn(self, model):
+        disengaged = pd.DataFrame([{
+            "tenure_days":         45,
+            "total_spend_30d":     0.0,
+            "support_tickets_90d": 8,
+            "last_purchase_days":  40,
+            "session_count_7d":    0,
+        }])
+        score = model.predict_proba(disengaged[FEATURES].values)[:, 1][0]
+        assert score > 0.7, f"Expected high churn score, got {score:.3f}"
+
+class TestInvariance:
+    """Tests that irrelevant perturbations don't change predictions."""
+
+    def test_irrelevant_noise_invariance(self, model, test_data):
+        X = test_data[FEATURES].values.copy()
+        original_scores = model.predict_proba(X)[:, 1]
+
+        # Perturb tenure_days by a tiny amount (should have minimal effect)
+        X_perturbed = X.copy()
+        X_perturbed[:, 0] += np.random.normal(0, 0.001, size=len(X))
+        perturbed_scores = model.predict_proba(X_perturbed)[:, 1]
+        correlation = np.corrcoef(original_scores, perturbed_scores)[0, 1]
+        assert correlation > 0.999, f"Tiny perturbation changed scores too much (r={correlation:.4f})"
+
+class TestDirectionalExpectations:
+    """Tests that increasing a feature changes prediction in the expected direction."""
+
+    def test_spend_reduces_churn(self, model, test_data):
+        X = test_data[FEATURES].values.copy()
+        spend_idx = FEATURES.index("total_spend_30d")
+
+        original = model.predict_proba(X)[:, 1]
+        X_more_spend = X.copy()
+        X_more_spend[:, spend_idx] += 200    # add $200 spend
+        higher_spend = model.predict_proba(X_more_spend)[:, 1]
+
+        pct_lower = (higher_spend < original).mean()
+        assert pct_lower > 0.8, \
+            f"Only {pct_lower:.0%} of predictions went down with more spend (expected >80%)"
+
+    def test_support_tickets_increase_churn(self, model, test_data):
+        X = test_data[FEATURES].values.copy()
+        tickets_idx = FEATURES.index("support_tickets_90d")
+
+        original = model.predict_proba(X)[:, 1]
+        X_more_tickets = X.copy()
+        X_more_tickets[:, tickets_idx] += 5
+        higher_tickets = model.predict_proba(X_more_tickets)[:, 1]
+
+        pct_higher = (higher_tickets > original).mean()
+        assert pct_higher > 0.8, \
+            f"Only {pct_higher:.0%} of predictions went up with more tickets (expected >80%)"
+
+class TestPerformanceThresholds:
+    """Tests that model meets minimum performance requirements."""
+
+    def test_overall_auc_threshold(self, model, test_data):
+        X = test_data[FEATURES].values
+        y = test_data["churned"].values
+        auc = roc_auc_score(y, model.predict_proba(X)[:, 1])
+        assert auc >= MIN_TEST_AUC, \
+            f"Overall AUC {auc:.4f} is below threshold {MIN_TEST_AUC}"
+
+    def test_smb_slice_auc_threshold(self, model, test_data):
+        smb = test_data[test_data["account_tier"] == "smb"]
+        if len(smb) < 100:
+            pytest.skip("Not enough SMB samples")
+        X = smb[FEATURES].values
+        y = smb["churned"].values
+        auc = roc_auc_score(y, model.predict_proba(X)[:, 1])
+        assert auc >= 0.78, f"SMB slice AUC {auc:.4f} below threshold 0.78"
+
+    def test_enterprise_slice_auc_threshold(self, model, test_data):
+        ent = test_data[test_data["account_tier"] == "enterprise"]
+        if len(ent) < 100:
+            pytest.skip("Not enough enterprise samples")
+        X = ent[FEATURES].values
+        y = ent["churned"].values
+        auc = roc_auc_score(y, model.predict_proba(X)[:, 1])
+        assert auc >= 0.85, f"Enterprise slice AUC {auc:.4f} below threshold 0.85"
+```
+
+## Key Takeaways
+
+- Aggregate metrics hide slice-level failures; always evaluate model performance on every slice the business cares about and set minimum performance thresholds per slice before deployment.
+- Behavioral testing gives you three specific guarantees: MFT (the model gets obvious cases right), INV (irrelevant features don't change predictions), DIR (the model responds correctly to feature changes).
+- Shadow mode is the safest way to evaluate a new model in production conditions: run it in parallel, log its predictions, and compare distributions before any users see it.
+- Model cards are not optional documentation — they force you to define out-of-scope uses, evaluate on disaggregated slices, and document ethical considerations before deployment.
+- The champion vs challenger framework provides a structured protocol for model promotion: the challenger must beat the champion by a defined margin on a held-out evaluation set.
+- Cost-sensitive evaluation finds the decision threshold that maximises business value, not statistical accuracy — the optimal threshold is almost never 0.5.
+- Your pytest model test suite should test prediction contract (shape, range, no NaN), known inputs, invariances, directional expectations, and performance thresholds per slice — all as blocking CI checks.

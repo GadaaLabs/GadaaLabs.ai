@@ -5,6 +5,7 @@ import { getCourseBySlug, getLessonBySlug, getAllLessonParams } from "@/lib/cour
 import { MDXContent } from "@/components/content/MDXContent";
 import { LessonSidebar } from "@/components/content/LessonSidebar";
 import { LessonProgress } from "@/components/content/LessonProgress";
+import { ReadingProgress } from "@/components/content/ReadingProgress";
 import { ArrowLeft, Clock } from "lucide-react";
 
 export async function generateStaticParams() {
@@ -35,6 +36,8 @@ export default async function LessonPage({
   const nextLesson = lessonIndex < course.lessons.length - 1 ? course.lessons[lessonIndex + 1] : null;
 
   return (
+    <>
+    <ReadingProgress />
     <div className="mx-auto max-w-7xl px-6 py-10">
       <div className="flex gap-8">
         {/* Sidebar */}
@@ -82,5 +85,6 @@ export default async function LessonPage({
         </div>
       </div>
     </div>
+    </>
   );
 }

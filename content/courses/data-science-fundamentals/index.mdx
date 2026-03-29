@@ -1,38 +1,52 @@
 ---
-title: "Data Science Fundamentals"
-description: "Build the statistical, mathematical, and machine learning foundations every data scientist needs — from descriptive statistics through model evaluation and end-to-end pipelines."
+title: "Data Science Fundamentals — From Theory to Production Models"
+description: "Master the mathematical, statistical, and algorithmic foundations that every production data scientist depends on. Covers probability, distributions, regression, classification, clustering, model evaluation, explainability, and end-to-end pipelines."
 author: "GadaaLabs"
-tags: ["statistics", "machine learning", "python", "scikit-learn", "data science"]
-difficulty: "beginner"
+tags: ["statistics", "machine learning", "python", "scikit-learn", "data science", "probability"]
+difficulty: "intermediate"
 lessons:
-  - slug: "01-statistics-review"
-    title: "Descriptive Statistics Every Data Scientist Must Know"
-    duration: 12
-  - slug: "02-probability-basics"
-    title: "Probability Fundamentals"
-    duration: 14
-  - slug: "03-hypothesis-testing"
-    title: "Hypothesis Testing"
-    duration: 13
-  - slug: "04-feature-engineering"
-    title: "Feature Engineering"
-    duration: 14
-  - slug: "05-linear-regression"
-    title: "Linear Regression"
-    duration: 13
-  - slug: "06-classification"
-    title: "Classification"
-    duration: 15
+  - slug: "01-statistical-foundations"
+    title: "Statistical Foundations Every Data Scientist Must Own"
+    duration: 24
+  - slug: "02-probability-distributions"
+    title: "Probability Theory & Distributions for ML"
+    duration: 22
+  - slug: "03-bayesian-thinking"
+    title: "Bayesian Thinking & Inference"
+    duration: 24
+  - slug: "04-regression-mastery"
+    title: "Regression — Linear, Polynomial, Regularised"
+    duration: 26
+  - slug: "05-classification-algorithms"
+    title: "Classification Algorithms — From Logistic Regression to Gradient Boosting"
+    duration: 28
+  - slug: "06-unsupervised-learning"
+    title: "Unsupervised Learning — Clustering & Dimensionality Reduction"
+    duration: 24
   - slug: "07-model-evaluation"
-    title: "Model Evaluation"
-    duration: 14
-  - slug: "08-ds-pipeline"
-    title: "Building a Complete DS Pipeline"
-    duration: 17
+    title: "Model Evaluation, Validation & Metrics That Matter"
+    duration: 26
+  - slug: "08-bias-variance-regularisation"
+    title: "Bias-Variance Tradeoff, Overfitting & Regularisation"
+    duration: 22
+  - slug: "09-feature-engineering-selection"
+    title: "Feature Engineering & Selection for ML"
+    duration: 24
+  - slug: "10-ensemble-methods"
+    title: "Ensemble Methods — Bagging, Boosting & Stacking"
+    duration: 26
+  - slug: "11-model-explainability"
+    title: "Model Explainability — SHAP, LIME & Interpretable ML"
+    duration: 24
+  - slug: "12-end-to-end-pipeline"
+    title: "End-to-End Data Science Pipeline — From Problem to Production"
+    duration: 28
 ---
 
-Data science sits at the intersection of statistics, programming, and domain knowledge. Technical practitioners who lack the statistical foundation will misinterpret their models. Those who lack the engineering foundation will never get their models into production. This course gives you both.
+Data science is not applied statistics dressed up with Python, nor is it software engineering with a few model calls sprinkled in. It is a discipline with its own rigorous foundations — probability theory, statistical inference, optimisation, and algorithmic thinking — that must be owned deeply before they can be wielded reliably. This course treats you as the engineer you are and builds those foundations correctly, from the mathematics outward to production systems.
 
-You will start with the statistics and probability that underpin every model — not as abstract theory but as practical tools for understanding data distributions, drawing correct inferences, and avoiding common pitfalls like p-hacking and data leakage. You will then move into supervised machine learning: regression, classification, and the evaluation methodology that tells you whether your model will actually generalise. The course closes with a full end-to-end scikit-learn Pipeline that takes raw data to a deployable model.
+The gap between a data scientist who gets results and one who gets reliable, explainable, defensible results is almost always a gap in fundamentals. Do you know when to trust a p-value and when the test assumptions have been silently violated? Can you explain why your gradient boosted model generalises without invoking "it just works"? Do you understand what your regularisation penalty is actually doing to the loss surface? These are not academic questions — they determine whether your models survive contact with real data and real stakeholders.
 
-A working knowledge of Python and Pandas (from the Data Analysis with Python course) is assumed. No prior machine learning experience is required.
+Twelve lessons take you from the statistical bedrock (descriptive statistics, probability distributions, Bayesian inference) through the full supervised and unsupervised learning landscape (regression, classification, clustering, dimensionality reduction), through the methodology that separates credible evaluations from misleading ones (cross-validation, calibration, leakage prevention), and out the other side into the engineering concerns that make models actually useful (feature pipelines, ensemble strategies, explainability, end-to-end deployment). Every concept is grounded in working Python code against realistic synthetic datasets.
+
+A solid command of Python, NumPy, and Pandas is assumed. You do not need prior machine learning experience, but you do need the intellectual honesty to question your own models and the patience to work through mathematics that has payoff only after you understand the intuition behind it. That combination — rigour plus practicality — is exactly what separates practitioners who understand their tools from those who merely use them.

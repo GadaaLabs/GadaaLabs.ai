@@ -1,0 +1,479 @@
+---
+title: "Bayesian Thinking & Inference"
+description: "Understand frequentist vs Bayesian philosophy, Bayes' theorem, conjugate priors, MAP vs MLE, credible intervals, Bayesian A/B testing, and a Naive Bayes classifier built from scratch."
+duration: 24
+order: 3
+---
+
+Two statisticians look at the same dataset and reach different conclusions — not because one made an arithmetic error, but because they asked different questions. The frequentist asks: "How likely is this data given a fixed true parameter?" The Bayesian asks: "Given this data, what should I believe about the parameter?" This lesson builds both perspectives from first principles and shows precisely where and why Bayesian reasoning outperforms the frequentist approach in ML contexts.
+
+## Frequentist vs Bayesian Philosophy
+
+**The coin flip debate** crystallises the disagreement. Suppose you flip a coin 10 times and get 7 heads.
+
+A frequentist treats the coin's true probability p as a fixed (unknown) constant. They ask: "If p = 0.5, how likely is observing 7 or more heads?" They compute a p-value and reject or fail to reject the null hypothesis p = 0.5. They do not say p has a probability — it either is or is not 0.5.
+
+A Bayesian treats p as a random variable with a prior distribution reflecting initial beliefs. After seeing 7 heads, they update that prior with the likelihood of the data to get a posterior distribution over p. They can then say: "I believe p is between 0.55 and 0.85 with 95% probability."
+
+Neither is wrong. They answer different questions. In ML, the Bayesian framework is more natural when:
+- Sample sizes are small (prior knowledge matters)
+- You need to make sequential decisions as data arrives
+- You want uncertainty estimates, not just point predictions
+- You have genuine domain knowledge to encode
+
+## Bayes' Theorem
+
+The mathematical machinery is a single equation:
+
+P(H | E) = P(E | H) * P(H) / P(E)
+
+where:
+- P(H) is the **prior** — your belief about hypothesis H before seeing evidence E
+- P(E | H) is the **likelihood** — how probable is the evidence if H is true
+- P(H | E) is the **posterior** — updated belief after seeing E
+- P(E) is the **marginal likelihood** (normalising constant) — total probability of evidence
+
+The denominator P(E) = sum over all H of P(E | H) * P(H) ensures the posterior integrates to 1.
+
+```python
+import numpy as np
+import scipy.stats as stats
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(42)
+
+# Bayes' theorem: disease diagnosis example
+# P(Disease) = 0.001 (prior — rare disease)
+# P(Positive | Disease) = 0.99 (test sensitivity)
+# P(Positive | No Disease) = 0.02 (false positive rate)
+
+p_disease = 0.001
+p_pos_given_disease = 0.99
+p_pos_given_no_disease = 0.02
+
+# P(Positive) = P(Pos|Disease)*P(Disease) + P(Pos|NoDis)*P(NoDis)
+p_positive = (p_pos_given_disease * p_disease +
+              p_pos_given_no_disease * (1 - p_disease))
+
+# P(Disease | Positive) — the posterior
+p_disease_given_pos = (p_pos_given_disease * p_disease) / p_positive
+
+print(f"Prior P(Disease):              {p_disease:.4f}  (1 in 1000)")
+print(f"P(Positive test):              {p_positive:.4f}")
+print(f"Posterior P(Disease | Pos):    {p_disease_given_pos:.4f}")
+print(f"\nDespite 99% sensitivity, only {p_disease_given_pos:.1%} of positives actually have the disease.")
+print("This is base rate neglect — why rare diseases need confirmatory tests.")
+```
+
+The result — that even a 99% accurate test yields many false positives for a rare disease — is one of the most counterintuitive and practically important results in medicine and security (intrusion detection, spam filtering).
+
+## Prior, Likelihood, and Posterior Intuition
+
+Think of Bayesian inference as a dialogue between prior belief and data evidence. With strong evidence (lots of data), the likelihood overwhelms the prior. With weak evidence (few data points), the prior dominates. This is mathematically appropriate: we should be less willing to abandon prior beliefs when data is sparse.
+
+```python
+from scipy.stats import beta as beta_dist, binom
+
+# Sequential updating: estimating a coin's bias
+# True probability = 0.6 (biased coin)
+true_p = 0.6
+alpha_prior, beta_prior = 1, 1  # Uniform prior Beta(1,1)
+
+observations = rng.binomial(1, true_p, size=50)  # 50 coin flips
+
+fig, axes = plt.subplots(2, 5, figsize=(16, 6))
+axes = axes.flatten()
+
+p_grid = np.linspace(0, 1, 300)
+
+cumulative_heads = 0
+cumulative_n = 0
+
+for i, (ax, n_new) in enumerate(zip(axes, [1, 2, 2, 5, 5, 5, 10, 10, 5, 7])):
+    # Add n_new observations
+    new_obs = observations[cumulative_n:cumulative_n + n_new]
+    cumulative_heads += new_obs.sum()
+    cumulative_n += n_new
+
+    alpha_post = alpha_prior + cumulative_heads
+    beta_post  = beta_prior + (cumulative_n - cumulative_heads)
+
+    posterior = beta_dist(alpha_post, beta_post)
+    ax.plot(p_grid, posterior.pdf(p_grid), linewidth=2, color='steelblue')
+    ax.axvline(true_p, color='red', linestyle='--', alpha=0.7, label='True p')
+    ax.axvline(posterior.mean(), color='green', linestyle=':', alpha=0.7, label='Posterior mean')
+    ax.set_title(f'n={cumulative_n}, H={cumulative_heads}')
+    ax.set_xlim(0, 1)
+    if i == 0:
+        ax.legend(fontsize=7)
+
+plt.suptitle('Sequential Bayesian Updating — Beta-Binomial Conjugate Prior', fontsize=12)
+plt.tight_layout()
+plt.savefig('bayesian_updating.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+## Conjugate Priors
+
+A conjugate prior is a prior distribution that, when combined with a given likelihood, produces a posterior from the same family. Conjugacy makes Bayesian updating analytically tractable without numerical integration.
+
+### Beta-Binomial: Updating Click-Through Rates
+
+If X | p ~ Binomial(n, p) and p ~ Beta(alpha, beta), then the posterior is:
+
+p | X = k ~ Beta(alpha + k, beta + n - k)
+
+```python
+# A/B testing with conjugate Beta prior
+# Control: 1200 views, 144 conversions (12%)
+# Treatment: 1200 views, 168 conversions (14%)
+
+alpha_prior_ab = 1  # Non-informative
+beta_prior_ab  = 1
+
+# Control posterior
+ctrl_views, ctrl_conv = 1200, 144
+alpha_ctrl = alpha_prior_ab + ctrl_conv
+beta_ctrl  = beta_prior_ab  + ctrl_views - ctrl_conv
+posterior_ctrl = beta_dist(alpha_ctrl, beta_ctrl)
+
+# Treatment posterior
+trt_views, trt_conv = 1200, 168
+alpha_trt = alpha_prior_ab + trt_conv
+beta_trt  = beta_prior_ab  + trt_views - trt_conv
+posterior_trt = beta_dist(alpha_trt, beta_trt)
+
+print(f"Control posterior:   mean={posterior_ctrl.mean():.4f}, "
+      f"95% CI=[{posterior_ctrl.ppf(0.025):.4f}, {posterior_ctrl.ppf(0.975):.4f}]")
+print(f"Treatment posterior: mean={posterior_trt.mean():.4f}, "
+      f"95% CI=[{posterior_trt.ppf(0.025):.4f}, {posterior_trt.ppf(0.975):.4f}]")
+```
+
+### Gamma-Poisson: Updating Arrival Rates
+
+If X | lambda ~ Poisson(lambda) and lambda ~ Gamma(alpha, 1/beta), then the posterior is:
+
+lambda | X_1,...,X_n ~ Gamma(alpha + sum(X_i), 1/(beta + n))
+
+```python
+from scipy.stats import gamma as gamma_dist
+
+# Server arrival rate — prior belief: Gamma(2, 1/5) (mean = alpha/beta = 0.4 req/sec)
+alpha_gamma_prior = 2
+rate_prior = 5   # rate parameter (beta in the parameterisation)
+
+# Observe 10 time windows, each 1 second:
+observed_arrivals = [3, 2, 4, 3, 5, 2, 3, 4, 2, 3]  # counts
+
+alpha_gamma_post = alpha_gamma_prior + sum(observed_arrivals)
+rate_post        = rate_prior + len(observed_arrivals)
+
+posterior_rate = gamma_dist(a=alpha_gamma_post, scale=1/rate_post)
+
+print(f"Prior mean lambda:     {alpha_gamma_prior / rate_prior:.3f} req/sec")
+print(f"Posterior mean lambda: {posterior_rate.mean():.3f} req/sec")
+print(f"MLE estimate:          {np.mean(observed_arrivals):.3f} req/sec")
+print(f"95% credible interval: [{posterior_rate.ppf(0.025):.3f}, {posterior_rate.ppf(0.975):.3f}]")
+```
+
+## MAP vs MLE
+
+**Maximum Likelihood Estimation (MLE)** finds the parameter value that maximises P(data | parameter).
+
+**Maximum A Posteriori (MAP)** finds the parameter value that maximises P(parameter | data) = P(data | parameter) * P(parameter) / P(data), which is proportional to likelihood * prior.
+
+The key insight: MAP with a uniform prior is identical to MLE, because the prior contributes nothing to the optimisation. MAP with a Gaussian prior on parameters is equivalent to L2-regularised MLE (Ridge regression). MAP with a Laplace prior on parameters is equivalent to L1-regularised MLE (Lasso regression).
+
+```python
+# MAP vs MLE for estimating coin bias with small data
+# True p = 0.7, but we only observe 3 flips: H, H, H
+
+n_flips, n_heads = 3, 3
+
+# MLE: argmax P(data | p) = n_heads / n_flips
+p_mle = n_heads / n_flips
+print(f"MLE estimate: {p_mle:.3f}  (overfit — no way to know from 3 flips)")
+
+# MAP with Beta(2, 2) prior (gentle belief that p is near 0.5)
+alpha_p = 2
+beta_p  = 2
+# Posterior: Beta(alpha + heads, beta + tails)
+posterior = beta_dist(alpha_p + n_heads, beta_p + (n_flips - n_heads))
+# MAP = mode of posterior = (alpha - 1) / (alpha + beta - 2) for alpha,beta > 1
+alpha_post_val = alpha_p + n_heads
+beta_post_val  = beta_p  + (n_flips - n_heads)
+p_map = (alpha_post_val - 1) / (alpha_post_val + beta_post_val - 2)
+print(f"MAP estimate: {p_map:.3f}  (regularised toward prior)")
+print(f"Posterior mean: {posterior.mean():.3f}")
+print(f"\nWith only 3 data points, the prior shrinks the estimate toward 0.5,")
+print("preventing the absurd MLE conclusion that p=1.0")
+```
+
+## Credible Intervals vs Confidence Intervals
+
+This is one of the most misunderstood distinctions in statistics.
+
+A **frequentist 95% confidence interval** means: if we repeated the experiment many times, 95% of the intervals constructed this way would contain the true parameter. It does NOT mean there is a 95% probability the parameter lies in this specific interval — the parameter is fixed.
+
+A **Bayesian 95% credible interval** (also called highest density interval or HDI) means: given the observed data, there is a 95% probability that the parameter lies in this interval. This is what most practitioners actually want to say, and incorrectly say about confidence intervals.
+
+```python
+# Frequentist confidence interval vs Bayesian credible interval
+# Estimating a proportion from 50 trials with 28 successes
+
+n_total, n_success = 50, 28
+p_hat_freq = n_success / n_total
+
+# Frequentist CI (Wilson interval — more accurate than normal approximation)
+from scipy.stats import norm as normal_dist
+
+z = normal_dist.ppf(0.975)
+denominator = 1 + z**2 / n_total
+center = (p_hat_freq + z**2 / (2*n_total)) / denominator
+margin = z * np.sqrt(p_hat_freq*(1-p_hat_freq)/n_total + z**2/(4*n_total**2)) / denominator
+
+ci_freq_low  = center - margin
+ci_freq_high = center + margin
+
+# Bayesian credible interval with uniform prior
+alpha_b = 1 + n_success
+beta_b  = 1 + (n_total - n_success)
+posterior_b = beta_dist(alpha_b, beta_b)
+
+ci_bayes_low, ci_bayes_high = posterior_b.ppf(0.025), posterior_b.ppf(0.975)
+
+print(f"Observed p_hat: {p_hat_freq:.3f}")
+print(f"\nFrequentist 95% CI:  [{ci_freq_low:.3f}, {ci_freq_high:.3f}]")
+print(f"Bayesian 95% CI:     [{ci_bayes_low:.3f}, {ci_bayes_high:.3f}]")
+print()
+print("The frequentist CI: 95% of such intervals (over repeated experiments)")
+print("  would contain the true p.")
+print("The Bayesian CI: P(p in this interval | data) = 0.95.")
+print("  This is the statement most people want to make.")
+```
+
+With large samples and uninformative priors, the two intervals converge numerically. They differ most when n is small or the prior is informative.
+
+## Bayesian A/B Testing from Scratch
+
+Frequentist A/B testing requires you to set sample size in advance (power analysis), wait until the end, and then either reject or fail to reject a null hypothesis. Bayesian A/B testing allows continuous monitoring, provides intuitive probability statements, and naturally incorporates prior knowledge.
+
+```python
+# Bayesian A/B test: does Treatment B beat Control A?
+rng_ab = np.random.default_rng(99)
+
+# True conversion rates (unknown in practice)
+true_p_a = 0.10
+true_p_b = 0.12
+
+# Simulate experiment: 500 visitors per variant
+visitors_a, visitors_b = 500, 500
+conv_a = rng_ab.binomial(visitors_a, true_p_a)
+conv_b = rng_ab.binomial(visitors_b, true_p_b)
+
+print(f"Variant A: {conv_a}/{visitors_a} = {conv_a/visitors_a:.3f}")
+print(f"Variant B: {conv_b}/{visitors_b} = {conv_b/visitors_b:.3f}")
+
+# Posterior distributions (uniform prior)
+post_a = beta_dist(1 + conv_a, 1 + visitors_a - conv_a)
+post_b = beta_dist(1 + conv_b, 1 + visitors_b - conv_b)
+
+# P(B > A) via Monte Carlo sampling
+n_samples = 200_000
+samples_a = post_a.rvs(n_samples, random_state=42)
+samples_b = post_b.rvs(n_samples, random_state=43)
+
+prob_b_beats_a = (samples_b > samples_a).mean()
+
+# Expected lift if we choose B
+relative_lifts = (samples_b - samples_a) / samples_a
+expected_lift = relative_lifts.mean()
+
+print(f"\nP(B > A) = {prob_b_beats_a:.4f}")
+print(f"Expected relative lift: {expected_lift:.2%}")
+print(f"95% CI on lift: [{np.percentile(relative_lifts, 2.5):.2%}, "
+      f"{np.percentile(relative_lifts, 97.5):.2%}]")
+
+# Frequentist comparison: chi-square test
+from scipy.stats import chi2_contingency
+contingency = np.array([[conv_a, visitors_a - conv_a],
+                        [conv_b, visitors_b - conv_b]])
+chi2, p_value, dof, expected = chi2_contingency(contingency)
+print(f"\nFrequentist chi-square p-value: {p_value:.4f}")
+print("Frequentist result: reject/accept at a significance threshold.")
+print("Bayesian result: B beats A with specific probability — actionable.")
+
+# Visualise posteriors
+p_range = np.linspace(0, 0.25, 500)
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(p_range, post_a.pdf(p_range), color='steelblue', linewidth=2, label=f'A posterior (mean={post_a.mean():.3f})')
+ax.plot(p_range, post_b.pdf(p_range), color='coral', linewidth=2, label=f'B posterior (mean={post_b.mean():.3f})')
+ax.fill_between(p_range, post_a.pdf(p_range), alpha=0.2, color='steelblue')
+ax.fill_between(p_range, post_b.pdf(p_range), alpha=0.2, color='coral')
+ax.set_title(f'Bayesian A/B Test: P(B > A) = {prob_b_beats_a:.1%}')
+ax.set_xlabel('Conversion rate p')
+ax.set_ylabel('Posterior density')
+ax.legend()
+plt.tight_layout()
+plt.savefig('bayesian_ab_test.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+## Naive Bayes Classifier from Scratch
+
+Naive Bayes classifies by computing the posterior probability of each class given the features, using the class prior multiplied by the product of individual feature likelihoods. The "naive" assumption is that features are conditionally independent given the class — rarely true, but often surprisingly effective.
+
+For a document with features (word counts) x_1, ..., x_d and class c:
+
+P(c | x) is proportional to P(c) * product over j of P(x_j | c)
+
+Working with log-probabilities avoids numerical underflow:
+
+log P(c | x) proportional to log P(c) + sum over j of log P(x_j | c)
+
+```python
+from collections import defaultdict
+
+class NaiveBayesClassifier:
+    """Multinomial Naive Bayes for text classification, built from scratch."""
+
+    def __init__(self, alpha=1.0):
+        self.alpha = alpha  # Laplace smoothing parameter
+        self.class_log_prior_ = {}
+        self.feature_log_prob_ = {}
+        self.classes_ = None
+        self.vocab_size_ = 0
+
+    def fit(self, X, y):
+        """
+        X: list of dicts {word: count} or numpy array of shape (n_samples, n_features)
+        y: array of class labels
+        """
+        y = np.array(y)
+        self.classes_ = np.unique(y)
+        n_samples = len(y)
+
+        for cls in self.classes_:
+            mask = y == cls
+            n_cls = mask.sum()
+            # Log prior: log P(c) = log(n_c / n)
+            self.class_log_prior_[cls] = np.log(n_cls / n_samples)
+
+            # Feature counts for this class, with Laplace smoothing
+            cls_features = X[mask].sum(axis=0) + self.alpha  # shape: (n_features,)
+            total_count   = cls_features.sum()
+            self.feature_log_prob_[cls] = np.log(cls_features / total_count)
+
+        self.vocab_size_ = X.shape[1]
+        return self
+
+    def predict_log_proba(self, X):
+        X = np.array(X)
+        log_proba = np.zeros((X.shape[0], len(self.classes_)))
+        for i, cls in enumerate(self.classes_):
+            log_proba[:, i] = (self.class_log_prior_[cls]
+                               + X @ self.feature_log_prob_[cls])
+        return log_proba
+
+    def predict(self, X):
+        log_proba = self.predict_log_proba(X)
+        return self.classes_[log_proba.argmax(axis=1)]
+
+    def predict_proba(self, X):
+        log_proba = self.predict_log_proba(X)
+        # Softmax for normalisation
+        log_proba -= log_proba.max(axis=1, keepdims=True)
+        proba = np.exp(log_proba)
+        return proba / proba.sum(axis=1, keepdims=True)
+
+
+# Test on a toy sentiment dataset
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.metrics import accuracy_score
+
+# Simple positive/negative reviews
+texts = [
+    "great product love it excellent",
+    "wonderful amazing fantastic quality",
+    "best purchase happy satisfied",
+    "love this highly recommend",
+    "outstanding performance very pleased",
+    "terrible product broken awful",
+    "worst experience disappointed frustrated",
+    "never buying again waste of money",
+    "poor quality broke immediately useless",
+    "horrible do not recommend garbage",
+]
+labels = [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]  # 1=positive, 0=negative
+
+vectorizer = CountVectorizer()
+X_all = vectorizer.fit_transform(texts).toarray()
+y_all = np.array(labels)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X_all, y_all, test_size=0.3, random_state=42, stratify=y_all
+)
+
+# Our implementation
+nb_scratch = NaiveBayesClassifier(alpha=1.0)
+nb_scratch.fit(X_train, y_train)
+preds_scratch = nb_scratch.predict(X_test)
+
+# sklearn reference
+nb_sklearn = MultinomialNB(alpha=1.0)
+nb_sklearn.fit(X_train, y_train)
+preds_sklearn = nb_sklearn.predict(X_test)
+
+print(f"Scratch accuracy: {accuracy_score(y_test, preds_scratch):.3f}")
+print(f"sklearn accuracy: {accuracy_score(y_test, preds_sklearn):.3f}")
+
+# New prediction with probability breakdown
+new_review = ["absolutely terrible broken disappointed"]
+X_new = vectorizer.transform(new_review).toarray()
+prob = nb_scratch.predict_proba(X_new)
+print(f"\nNew review: {new_review[0]}")
+print(f"P(negative): {prob[0][0]:.3f}  P(positive): {prob[0][1]:.3f}")
+```
+
+### Laplace Smoothing
+
+Without smoothing, any word not seen in training data for a class produces P(word | class) = 0, which zeroes out the entire posterior for that class regardless of other evidence. Laplace smoothing (alpha = 1) adds a pseudocount of alpha to every feature, preventing zero probabilities at the cost of slightly biasing estimates toward uniform. For text classification, alpha in [0.1, 1.0] is typical.
+
+## When Bayesian Thinking Beats Frequentist
+
+**Small samples**: with n = 5, any estimate has enormous uncertainty. Bayesian credible intervals correctly reflect this via the posterior width. Frequentist intervals can be unreliable or even undefined for extreme outcomes (all successes, all failures).
+
+**Sequential decisions**: a frequentist A/B test requires you to commit to a sample size before testing; peeking at results and stopping early inflates the false positive rate. Bayesian testing supports ethical stopping based on posterior probability of superiority.
+
+**Incorporating domain knowledge**: if you know from prior experiments that click-through rates are almost always between 1% and 5%, encoding this in a prior prevents new experiments from converging on implausible values due to small samples or data anomalies.
+
+**Probability of future outcomes**: "What is the probability that the next customer will convert?" Bayesian posterior predictive distribution answers this directly. Frequentist tools address only confidence about parameters, not direct probability statements about future data.
+
+```python
+# Posterior predictive: after seeing 15/100 conversions,
+# what is the probability the next visitor converts?
+
+alpha_obs = 1 + 15   # prior + successes
+beta_obs  = 1 + 85   # prior + failures
+posterior_conv = beta_dist(alpha_obs, beta_obs)
+
+# Posterior predictive P(next = 1) = integral p * posterior(p) dp = E[p] under posterior
+posterior_predictive = posterior_conv.mean()
+
+print(f"Posterior predictive P(next visitor converts): {posterior_predictive:.4f}")
+print(f"This is the expected conversion rate given the data.")
+print(f"Compare to naive MLE: 15/100 = 0.1500")
+```
+
+## Key Takeaways
+
+- Bayes' theorem P(H|E) = P(E|H)*P(H)/P(E) is a belief-updating rule; the posterior combines prior knowledge with data evidence, with their relative influence determined by sample size.
+- Conjugate priors (Beta-Binomial, Gamma-Poisson) yield closed-form posteriors that update analytically: after observing k successes in n trials starting from Beta(alpha, beta), the posterior is Beta(alpha+k, beta+n-k).
+- MAP estimation with a Gaussian prior is algebraically equivalent to L2 (Ridge) regularisation; MAP with a Laplace prior is equivalent to L1 (Lasso) regularisation — regularisation has a Bayesian interpretation.
+- Bayesian credible intervals support direct probability statements about parameters ("there is a 95% probability p lies in this interval"), while frequentist confidence intervals describe the long-run behavior of the procedure, not the specific interval.
+- Bayesian A/B testing yields P(B beats A) — an immediately actionable business number — and supports ethical early stopping without inflating false positive rates.
+- Naive Bayes achieves competitive performance by combining class priors with conditional feature likelihoods in log-space; Laplace smoothing prevents zero-probability catastrophe for unseen features.
+- Bayesian reasoning is most valuable over frequentist when data is sparse, decisions are sequential, domain knowledge is strong, or direct probability statements about parameters are needed.
+- The posterior predictive distribution (the expected parameter value under the posterior) answers "what happens next?" — a question frequentist tools cannot answer directly.

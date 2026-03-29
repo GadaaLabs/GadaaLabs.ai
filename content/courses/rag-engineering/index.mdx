@@ -1,28 +1,52 @@
 ---
-title: "RAG Engineering"
-description: "Design, build, and ship production Retrieval-Augmented Generation systems that are accurate, fast, and measurably evaluated."
+title: "RAG Engineering — Production Retrieval-Augmented Generation"
+description: "Design, build, and ship production RAG systems from first principles: document processing, chunking strategies, embedding models, vector databases, retrieval quality, query transformations, reranking, evaluation, advanced architectures, and production operations."
 author: "GadaaLabs"
-tags: ["rag", "llm", "embeddings", "vector-databases", "python"]
-difficulty: "intermediate"
+tags: ["rag", "llm", "embeddings", "vector-databases", "python", "production-ai"]
+difficulty: "advanced"
 lessons:
-  - slug: "01-rag-fundamentals"
-    title: "Why RAG?"
-    duration: 12
-  - slug: "02-chunking-strategies"
-    title: "Chunking Strategies"
-    duration: 14
-  - slug: "03-embedding-models"
-    title: "Embedding Models"
-    duration: 15
-  - slug: "04-vector-databases"
-    title: "Vector Databases"
-    duration: 16
-  - slug: "05-retrieval-quality"
-    title: "Retrieval Quality"
-    duration: 17
-  - slug: "06-production-rag"
-    title: "Production RAG"
-    duration: 18
+  - slug: "01-rag-architecture"
+    title: "RAG Architecture — Why, When & How It Works"
+    duration: 24
+  - slug: "02-document-processing"
+    title: "Document Processing & Ingestion Pipelines"
+    duration: 24
+  - slug: "03-chunking-strategies"
+    title: "Chunking Strategies — Fixed, Semantic & Hierarchical"
+    duration: 26
+  - slug: "04-embedding-models"
+    title: "Embedding Models — Dense, Sparse & Late Interaction"
+    duration: 26
+  - slug: "05-vector-databases"
+    title: "Vector Databases — HNSW, IVF, Filtering & Production Ops"
+    duration: 28
+  - slug: "06-retrieval-quality"
+    title: "Retrieval Quality — Metrics, Evaluation & Debugging"
+    duration: 26
+  - slug: "07-query-transformations"
+    title: "Query Transformations — HyDE, Step-Back & Multi-Query"
+    duration: 24
+  - slug: "08-reranking"
+    title: "Reranking — Cross-Encoders, ColBERT & Contextual Compression"
+    duration: 24
+  - slug: "09-rag-evaluation"
+    title: "RAG Evaluation — RAGAS, Faithfulness & Groundedness"
+    duration: 26
+  - slug: "10-advanced-rag-patterns"
+    title: "Advanced RAG Patterns — Agentic, Corrective & Self-RAG"
+    duration: 26
+  - slug: "11-production-rag"
+    title: "Production RAG — Latency, Caching, Scaling & Cost"
+    duration: 28
+  - slug: "12-rag-for-enterprise"
+    title: "Enterprise RAG — Security, Compliance & Multi-Tenant"
+    duration: 24
 ---
 
-Large language models hallucinate — and they hallucinate most confidently when they know least. Retrieval-Augmented Generation solves this by grounding every response in documents retrieved from a controlled knowledge base. But RAG is not a single technique: it is a pipeline with at least six distinct engineering decisions, each of which can make or break the system's accuracy and latency. This course teaches every step, from chunking strategy to production deployment, with evaluation metrics at each stage so you know when you have actually improved things.
+RAG is the dominant architecture for grounding large language models in proprietary knowledge — but 80% of RAG systems underperform because of poor chunking decisions, weak retrieval, or absent evaluation pipelines. Building a RAG system that reliably returns accurate, grounded answers requires engineering discipline across the full stack: document ingestion, embedding selection, index configuration, query optimisation, and continuous quality measurement.
+
+This course teaches RAG engineering from first principles, not from LangChain abstractions. You will understand why HNSW beats brute-force ANN at scale, why your chunk size choices directly control retrieval recall, and why a cross-encoder reranker can recover relevance that a bi-encoder missed. You will build each component from scratch before using any framework — because understanding the mechanics is the only way to debug production failures.
+
+The course covers the full RAG pipeline: ingesting documents from PDF, HTML, and DOCX sources; designing chunking strategies for different content types; selecting and benchmarking embedding models on your domain data; configuring vector databases for production (filtering, quantisation, index tuning); measuring retrieval quality with Recall@k and NDCG; applying query transformations that improve recall; and evaluating end-to-end quality with the RAGAS framework.
+
+Advanced lessons cover agentic RAG, Corrective RAG, Self-RAG, and graph RAG — the architectures that go beyond simple retrieve-and-generate. The final two lessons address production operations (latency budgets, caching, cost optimisation) and enterprise concerns (multi-tenancy, access control, compliance).

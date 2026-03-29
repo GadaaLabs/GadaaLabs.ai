@@ -1,23 +1,22 @@
-import type { Metadata } from "next";
-import { Heart, Zap, BookOpen, Code2, Users, Star } from "lucide-react";
+"use client";
 
-export const metadata: Metadata = {
-  title: "Donate",
-  description: "Support GadaaLabs and help us keep AI education free and open for everyone.",
-};
+import { useState } from "react";
+import { Heart, Zap, BookOpen, Code2, Users, Star, Loader2, ExternalLink } from "lucide-react";
 
 const tiers = [
   {
+    slug: "supporter",
     name: "Supporter",
     amount: 5,
     period: "month",
     description: "Keep the lights on",
-    perks: ["Ad-free experience", "Supporter badge", "Early access to new content"],
+    perks: ["Ad-free experience", "Supporter badge in community", "Early access to new content"],
     color: "var(--color-cyan-500)",
     glow: "0 0 24px rgba(6,182,212,0.2)",
     featured: false,
   },
   {
+    slug: "contributor",
     name: "Contributor",
     amount: 15,
     period: "month",
@@ -33,6 +32,7 @@ const tiers = [
     featured: true,
   },
   {
+    slug: "patron",
     name: "Patron",
     amount: 50,
     period: "month",
@@ -49,14 +49,51 @@ const tiers = [
   },
 ];
 
+const ONE_TIME_AMOUNTS = [10, 25, 50, 100];
+
 const stats = [
   { icon: BookOpen, label: "Free lessons", value: "200+" },
   { icon: Code2, label: "Interactive demos", value: "12" },
   { icon: Users, label: "Learners helped", value: "5,000+" },
-  { icon: Star, label: "GitHub stars", value: "Open source" },
+  { icon: Star, label: "Always free", value: "No paywall" },
 ];
 
+async function startCheckout(body: object): Promise<string | null> {
+  const res = await fetch("/api/stripe/checkout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json() as { url?: string; error?: string };
+  if (data.url) return data.url;
+  console.error("Stripe error:", data.error);
+  return null;
+}
+
 export default function DonatePage() {
+  const [loadingTier, setLoadingTier] = useState<string | null>(null);
+  const [loadingAmount, setLoadingAmount] = useState<number | null>(null);
+
+  const handleSubscription = async (slug: string) => {
+    setLoadingTier(slug);
+    try {
+      const url = await startCheckout({ tier: slug, mode: "subscription" });
+      if (url) { window.location.assign(url); return; }
+    } catch { /* handled below */ }
+    // eslint-disable-next-line react-hooks/immutability
+    setLoadingTier(null);
+  };
+
+  const handleOneTime = async (amount: number) => {
+    setLoadingAmount(amount);
+    try {
+      const url = await startCheckout({ amount, mode: "payment" });
+      if (url) { window.location.assign(url); return; }
+    } catch { /* handled below */ }
+    // eslint-disable-next-line react-hooks/immutability
+    setLoadingAmount(null);
+  };
+
   return (
     <div className="mx-auto max-w-5xl px-6 py-16">
       {/* Hero */}
@@ -98,74 +135,62 @@ export default function DonatePage() {
 
       {/* Tier cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-16">
-        {tiers.map((tier) => (
-          <div
-            key={tier.name}
-            className="rounded-2xl p-6 flex flex-col relative"
-            style={{
-              background: tier.featured ? "rgba(124,58,237,0.06)" : "var(--color-bg-surface)",
-              border: `1px solid ${tier.featured ? "var(--color-purple-500)" : "var(--color-border-default)"}`,
-              boxShadow: tier.featured ? tier.glow : "none",
-            }}
-          >
-            {tier.featured && (
-              <div
-                className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full text-xs font-bold"
-                style={{
-                  background: "linear-gradient(90deg, var(--color-purple-600), var(--color-cyan-500))",
-                  color: "#fff",
-                }}
-              >
-                Most Popular
-              </div>
-            )}
-            <div className="mb-4">
-              <h3 className="text-lg font-bold mb-1" style={{ color: tier.color }}>
-                {tier.name}
-              </h3>
-              <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-                {tier.description}
-              </p>
-            </div>
-            <div className="mb-6">
-              <span className="text-4xl font-bold" style={{ color: "var(--color-text-primary)" }}>
-                ${tier.amount}
-              </span>
-              <span className="text-sm ml-1" style={{ color: "var(--color-text-muted)" }}>
-                /{tier.period}
-              </span>
-            </div>
-            <ul className="space-y-2.5 mb-8 flex-1">
-              {tier.perks.map((perk) => (
-                <li key={perk} className="flex items-start gap-2 text-sm" style={{ color: "var(--color-text-secondary)" }}>
-                  <Zap className="h-4 w-4 mt-0.5 shrink-0" style={{ color: tier.color }} />
-                  {perk}
-                </li>
-              ))}
-            </ul>
-            <a
-              href={`https://buy.stripe.com/placeholder_${tier.name.toLowerCase()}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block text-center py-3 rounded-xl font-semibold text-sm transition-all"
-              style={
-                tier.featured
-                  ? {
-                      background: "linear-gradient(135deg, var(--color-purple-600), var(--color-purple-500))",
-                      color: "#fff",
-                      boxShadow: "var(--glow-purple-sm)",
-                    }
-                  : {
-                      background: "var(--color-bg-elevated)",
-                      color: "var(--color-text-primary)",
-                      border: "1px solid var(--color-border-default)",
-                    }
-              }
+        {tiers.map((tier) => {
+          const isLoading = loadingTier === tier.slug;
+          return (
+            <div
+              key={tier.name}
+              className="rounded-2xl p-6 flex flex-col relative"
+              style={{
+                background: tier.featured ? "rgba(124,58,237,0.06)" : "var(--color-bg-surface)",
+                border: `1px solid ${tier.featured ? "var(--color-purple-500)" : "var(--color-border-default)"}`,
+                boxShadow: tier.featured ? tier.glow : "none",
+              }}
             >
-              Get Started
-            </a>
-          </div>
-        ))}
+              {tier.featured && (
+                <div
+                  className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full text-xs font-bold"
+                  style={{
+                    background: "linear-gradient(90deg, var(--color-purple-600), var(--color-cyan-500))",
+                    color: "#fff",
+                  }}
+                >
+                  Most Popular
+                </div>
+              )}
+              <div className="mb-4">
+                <h3 className="text-lg font-bold mb-1" style={{ color: tier.color }}>{tier.name}</h3>
+                <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>{tier.description}</p>
+              </div>
+              <div className="mb-6">
+                <span className="text-4xl font-bold" style={{ color: "var(--color-text-primary)" }}>
+                  ${tier.amount}
+                </span>
+                <span className="text-sm ml-1" style={{ color: "var(--color-text-muted)" }}>/{tier.period}</span>
+              </div>
+              <ul className="space-y-2.5 mb-8 flex-1">
+                {tier.perks.map((perk) => (
+                  <li key={perk} className="flex items-start gap-2 text-sm" style={{ color: "var(--color-text-secondary)" }}>
+                    <Zap className="h-4 w-4 mt-0.5 shrink-0" style={{ color: tier.color }} />
+                    {perk}
+                  </li>
+                ))}
+              </ul>
+              <button
+                onClick={() => handleSubscription(tier.slug)}
+                disabled={!!loadingTier || !!loadingAmount}
+                className="flex items-center justify-center gap-2 w-full py-3 rounded-xl font-semibold text-sm transition-all disabled:opacity-60"
+                style={
+                  tier.featured
+                    ? { background: "linear-gradient(135deg, var(--color-purple-600), var(--color-purple-500))", color: "#fff", boxShadow: "var(--glow-purple-sm)" }
+                    : { background: "var(--color-bg-elevated)", color: "var(--color-text-primary)", border: "1px solid var(--color-border-default)" }
+                }
+              >
+                {isLoading ? <><Loader2 className="h-4 w-4 animate-spin" /> Redirecting…</> : <><ExternalLink className="h-4 w-4" /> Subscribe ${tier.amount}/mo</>}
+              </button>
+            </div>
+          );
+        })}
       </div>
 
       {/* One-time donation */}
@@ -179,23 +204,26 @@ export default function DonatePage() {
         <p className="text-sm mb-6" style={{ color: "var(--color-text-muted)" }}>
           No recurring commitment — every contribution helps.
         </p>
-        <div className="flex flex-wrap justify-center gap-3 mb-6">
-          {[10, 25, 50, 100].map((amt) => (
-            <a
-              key={amt}
-              href={`https://buy.stripe.com/placeholder_onetime`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-6 py-2.5 rounded-xl text-sm font-semibold transition-all"
-              style={{
-                background: "var(--color-bg-elevated)",
-                border: "1px solid var(--color-border-default)",
-                color: "var(--color-text-primary)",
-              }}
-            >
-              ${amt}
-            </a>
-          ))}
+        <div className="flex flex-wrap justify-center gap-3 mb-4">
+          {ONE_TIME_AMOUNTS.map((amt) => {
+            const isLoading = loadingAmount === amt;
+            return (
+              <button
+                key={amt}
+                onClick={() => handleOneTime(amt)}
+                disabled={!!loadingTier || !!loadingAmount}
+                className="flex items-center gap-1.5 px-6 py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-60"
+                style={{
+                  background: isLoading ? "rgba(124,58,237,0.1)" : "var(--color-bg-elevated)",
+                  border: `1px solid ${isLoading ? "var(--color-purple-500)" : "var(--color-border-default)"}`,
+                  color: isLoading ? "var(--color-purple-300)" : "var(--color-text-primary)",
+                }}
+              >
+                {isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                ${amt}
+              </button>
+            );
+          })}
         </div>
         <p className="text-xs" style={{ color: "var(--color-text-disabled)" }}>
           Payments processed securely via Stripe. GadaaLabs does not store card information.
@@ -223,12 +251,8 @@ export default function DonatePage() {
             className="rounded-xl p-5"
             style={{ background: "var(--color-bg-elevated)", border: "1px solid var(--color-border-subtle)" }}
           >
-            <h3 className="font-semibold mb-2" style={{ color: "var(--color-text-primary)" }}>
-              {title}
-            </h3>
-            <p className="text-sm leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
-              {body}
-            </p>
+            <h3 className="font-semibold mb-2" style={{ color: "var(--color-text-primary)" }}>{title}</h3>
+            <p className="text-sm leading-relaxed" style={{ color: "var(--color-text-muted)" }}>{body}</p>
           </div>
         ))}
       </div>

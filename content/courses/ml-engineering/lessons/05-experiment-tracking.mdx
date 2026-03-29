@@ -1,0 +1,482 @@
+---
+title: "Experiment Tracking, Model Registry & Reproducibility"
+description: "Use MLflow to track hyperparameters, metrics, and artifacts, manage model versions through a registry, and build experiment workflows that can be reproduced from a Git SHA and a data version."
+duration: 24
+order: 5
+---
+
+The reproducibility crisis in ML is real. A 2019 NeurIPS reproducibility study found that only 56% of papers provided enough detail to reproduce their results. In production ML, the problem is worse: teams routinely cannot reproduce a model they trained six months ago because nobody recorded which dataset version, which hyperparameters, or which environment produced it. Experiment tracking is the discipline of recording everything — and MLflow is the standard tool for doing it.
+
+## What the Reproducibility Crisis Looks Like
+
+A colleague hands you a model file and says "this is our best churn model, can you retrain it on the new data?" You open the repository and find a Jupyter notebook. The notebook has no record of which dataset was used, the hyperparameters are hardcoded without comments, the random seed is not set, the environment is Python 3.9 (you have 3.11), and the last cell output is from five months ago.
+
+This is not a hypothetical. It is the default state of most ML teams before they invest in experiment tracking. The cost is real: retraining takes a week of archaeology instead of an hour.
+
+## What Needs to Be Tracked
+
+Every experiment must capture six categories of information:
+
+- **Code version:** the Git SHA of the code that produced the run. Without this, you cannot go back and re-run with the same logic.
+- **Data version:** the DVC hash or S3 URI + etag of the training and validation datasets. Data changes silently; without versioning you cannot know what the model was trained on.
+- **Hyperparameters:** every configuration parameter that affects training — learning rate, batch size, architecture choices, regularisation, random seeds.
+- **Metrics:** training and validation metrics at every epoch (for time-series), plus final evaluation metrics on the held-out test set.
+- **Artifacts:** the model file, confusion matrix plots, feature importance plots, SHAP values — everything that characterises what the model learned.
+- **Environment:** Python version, library versions (requirements.txt or conda.yaml), OS, GPU type.
+
+## MLflow Tracking
+
+MLflow Tracking is a lightweight logging API that runs in any Python script, notebook, or training job.
+
+```python
+import mlflow
+import mlflow.sklearn
+import mlflow.xgboost
+import pandas as pd
+import numpy as np
+from xgboost import XGBClassifier
+from sklearn.metrics import roc_auc_score
+import subprocess, os
+
+# Point MLflow at a tracking server (or use local ./mlruns directory)
+mlflow.set_tracking_uri("http://localhost:5000")   # or "sqlite:///mlflow.db"
+
+# Set the experiment (creates it if it does not exist)
+mlflow.set_experiment("churn-prediction-v2")
+
+# --- Core MLflow API ---
+with mlflow.start_run(run_name="xgboost-baseline") as run:
+    run_id = run.info.run_id
+
+    # Log hyperparameters (single value per key, immutable after logging)
+    mlflow.log_param("model_type",        "xgboost")
+    mlflow.log_param("n_estimators",      500)
+    mlflow.log_param("max_depth",         6)
+    mlflow.log_param("learning_rate",     0.05)
+    mlflow.log_param("subsample",         0.8)
+    mlflow.log_param("colsample_bytree",  0.8)
+    mlflow.log_param("random_state",      42)
+
+    # Log tags (free-form key-value metadata for filtering in UI)
+    mlflow.set_tag("team",        "growth")
+    mlflow.set_tag("data_version","dvc:abc123def456")
+    mlflow.set_tag("git_sha",     subprocess.check_output(
+        ["git", "rev-parse", "HEAD"]).decode().strip()
+    )
+    mlflow.set_tag("dataset",     "churn_train_2025_q1")
+
+    # Train the model
+    model = XGBClassifier(
+        n_estimators=500, max_depth=6, learning_rate=0.05,
+        subsample=0.8, colsample_bytree=0.8, random_state=42,
+        eval_metric="auc", early_stopping_rounds=20,
+    )
+    eval_set = [(X_val, y_val)]
+    model.fit(X_train, y_train, eval_set=eval_set, verbose=False)
+
+    # Log metrics at each boosting round (step = round number)
+    results = model.evals_result()
+    for step, auc in enumerate(results["validation_0"]["auc"]):
+        mlflow.log_metric("val_auc", auc, step=step)
+    for step, loss in enumerate(results["validation_0"]["logloss"]):
+        mlflow.log_metric("val_logloss", loss, step=step)
+
+    # Final metrics on held-out test set
+    y_pred_proba = model.predict_proba(X_test)[:, 1]
+    test_auc = roc_auc_score(y_test, y_pred_proba)
+    mlflow.log_metric("test_auc",  test_auc)
+    mlflow.log_metric("n_estimators_best", model.best_iteration)
+
+    # Log the model with its input/output schema
+    signature = mlflow.models.infer_signature(X_train, y_pred_proba)
+    mlflow.xgboost.log_model(
+        model, "model",
+        signature=signature,
+        input_example=X_train[:5],
+    )
+
+    # Log artifacts: plots, reports, feature importances
+    importance_df = pd.DataFrame({
+        "feature":    X_train.columns.tolist(),
+        "importance": model.feature_importances_,
+    }).sort_values("importance", ascending=False)
+    importance_df.to_csv("/tmp/feature_importance.csv", index=False)
+    mlflow.log_artifact("/tmp/feature_importance.csv", artifact_path="reports")
+
+    print(f"Run ID: {run_id}  |  Test AUC: {test_auc:.4f}")
+```
+
+## Autologging
+
+MLflow autologging instruments supported libraries without any explicit log_param/log_metric calls.
+
+```python
+# sklearn autologging: captures all hyperparameters, CV metrics, model
+mlflow.sklearn.autolog(
+    log_input_examples=True,
+    log_model_signatures=True,
+    log_models=True,
+    silent=False,
+)
+
+# XGBoost autologging
+mlflow.xgboost.autolog(importance_types=["weight", "gain"])
+
+# Both can be enabled simultaneously
+with mlflow.start_run(run_name="autolog-demo"):
+    from sklearn.ensemble import GradientBoostingClassifier
+    clf = GradientBoostingClassifier(n_estimators=200, max_depth=4)
+    clf.fit(X_train, y_train)
+    # MLflow automatically logged: all params, train/val metrics, model artifact
+
+# Disable autologging for specific code sections
+with mlflow.start_run():
+    with mlflow.sklearn.autolog(disable=True):
+        pass   # manual logging only
+```
+
+## Experiment Organisation
+
+Good experiment organisation makes it possible to find the best run in a sea of hundreds.
+
+```python
+def run_hyperparameter_sweep(
+    param_grid: list[dict],
+    parent_run_name: str = "xgb-sweep",
+) -> str:
+    """Run a sweep of hyperparameter configurations using nested runs."""
+    mlflow.set_experiment("churn-prediction-v2")
+    best_auc = 0.0
+    best_run_id = ""
+
+    with mlflow.start_run(run_name=parent_run_name) as parent_run:
+        mlflow.set_tag("sweep_type",  "grid")
+        mlflow.set_tag("n_configs",   str(len(param_grid)))
+
+        for i, params in enumerate(param_grid):
+            with mlflow.start_run(
+                run_name=f"config-{i:03d}",
+                nested=True           # creates a child run under the parent
+            ) as child_run:
+                mlflow.log_params(params)
+
+                model = XGBClassifier(**params, random_state=42)
+                model.fit(X_train, y_train, eval_set=[(X_val, y_val)],
+                          verbose=False)
+                val_auc = roc_auc_score(y_val, model.predict_proba(X_val)[:, 1])
+                mlflow.log_metric("val_auc", val_auc)
+
+                if val_auc > best_auc:
+                    best_auc   = val_auc
+                    best_run_id = child_run.info.run_id
+
+        mlflow.log_metric("sweep_best_auc", best_auc)
+        mlflow.set_tag("best_child_run_id", best_run_id)
+
+    return best_run_id
+
+param_grid = [
+    {"n_estimators": 300, "max_depth": 4, "learning_rate": 0.1},
+    {"n_estimators": 500, "max_depth": 6, "learning_rate": 0.05},
+    {"n_estimators": 700, "max_depth": 8, "learning_rate": 0.03},
+    {"n_estimators": 300, "max_depth": 6, "learning_rate": 0.1},
+]
+best_run_id = run_hyperparameter_sweep(param_grid)
+```
+
+## MLflow Model Registry
+
+The Model Registry is a staging area between experimentation and production. It tracks which run produced each registered model version and enforces a lifecycle: `None → Staging → Production → Archived`.
+
+```python
+from mlflow.tracking import MlflowClient
+
+client = MlflowClient()
+MODEL_NAME = "ChurnModelV2"
+
+# Register a model from a completed run
+result = mlflow.register_model(
+    model_uri=f"runs:/{best_run_id}/model",
+    name=MODEL_NAME,
+    tags={"team": "growth", "validated_by": "ml_platform"},
+)
+version = result.version
+print(f"Registered version: {version}")
+
+# Add a description to this version
+client.update_model_version(
+    name=MODEL_NAME,
+    version=version,
+    description=f"XGBoost churn model. Test AUC={best_auc:.4f}. "
+                 "Trained on Q1 2025 data.",
+)
+
+# Transition to Staging for validation
+client.transition_model_version_stage(
+    name=MODEL_NAME,
+    version=version,
+    stage="Staging",
+    archive_existing_versions=False,   # keep old staging version
+)
+
+# Run validation tests on Staging model
+staging_model = mlflow.pyfunc.load_model(f"models:/{MODEL_NAME}/Staging")
+staging_preds = staging_model.predict(pd.DataFrame(X_test))
+staging_auc   = roc_auc_score(y_test, staging_preds)
+
+# Promote to Production if it passes
+if staging_auc >= 0.82:   # minimum threshold for promotion
+    client.transition_model_version_stage(
+        name=MODEL_NAME,
+        version=version,
+        stage="Production",
+        archive_existing_versions=True,   # archive previous Production version
+    )
+    print(f"Promoted version {version} to Production (AUC={staging_auc:.4f})")
+else:
+    client.transition_model_version_stage(
+        name=MODEL_NAME, version=version, stage="Archived"
+    )
+    print(f"Version {version} archived (AUC={staging_auc:.4f} below threshold)")
+
+# Load the current Production model
+prod_model = mlflow.pyfunc.load_model(f"models:/{MODEL_NAME}/Production")
+```
+
+## Model Versioning Strategy
+
+Use semantic versioning for models, with different semantics than software:
+
+- **Major version:** fundamental model architecture change or retraining on a significantly different data distribution. Backward compatibility of predictions is not guaranteed.
+- **Minor version:** incremental retraining on new data with the same architecture. Predictions should be directionally similar to the previous version.
+- **Patch version:** bug fix in preprocessing or postprocessing code, not the model weights themselves.
+
+```python
+@dataclass
+class ModelVersion:
+    major: int
+    minor: int
+    patch: int
+    git_sha: str
+    data_hash: str
+
+    def __str__(self) -> str:
+        return f"v{self.major}.{self.minor}.{self.patch}"
+
+    def is_compatible_with(self, other: "ModelVersion") -> bool:
+        """Compatible = same major version."""
+        return self.major == other.major
+
+def decide_version_bump(
+    current: ModelVersion,
+    architecture_changed: bool,
+    new_data: bool,
+    bug_fix_only: bool,
+) -> ModelVersion:
+    if architecture_changed:
+        return ModelVersion(
+            current.major + 1, 0, 0,
+            git_sha=get_current_sha(), data_hash=get_current_data_hash()
+        )
+    if new_data:
+        return ModelVersion(
+            current.major, current.minor + 1, 0,
+            git_sha=get_current_sha(), data_hash=get_current_data_hash()
+        )
+    return ModelVersion(
+        current.major, current.minor, current.patch + 1,
+        git_sha=get_current_sha(), data_hash=get_current_data_hash()
+    )
+```
+
+## Environment Pinning
+
+A model's environment is part of its reproducibility contract. MLflow captures environment information in the model's `conda.yaml` and `requirements.txt` automatically when you log a model.
+
+```python
+# View the captured environment for a logged model
+import mlflow.pyfunc
+
+model_info = client.get_model_version(MODEL_NAME, version)
+print(model_info.tags)
+
+# The conda.yaml is saved alongside the model artifact
+# mlruns/<experiment_id>/<run_id>/artifacts/model/conda.yaml
+# Contains: python version, all pip packages with exact versions
+
+# For full reproducibility, build a Docker image from the logged model
+# mlflow models build-docker -m "models:/ChurnModelV2/Production" -n "churn-model:v1.2.0"
+```
+
+```python
+# Pin your environment explicitly in training code (do not rely on implicit)
+def log_environment(run_id: str) -> None:
+    """Log full environment info to MLflow for reproducibility."""
+    import sys, platform, subprocess, json
+
+    pip_freeze = subprocess.check_output(
+        [sys.executable, "-m", "pip", "freeze"]
+    ).decode()
+
+    env_info = {
+        "python_version":   sys.version,
+        "platform":         platform.platform(),
+        "git_sha":          subprocess.check_output(
+            ["git", "rev-parse", "HEAD"]
+        ).decode().strip(),
+        "git_branch":       subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"]
+        ).decode().strip(),
+    }
+
+    with open("/tmp/environment.json", "w") as f:
+        json.dump(env_info, f, indent=2)
+    with open("/tmp/requirements.txt", "w") as f:
+        f.write(pip_freeze)
+
+    with mlflow.start_run(run_id=run_id):
+        mlflow.log_artifact("/tmp/environment.json", "environment")
+        mlflow.log_artifact("/tmp/requirements.txt", "environment")
+```
+
+## DVC for Pipeline Reproducibility
+
+DVC `dvc run` defines pipeline stages with explicit inputs, outputs, and commands. `dvc repro` re-runs only the stages whose inputs have changed. `dvc dag` visualises the pipeline graph.
+
+```python
+# dvc.yaml (pipeline definition — equivalent to a Makefile for data/models)
+# stages:
+#   prepare:
+#     cmd: python src/prepare.py --date 2025-03-01
+#     deps:
+#       - src/prepare.py
+#       - data/raw/events_2025_q1.parquet
+#     outs:
+#       - data/prepared/train.parquet
+#       - data/prepared/val.parquet
+#
+#   train:
+#     cmd: python src/train.py
+#     deps:
+#       - src/train.py
+#       - data/prepared/train.parquet
+#       - data/prepared/val.parquet
+#     params:
+#       - params.yaml:
+#         - n_estimators
+#         - max_depth
+#         - learning_rate
+#     outs:
+#       - models/churn_model.pkl
+#     metrics:
+#       - metrics/eval.json:
+#           cache: false
+#
+#   evaluate:
+#     cmd: python src/evaluate.py
+#     deps:
+#       - src/evaluate.py
+#       - models/churn_model.pkl
+#       - data/prepared/val.parquet
+#     metrics:
+#       - metrics/eval.json:
+#           cache: false
+
+import subprocess
+
+def run_dvc_pipeline(target: str = "evaluate") -> dict:
+    """Run DVC pipeline up to target stage (skips unchanged stages)."""
+    subprocess.run(["dvc", "repro", target], check=True)
+    import json
+    with open("metrics/eval.json") as f:
+        return json.load(f)
+
+def visualise_dag() -> None:
+    """Print pipeline DAG to stdout."""
+    subprocess.run(["dvc", "dag"], check=True)
+```
+
+## Complete Experiment: 10 XGBoost Runs
+
+A complete workflow that logs 10 configurations, compares them in MLflow, and registers the best.
+
+```python
+import itertools, random
+from sklearn.metrics import roc_auc_score, average_precision_score
+
+def full_experiment_workflow(
+    X_train, y_train, X_val, y_val, X_test, y_test
+) -> str:
+    """Run 10 configs, register best model, return run_id."""
+    mlflow.set_experiment("churn-prediction-v2")
+
+    # Search space: 10 random configurations
+    search_space = {
+        "n_estimators":     [200, 400, 600],
+        "max_depth":        [4, 6, 8],
+        "learning_rate":    [0.01, 0.05, 0.1],
+        "subsample":        [0.7, 0.9],
+        "colsample_bytree": [0.7, 0.9],
+    }
+    all_configs = [
+        dict(zip(search_space.keys(), v))
+        for v in itertools.product(*search_space.values())
+    ]
+    configs = random.sample(all_configs, 10)
+
+    best_val_auc  = 0.0
+    best_run_id   = ""
+    results       = []
+
+    for i, params in enumerate(configs):
+        with mlflow.start_run(run_name=f"xgb-config-{i:02d}") as run:
+            mlflow.log_params(params)
+            mlflow.set_tag("git_sha", subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"]
+            ).decode().strip())
+
+            model = XGBClassifier(**params, random_state=42,
+                                   eval_metric="auc", early_stopping_rounds=15)
+            model.fit(X_train, y_train,
+                      eval_set=[(X_val, y_val)], verbose=False)
+
+            val_auc  = roc_auc_score(y_val,  model.predict_proba(X_val)[:, 1])
+            val_ap   = average_precision_score(y_val,  model.predict_proba(X_val)[:, 1])
+            mlflow.log_metric("val_auc", val_auc)
+            mlflow.log_metric("val_ap",  val_ap)
+            mlflow.log_metric("best_iteration", model.best_iteration)
+
+            signature = mlflow.models.infer_signature(X_train, model.predict_proba(X_train)[:, 1])
+            mlflow.xgboost.log_model(model, "model", signature=signature)
+
+            results.append({"run_id": run.info.run_id, "val_auc": val_auc, **params})
+            if val_auc > best_val_auc:
+                best_val_auc = val_auc
+                best_run_id  = run.info.run_id
+
+    # Compare all runs
+    results_df = pd.DataFrame(results).sort_values("val_auc", ascending=False)
+    print(results_df[["val_auc", "n_estimators", "max_depth", "learning_rate"]].to_string())
+
+    # Register best model
+    result = mlflow.register_model(
+        model_uri=f"runs:/{best_run_id}/model",
+        name="ChurnModelV2",
+    )
+    client = MlflowClient()
+    client.transition_model_version_stage(
+        name="ChurnModelV2", version=result.version, stage="Staging"
+    )
+    print(f"Best run: {best_run_id} (val_auc={best_val_auc:.4f}) registered as v{result.version}")
+    return best_run_id
+```
+
+## Key Takeaways
+
+- Track six things for every run: code version (Git SHA), data version (DVC hash), hyperparameters, metrics (with step for time series), artifacts, and environment — missing any one makes the run non-reproducible.
+- MLflow `log_param` is for hyperparameters (scalar, immutable); `log_metric` is for measurements (supports step for curves); `log_artifact` is for files; `log_model` wraps the model with schema and signature.
+- Use nested runs for hyperparameter sweeps: a parent run aggregates the sweep, each child run logs one configuration — this keeps the MLflow UI navigable.
+- The Model Registry enforces a lifecycle (None → Staging → Production → Archived) and provides a stable reference (`models:/ChurnModelV2/Production`) that serving code can use without knowing run IDs.
+- Semantic versioning for models: major = architecture change, minor = new training data, patch = preprocessing fix — communicate this to all consumers.
+- DVC `dvc repro` only re-runs pipeline stages whose inputs have changed; combined with MLflow tracking, every model artifact is traceable to its exact code + data + parameters.
+- Log the full `pip freeze` output and environment metadata as an MLflow artifact on every run; rebuilding an environment from memory is unreliable.

@@ -1,0 +1,541 @@
+---
+title: "Unsupervised Learning — Clustering & Dimensionality Reduction"
+description: "Master K-Means, DBSCAN, hierarchical clustering, GMM, PCA, t-SNE, and UMAP — with silhouette analysis, elbow plots, dendrograms, and practical guidelines for choosing each algorithm."
+duration: 24
+order: 6
+---
+
+Unsupervised learning operates without labels. Instead of predicting a target, it discovers structure — natural groupings, latent dimensions, anomalies, and compressed representations. These are not convenience tools for when labels are unavailable; they are often the most revealing analyses in a project. Customer segmentation, anomaly detection, feature compression, and data exploration all depend on unsupervised methods used correctly.
+
+## K-Means: Lloyd's Algorithm
+
+K-Means partitions n data points into k clusters by minimising the within-cluster sum of squares (inertia):
+
+inertia = sum over clusters c, sum over points x in c of ||x - mu_c||^2
+
+where mu_c is the centroid of cluster c.
+
+**Lloyd's algorithm** (the standard K-Means procedure):
+1. Initialise k centroids (randomly or with K-Means++ heuristic)
+2. Assign each point to its nearest centroid (E step)
+3. Recompute each centroid as the mean of its assigned points (M step)
+4. Repeat steps 2-3 until assignments no longer change
+
+This converges to a local minimum — not necessarily the global minimum — so multiple restarts (n_init) are essential.
+
+```python
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.cluster import (KMeans, MiniBatchKMeans, DBSCAN,
+                              AgglomerativeClustering)
+from sklearn.mixture import GaussianMixture
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score, silhouette_samples
+from sklearn.datasets import make_blobs, make_moons
+from scipy.cluster.hierarchy import dendrogram, linkage
+import warnings
+warnings.filterwarnings('ignore')
+
+rng = np.random.default_rng(42)
+
+# Synthetic customer dataset for segmentation
+n_customers = 2000
+# True 4-cluster structure with different scales
+X_cust, y_true = make_blobs(
+    n_samples=n_customers, centers=4,
+    cluster_std=[1.2, 0.8, 1.5, 1.0],
+    random_state=42
+)
+# Add two extra features with noise
+X_cust = np.hstack([
+    X_cust,
+    rng.normal(0, 1, (n_customers, 3))  # Irrelevant features
+])
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_cust)
+
+print(f"Dataset: {X_cust.shape[0]} customers, {X_cust.shape[1]} features")
+```
+
+### Elbow Method and Silhouette Score
+
+The elbow method plots inertia against k and looks for the point of diminishing returns. The silhouette score measures cluster cohesion and separation for each point:
+
+silhouette(i) = (b(i) - a(i)) / max(a(i), b(i))
+
+where a(i) is the mean intra-cluster distance and b(i) is the mean distance to the nearest other cluster. The score ranges from -1 (wrong cluster) to 1 (perfect separation), with 0 indicating overlap.
+
+```python
+k_range = range(2, 11)
+inertias = []
+silhouette_scores = []
+
+for k in k_range:
+    km = KMeans(n_clusters=k, n_init=20, random_state=42)
+    labels = km.fit_predict(X_scaled)
+    inertias.append(km.inertia_)
+    silhouette_scores.append(silhouette_score(X_scaled, labels))
+
+fig, axes = plt.subplots(1, 2, figsize=(13, 4))
+
+axes[0].plot(list(k_range), inertias, 'bo-', markersize=6)
+axes[0].set_xlabel('Number of clusters k')
+axes[0].set_ylabel('Inertia (within-cluster SSE)')
+axes[0].set_title('Elbow Method\n(look for the "elbow" — diminishing returns)')
+axes[0].axvline(4, color='red', linestyle='--', alpha=0.7, label='True k=4')
+axes[0].legend()
+
+axes[1].plot(list(k_range), silhouette_scores, 'ro-', markersize=6)
+axes[1].set_xlabel('Number of clusters k')
+axes[1].set_ylabel('Mean silhouette score')
+axes[1].set_title('Silhouette Score\n(higher = better defined clusters)')
+axes[1].axvline(4, color='red', linestyle='--', alpha=0.7, label='True k=4')
+axes[1].legend()
+
+plt.tight_layout()
+plt.savefig('kmeans_selection.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+print("Best k by silhouette:", k_range.start + silhouette_scores.index(max(silhouette_scores)))
+```
+
+### Silhouette Plot Per Sample
+
+The per-sample silhouette plot reveals whether clusters are well-separated and equally sized. Clusters with many samples below the mean silhouette score, or with negative values, indicate poor assignment.
+
+```python
+best_k = 4
+km_best = KMeans(n_clusters=best_k, n_init=20, random_state=42)
+labels_best = km_best.fit_predict(X_scaled)
+
+sample_silhouettes = silhouette_samples(X_scaled, labels_best)
+mean_silhouette    = silhouette_scores[best_k - 2]
+
+fig, ax = plt.subplots(figsize=(8, 5))
+y_lower = 10
+colors = plt.cm.tab10(np.linspace(0, 1, best_k))
+
+for c, color in enumerate(colors):
+    cluster_silhouettes = np.sort(sample_silhouettes[labels_best == c])
+    size_c = len(cluster_silhouettes)
+    y_upper = y_lower + size_c
+
+    ax.fill_betweenx(np.arange(y_lower, y_upper), 0, cluster_silhouettes,
+                     facecolor=color, alpha=0.7, edgecolor='none')
+    ax.text(-0.05, y_lower + 0.5 * size_c, str(c), fontsize=10, color=color)
+    y_lower = y_upper + 10
+
+ax.axvline(mean_silhouette, color='red', linestyle='--',
+           label=f'Mean silhouette = {mean_silhouette:.3f}')
+ax.set_xlabel('Silhouette coefficient')
+ax.set_ylabel('Cluster')
+ax.set_title(f'Silhouette Plot — k={best_k}')
+ax.legend()
+plt.tight_layout()
+plt.savefig('silhouette_plot.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+### K-Means++ and MiniBatchKMeans
+
+K-Means++ improves centroid initialisation: instead of random initialisation, it selects each new centroid with probability proportional to its squared distance from the nearest already-selected centroid. This typically reduces the number of restarts needed and avoids degenerate solutions. It is the default in sklearn (init='k-means++').
+
+For large datasets (n > 100,000), `MiniBatchKMeans` uses mini-batches to update centroids, converging much faster with only a small accuracy trade-off.
+
+```python
+# MiniBatchKMeans for large-scale clustering
+n_large = 500_000
+X_large = rng.normal(0, 1, (n_large, 10))
+
+import time
+t0 = time.time()
+mb_km = MiniBatchKMeans(n_clusters=8, batch_size=4096, n_init=10, random_state=42)
+mb_km.fit(X_large)
+print(f"MiniBatchKMeans on {n_large:,} samples: {time.time()-t0:.2f}s")
+print(f"Inertia: {mb_km.inertia_:,.0f}")
+```
+
+### K-Means Limitations
+
+K-Means assumes clusters are spherical (isotropic) and roughly equal in size. It is sensitive to outliers (outliers pull centroids toward them), requires scaling (features with larger ranges dominate distances), and always produces exactly k clusters — even if no natural clusters exist.
+
+## DBSCAN: Density-Based Spatial Clustering
+
+DBSCAN groups points by density. A point is a **core point** if at least min_samples points (including itself) fall within distance epsilon. Core points within epsilon of each other form a cluster. **Border points** are within epsilon of a core point but below the min_samples threshold. **Noise points** belong to no cluster.
+
+```python
+# DBSCAN excels on non-convex shapes — demonstrate with moons dataset
+X_moons, _ = make_moons(n_samples=600, noise=0.1, random_state=42)
+
+# Finding epsilon: k-NN distance plot
+from sklearn.neighbors import NearestNeighbors
+
+k_nn = 5
+nbrs = NearestNeighbors(n_neighbors=k_nn).fit(X_moons)
+distances, _ = nbrs.kneighbors(X_moons)
+knn_dists = np.sort(distances[:, -1])  # k-th neighbor distance, sorted
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+axes[0].plot(knn_dists, color='steelblue')
+axes[0].axhline(0.2, color='red', linestyle='--', label='epsilon = 0.2')
+axes[0].set_xlabel('Points (sorted by k-NN distance)')
+axes[0].set_ylabel(f'{k_nn}-NN distance')
+axes[0].set_title('k-NN Distance Plot\n(elbow suggests good epsilon)')
+axes[0].legend()
+
+# K-Means on moons (fails — assumes spherical clusters)
+km_moons = KMeans(n_clusters=2, n_init=20, random_state=42)
+axes[1].scatter(X_moons[:, 0], X_moons[:, 1],
+               c=km_moons.fit_predict(X_moons), cmap='tab10', s=10, alpha=0.7)
+axes[1].set_title('K-Means (k=2) — Fails on non-convex shapes')
+
+# DBSCAN (succeeds)
+db = DBSCAN(eps=0.2, min_samples=5)
+db_labels = db.fit_predict(X_moons)
+n_noise = (db_labels == -1).sum()
+scatter = axes[2].scatter(X_moons[:, 0], X_moons[:, 1],
+                          c=db_labels, cmap='tab10', s=10, alpha=0.7)
+axes[2].set_title(f'DBSCAN (eps=0.2, min_samples=5)\n{len(np.unique(db_labels[db_labels>=0]))} clusters, {n_noise} noise points')
+
+plt.tight_layout()
+plt.savefig('dbscan_vs_kmeans.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+### DBSCAN Parameter Sensitivity
+
+```python
+# DBSCAN strengths and weaknesses
+print("DBSCAN advantages:")
+print("  - Finds arbitrary-shaped clusters")
+print("  - Identifies noise points (outlier detection)")
+print("  - Does not require specifying k upfront")
+print("  - Robust to outliers\n")
+print("DBSCAN disadvantages:")
+print("  - Struggles with varying density clusters")
+print("  - Sensitive to epsilon — small changes can merge/split clusters")
+print("  - Scales poorly (O(n log n) with spatial index; O(n^2) naive)")
+print("  - Feature scaling required (same as K-Means)")
+
+# Demonstrate sensitivity to varying density
+X_vary_dense = np.vstack([
+    rng.normal([0, 0], 0.3, (200, 2)),   # Dense cluster
+    rng.normal([5, 5], 1.5, (200, 2)),   # Sparse cluster
+])
+for eps in [0.3, 0.5, 0.8]:
+    labels_v = DBSCAN(eps=eps, min_samples=5).fit_predict(X_vary_dense)
+    n_clusters_v = len(np.unique(labels_v[labels_v >= 0]))
+    n_noise_v = (labels_v == -1).sum()
+    print(f"eps={eps}: {n_clusters_v} clusters, {n_noise_v} noise points")
+```
+
+## Hierarchical Clustering and Dendrograms
+
+Agglomerative hierarchical clustering (bottom-up) starts with each point as its own cluster and repeatedly merges the two most similar clusters. The result is a **dendrogram** — a tree showing the order and distance of merges. Cutting the dendrogram at any level yields a flat clustering.
+
+**Linkage methods** define how distance between clusters is computed:
+- **Single linkage**: distance between closest points — prone to chaining
+- **Complete linkage**: distance between farthest points — prefers compact clusters
+- **Average linkage**: mean pairwise distance — balance between single and complete
+- **Ward's linkage**: minimise within-cluster variance at each merge — often best for balanced clusters
+
+```python
+# Use a smaller subset for clear dendrogram
+X_hier, _ = make_blobs(n_samples=80, centers=4, cluster_std=0.8, random_state=42)
+X_hier_s = StandardScaler().fit_transform(X_hier)
+
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+linkage_methods = ['single', 'complete', 'average', 'ward']
+
+for ax, method in zip(axes.flatten(), linkage_methods):
+    Z = linkage(X_hier_s, method=method)
+    dendrogram(Z, ax=ax, truncate_mode='lastp', p=20,
+               leaf_rotation=90, leaf_font_size=8,
+               color_threshold=Z[-3, 2])
+    ax.set_title(f'{method.capitalize()} linkage dendrogram')
+    ax.set_xlabel('Cluster (size in brackets)')
+    ax.set_ylabel('Distance')
+    # Mark where to cut (above top 3 merges threshold)
+    cut_height = Z[-4, 2]
+    ax.axhline(cut_height, color='red', linestyle='--', alpha=0.7,
+               label=f'Cut at {cut_height:.2f}')
+    ax.legend(fontsize=8)
+
+plt.suptitle('Hierarchical Clustering Dendrograms — 4 Linkage Methods', fontsize=13)
+plt.tight_layout()
+plt.savefig('dendrograms.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+# Apply agglomerative clustering
+for method in ['ward', 'complete', 'average']:
+    agg = AgglomerativeClustering(n_clusters=4, linkage=method)
+    labels_agg = agg.fit_predict(X_hier_s)
+    print(f"{method:10s} linkage silhouette: "
+          f"{silhouette_score(X_hier_s, labels_agg):.4f}")
+```
+
+## Gaussian Mixture Models
+
+GMM is a probabilistic model that assumes data comes from a mixture of K Gaussian distributions. Unlike K-Means (hard assignment), GMM assigns soft probabilities: each point has a probability of belonging to each component.
+
+GMM is fit via the Expectation-Maximisation (EM) algorithm:
+- E step: compute the probability that each point belongs to each Gaussian (soft assignments)
+- M step: update each Gaussian's mean, covariance, and mixing weight using the weighted points
+
+BIC (Bayesian Information Criterion) and AIC (Akaike Information Criterion) help select the number of components: lower is better, but BIC penalises complexity more heavily.
+
+```python
+# GMM with BIC/AIC selection
+X_gmm, _ = make_blobs(n_samples=500, centers=3, cluster_std=[0.8, 1.2, 0.6], random_state=42)
+X_gmm_s = StandardScaler().fit_transform(X_gmm)
+
+k_range_gmm = range(1, 9)
+bic_scores = []
+aic_scores = []
+cov_types = ['full', 'tied', 'diag', 'spherical']
+
+# Test 'full' covariance
+for k in k_range_gmm:
+    gmm = GaussianMixture(n_components=k, covariance_type='full',
+                          n_init=5, random_state=42)
+    gmm.fit(X_gmm_s)
+    bic_scores.append(gmm.bic(X_gmm_s))
+    aic_scores.append(gmm.aic(X_gmm_s))
+
+fig, ax = plt.subplots(figsize=(8, 4))
+ax.plot(list(k_range_gmm), bic_scores, 'bo-', label='BIC')
+ax.plot(list(k_range_gmm), aic_scores, 'ro-', label='AIC')
+ax.set_xlabel('Number of components k')
+ax.set_ylabel('Information Criterion (lower = better)')
+ax.set_title('GMM: BIC and AIC for Model Selection')
+ax.legend()
+ax.axvline(3, color='black', linestyle=':', alpha=0.5, label='True k=3')
+plt.tight_layout()
+plt.savefig('gmm_bic_aic.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+best_k_gmm = k_range_gmm.start + np.argmin(bic_scores)
+print(f"Best k by BIC: {best_k_gmm}")
+
+# Fit best GMM and show soft assignments
+gmm_best = GaussianMixture(n_components=best_k_gmm, covariance_type='full',
+                             n_init=10, random_state=42)
+gmm_best.fit(X_gmm_s)
+proba_gmm = gmm_best.predict_proba(X_gmm_s)
+print(f"\nSoft assignment example (first point):")
+print(f"  P(component 0) = {proba_gmm[0, 0]:.4f}")
+print(f"  P(component 1) = {proba_gmm[0, 1]:.4f}")
+if best_k_gmm > 2:
+    print(f"  P(component 2) = {proba_gmm[0, 2]:.4f}")
+```
+
+## PCA: Principal Component Analysis
+
+PCA finds a new set of orthogonal axes (principal components) that capture maximum variance. The first component points in the direction of highest variance; the second is orthogonal to the first and captures the next highest variance; and so on.
+
+Mathematically, PCA computes the eigenvectors of the covariance matrix. The eigenvalues indicate how much variance each component explains.
+
+```python
+from sklearn.datasets import load_digits
+
+# Load digits dataset (64 features — 8x8 pixel images)
+digits = load_digits()
+X_digits = digits.data          # Shape: (1797, 64)
+y_digits = digits.target
+
+scaler_d = StandardScaler()
+X_digits_s = scaler_d.fit_transform(X_digits)
+
+# Fit PCA
+pca_full = PCA(random_state=42)
+pca_full.fit(X_digits_s)
+
+explained_variance_ratio = pca_full.explained_variance_ratio_
+cumulative_variance = np.cumsum(explained_variance_ratio)
+
+fig, axes = plt.subplots(1, 2, figsize=(13, 4))
+
+# Scree plot
+axes[0].bar(range(1, 21), explained_variance_ratio[:20], color='steelblue', alpha=0.8)
+axes[0].plot(range(1, 21), explained_variance_ratio[:20], 'r-o', markersize=5)
+axes[0].set_xlabel('Principal Component')
+axes[0].set_ylabel('Explained Variance Ratio')
+axes[0].set_title('Scree Plot (first 20 components)')
+
+# Cumulative variance
+axes[1].plot(range(1, len(cumulative_variance) + 1), cumulative_variance,
+             color='steelblue', linewidth=2)
+axes[1].axhline(0.95, color='red', linestyle='--', label='95% variance')
+axes[1].axhline(0.99, color='orange', linestyle='--', label='99% variance')
+n_for_95 = np.searchsorted(cumulative_variance, 0.95) + 1
+n_for_99 = np.searchsorted(cumulative_variance, 0.99) + 1
+axes[1].axvline(n_for_95, color='red', linestyle=':', alpha=0.7)
+axes[1].axvline(n_for_99, color='orange', linestyle=':', alpha=0.7)
+axes[1].set_xlabel('Number of components')
+axes[1].set_ylabel('Cumulative explained variance')
+axes[1].set_title('Cumulative Explained Variance')
+axes[1].legend()
+
+plt.tight_layout()
+plt.savefig('pca_variance.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+print(f"Components for 95% variance: {n_for_95} (from 64 original features)")
+print(f"Components for 99% variance: {n_for_99}")
+print(f"Kaiser rule (eigenvalue > 1): "
+      f"{(pca_full.explained_variance_ > 1).sum()} components")
+```
+
+### PCA: Loadings and Reconstruction
+
+```python
+# PCA for compression and reconstruction
+n_components_95 = n_for_95
+pca_95 = PCA(n_components=n_components_95, random_state=42)
+X_compressed = pca_95.fit_transform(X_digits_s)
+X_reconstructed = pca_95.inverse_transform(X_compressed)
+
+# Reconstruction error
+reconstruction_mse = np.mean((X_digits_s - X_reconstructed) ** 2)
+print(f"\nReconstruction MSE with {n_components_95} components: {reconstruction_mse:.4f}")
+print(f"Compression ratio: {X_digits_s.shape[1]} features -> {n_components_95} components "
+      f"({n_components_95/X_digits_s.shape[1]:.1%} of original)")
+
+# Visualise original vs reconstructed
+fig, axes = plt.subplots(2, 8, figsize=(16, 4))
+for i in range(8):
+    axes[0, i].imshow(X_digits[i].reshape(8, 8), cmap='gray_r')
+    axes[0, i].axis('off')
+    axes[0, i].set_title(f'Original\n({digits.target[i]})', fontsize=8)
+
+    axes[1, i].imshow(scaler_d.inverse_transform(X_reconstructed[i:i+1])[0].reshape(8, 8),
+                      cmap='gray_r')
+    axes[1, i].axis('off')
+    axes[1, i].set_title(f'n_comp={n_components_95}', fontsize=8)
+
+plt.suptitle(f'PCA Reconstruction: {n_components_95} components ({cumulative_variance[n_components_95-1]:.1%} variance)', fontsize=12)
+plt.tight_layout()
+plt.savefig('pca_reconstruction.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+# 2D PCA for visualisation
+pca_2d = PCA(n_components=2, random_state=42)
+X_2d = pca_2d.fit_transform(X_digits_s)
+plt.figure(figsize=(8, 6))
+scatter = plt.scatter(X_2d[:, 0], X_2d[:, 1], c=y_digits, cmap='tab10', s=8, alpha=0.6)
+plt.colorbar(scatter, label='Digit')
+plt.title(f'PCA 2D Projection of Digits\n(explains {cumulative_variance[1]:.1%} of variance)')
+plt.xlabel('PC1')
+plt.ylabel('PC2')
+plt.tight_layout()
+plt.savefig('pca_2d_digits.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+## t-SNE: Topology-Preserving Visualisation
+
+t-SNE (t-Distributed Stochastic Neighbour Embedding) is designed for visualisation of high-dimensional data in 2D or 3D. It converts pairwise distances to probabilities and minimises the KL divergence between high-dimensional and low-dimensional probability distributions.
+
+Critical caveat: t-SNE preserves local topology (nearby points remain nearby) but does NOT preserve global distances. Clusters that look far apart in a t-SNE plot may not actually be far apart in feature space. Never use t-SNE distances for downstream analysis.
+
+```python
+# t-SNE on digits (use PCA pre-reduction for speed — standard practice)
+X_pca_50 = PCA(n_components=50, random_state=42).fit_transform(X_digits_s)
+
+tsne = TSNE(n_components=2, perplexity=30, n_iter=1000,
+            random_state=42, learning_rate='auto', init='pca')
+X_tsne = tsne.fit_transform(X_pca_50)
+
+plt.figure(figsize=(8, 6))
+scatter = plt.scatter(X_tsne[:, 0], X_tsne[:, 1], c=y_digits,
+                      cmap='tab10', s=8, alpha=0.7)
+plt.colorbar(scatter, label='Digit')
+plt.title('t-SNE 2D Embedding of Digits (perplexity=30)')
+plt.xlabel('t-SNE 1')
+plt.ylabel('t-SNE 2')
+plt.tight_layout()
+plt.savefig('tsne_digits.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+print("t-SNE caveats:")
+print("  - NOT suitable for preserving global structure or distances")
+print("  - Different runs produce different layouts (non-deterministic by default)")
+print("  - Perplexity should be between 5 and 50; try several values")
+print("  - Slow: O(n^2) naive; BH approximation reduces to O(n log n)")
+```
+
+## UMAP: Better Global Structure with Speed
+
+UMAP (Uniform Manifold Approximation and Projection) is a newer dimensionality reduction technique that often preserves both local and global structure better than t-SNE, while being significantly faster.
+
+```python
+try:
+    import umap
+
+    reducer = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1,
+                        random_state=42)
+    X_umap = reducer.fit_transform(X_digits_s)
+
+    plt.figure(figsize=(8, 6))
+    scatter = plt.scatter(X_umap[:, 0], X_umap[:, 1], c=y_digits,
+                          cmap='tab10', s=8, alpha=0.7)
+    plt.colorbar(scatter, label='Digit')
+    plt.title('UMAP 2D Embedding of Digits (n_neighbors=15, min_dist=0.1)')
+    plt.xlabel('UMAP 1')
+    plt.ylabel('UMAP 2')
+    plt.tight_layout()
+    plt.savefig('umap_digits.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+    print("UMAP advantages over t-SNE:")
+    print("  - Faster (especially on large datasets)")
+    print("  - Better global structure preservation")
+    print("  - Can embed new points (transform() works on unseen data)")
+    print("  - Can be used for general dimensionality reduction, not just 2D visualisation")
+
+except ImportError:
+    print("UMAP not installed. Run: pip install umap-learn")
+```
+
+## Choosing a Clustering Algorithm
+
+```python
+print("""
+Algorithm Selection Guide:
+---
+K-Means:
+  Use when: clusters are roughly spherical and equal-sized, n is large
+  Tune: k (elbow + silhouette), n_init=20, always scale features first
+  Avoid: elongated/non-convex clusters, presence of many outliers
+
+DBSCAN:
+  Use when: clusters have arbitrary shapes, outlier detection needed
+  Tune: eps (k-NN distance plot), min_samples (rule of thumb: >=2*n_features)
+  Avoid: widely varying cluster densities, very high-dimensional data
+
+Hierarchical (Agglomerative):
+  Use when: you need a hierarchy of clusters, no fixed k, small-medium n
+  Tune: linkage method (Ward usually best), cutting threshold from dendrogram
+  Avoid: very large n (O(n^2) memory for full linkage matrix)
+
+GMM:
+  Use when: you want soft cluster membership probabilities, clusters are elliptical
+  Tune: n_components (BIC), covariance_type (full, tied, diag, spherical)
+  Avoid: highly non-Gaussian cluster shapes
+""")
+```
+
+## Key Takeaways
+
+- K-Means minimises within-cluster sum of squares via Lloyd's algorithm; K-Means++ initialisation avoids degenerate solutions; always scale features and use multiple restarts (n_init >= 10).
+- The elbow method (plot inertia vs k) and silhouette score (higher = better separation) are complementary tools for selecting k; per-sample silhouette plots reveal cluster quality at the individual point level.
+- DBSCAN discovers arbitrary-shaped clusters without specifying k; core/border/noise classification enables outlier detection; epsilon selection via k-NN distance plots; fails on datasets with varying cluster density.
+- Hierarchical clustering produces a dendrogram that can be cut at any level; Ward linkage minimises within-cluster variance at each merge and typically produces the most balanced clusters.
+- GMM provides soft (probabilistic) cluster assignments and handles elliptical clusters; BIC balances fit quality vs model complexity for selecting the number of components.
+- PCA finds orthogonal axes of maximum variance; scree plots and cumulative explained variance guide the number of components to retain; Kaiser rule (eigenvalue greater than 1) is a common heuristic.
+- t-SNE produces visually appealing 2D layouts but preserves only local topology — never interpret t-SNE distances as true feature-space distances; pre-reduce with PCA to 50 dimensions before t-SNE for speed.
+- UMAP is faster than t-SNE, preserves global structure better, and supports out-of-sample transformation — prefer it for most visualisation tasks on large or high-dimensional datasets.

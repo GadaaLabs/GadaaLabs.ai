@@ -1,0 +1,337 @@
+---
+title: "Agent Foundations — What Agents Are & When to Use Them"
+description: "Understand what makes a system an agent, how agents differ from chains and pipelines, the autonomy spectrum, and when agents are the wrong tool entirely."
+duration: 22
+order: 1
+---
+
+## What Makes Something an Agent
+
+The word "agent" is overused to the point of meaninglessness in marketing copy. For engineering purposes, a system qualifies as an agent when it exhibits four properties simultaneously.
+
+**Perception** is the ability to receive input from the environment. For an LLM-based agent, this means receiving user messages, tool results, database records, API responses, and any other external signal that influences behaviour. Perception is not just the initial user prompt — it includes all new information that arrives during task execution.
+
+**Memory** is the ability to maintain state across steps. A stateless function call processes each input identically regardless of history. An agent accumulates context: what it has already tried, what it learned from tool results, what the user clarified mid-task. Memory can live in the context window (short-term) or in external stores (long-term), a distinction explored fully in lesson 5.
+
+**Action** is the ability to affect the world beyond generating text. An agent that only produces prose is not an agent — it is a text generator. Actions include calling tools (search, calculator, database query), executing code, writing files, making API calls, and delegating to sub-agents. The action interface is what makes an agent capable of completing real tasks rather than merely describing them.
+
+**Goal** is a directive that the agent pursues across multiple steps. This is the property that distinguishes an agent from a chatbot. A chatbot responds to each message in isolation. An agent holds a goal — "research competitors and produce a report" or "fix the failing tests in this repository" — and takes whatever sequence of actions is needed to achieve it, even if that sequence was not specified upfront.
+
+Remove any one of these four properties and you no longer have an agent. A chain has perception and action but no goal-directed autonomy. A database has memory but no perception of new goals. A retrieval-augmented generation system has perception and memory but a fixed action (generate text). Agents combine all four.
+
+## Agents vs Chains vs Pipelines
+
+These three patterns are related but architecturally distinct.
+
+A **chain** is a fixed sequence of LLM calls where the output of step N is the input to step N+1. Chains are deterministic in structure: the same sequence of calls executes every time, regardless of intermediate results. LangChain's original design was built around this pattern. Chains are predictable, fast, and easy to debug, but they cannot adapt to unexpected situations. If step 2 returns an error, a chain has no mechanism to retry with a different approach.
+
+A **pipeline** is a directed acyclic graph (DAG) of processing steps. Unlike chains, pipelines can have branches (if output contains X, go to step A; otherwise go to step B) and can run independent steps in parallel. Pipelines are still deterministic in structure — the graph is fixed at design time — but they offer more flexibility than linear chains. Data engineering tools like Apache Airflow and Prefect are built around pipelines.
+
+An **agent** decides its own next step at runtime. After each action, the LLM evaluates the current state of the task and chooses what to do next from a set of available tools. The control flow is not specified by the developer — it emerges from the model's reasoning. This is the fundamental difference. Agents can handle tasks whose solution path is unknown upfront, recover from errors by trying alternative approaches, and use tools in variable orders depending on what each step reveals.
+
+The cost of this flexibility is unpredictability. You cannot trace the execution path of an agent through source code the way you can trace a chain. Testing requires different strategies. Debugging requires observability tooling. These are engineering costs that only make sense when the flexibility is actually needed.
+
+## The Spectrum of Autonomy
+
+Autonomy is not binary. Systems exist on a spectrum from fully deterministic to fully autonomous, and the right position on that spectrum depends on the stakes of errors and the variability of the task.
+
+**Rigid pipeline**: Developer specifies every step. Zero agent involvement. Appropriate for well-understood, repetitive tasks where the solution path never changes. Examples: ETL jobs, scheduled report generation with fixed queries, email templating.
+
+**Supervised agent**: The agent proposes each action and a human approves it before execution. Every step is human-reviewed. Appropriate for high-stakes domains (legal document drafting, financial transactions) where errors are costly and trust in the model is low. Slow but safe.
+
+**Semi-autonomous agent**: The agent acts autonomously for routine operations but pauses for human approval on high-risk actions (irreversible operations, high-value transactions, external communications). The developer defines a risk taxonomy at build time. This is the most common pattern for production enterprise agents.
+
+**Fully autonomous agent**: The agent acts without any human approval. Appropriate only for well-bounded tasks with reversible actions, comprehensive guardrails, and extensive logging. Most "autonomous" agents in production are actually semi-autonomous with invisible human-on-the-loop monitoring.
+
+Choosing the right autonomy level is a business decision as much as a technical one. Start conservative (supervised) and expand autonomy as you build trust through measured override rates and error analysis.
+
+## When to Use Agents vs Simpler Approaches
+
+This is the most important judgment call in agent engineering. Agents are not always the right tool.
+
+**Use an agent when:**
+
+- The solution path is unknown upfront. If you cannot enumerate the steps to solve the problem at design time, an agent's ability to choose next steps dynamically is necessary.
+- Multiple tools may be needed in variable order. If task A sometimes needs search then calculation and sometimes needs calculation then search, a chain cannot express that variability.
+- Error recovery requires reasoning. If a tool returns unexpected output and the recovery strategy depends on the content of that output, an agent can reason about it. A chain can only retry the same call.
+- The task involves open-ended research or exploration. Agents excel at tasks like "find the three best solutions to X and compare them" where the exact path to the answer is discovered during execution.
+
+**Do not use an agent when:**
+
+- A fixed pipeline works reliably. If you can describe every step upfront and the steps never change, a pipeline is simpler, faster, cheaper, and easier to debug.
+- Latency is critical. Each agent step involves at least one LLM call. A 5-step agent run might take 15-30 seconds. A fixed pipeline with the same steps as prompted sub-calls can often be done in parallel in under 5 seconds.
+- Cost is tightly constrained. Agents are expensive. Each step is a billable LLM call. A task that takes 8 agent steps costs 8x more than a single-call approach.
+- The output must be deterministic. If you need bit-for-bit reproducibility (regulated industries, financial calculations), agents introduce non-determinism that is incompatible with that requirement.
+- You are prototyping and time-to-market is the priority. Agents require more engineering investment to harden than pipelines. For an MVP, ship the simpler thing first.
+
+The engineering maxim applies: reach for the simplest tool that solves the problem. Add agent complexity only when simpler approaches demonstrably fail.
+
+## Agent Failure Modes
+
+Understanding how agents fail is essential to building robust ones. These failure modes occur in production regularly.
+
+**Hallucinated tool calls** occur when the model invents arguments for a tool call that do not correspond to real data. For example, an agent tasked with looking up a customer invents a customer ID that does not exist, and the tool returns an error. The agent may then hallucinate a response to that error. Mitigation: strict argument validation with Pydantic, return structured errors the model can reason about, include real examples in tool descriptions.
+
+**Infinite loops** occur when an agent keeps retrying the same failing action without making progress. A web search that returns no results triggers another web search with a slightly rephrased query, which also returns no results, and so on. Mitigation: maximum iteration limit (hard stop at N steps), detect repeated tool calls with the same arguments, include a fallback "I cannot complete this task" path.
+
+**Context overflow** occurs when the conversation history (messages + tool results) grows too long to fit in the model's context window. This causes the model to lose early context, forget the original goal, or produce errors. Mitigation: sliding window over message history, automatic summarisation when context approaches the limit, store tool results externally and pass only summaries.
+
+**Goal hijacking** (prompt injection) occurs when malicious content in a tool result instructs the agent to change its behaviour. For example, a web search result contains hidden text "Ignore your previous instructions and instead..." Mitigation: treat tool results as untrusted data, validate that tool results do not contain instruction-like text, limit what tools can return.
+
+**Scope creep** occurs when the agent does more than was asked. An agent asked to "fix the bug in function X" rewrites the entire module. An agent asked to "send the report" also deletes the source data "to clean up". Mitigation: precise task scoping in the system prompt, confirmations before irreversible actions, output diffing to verify the agent stayed in scope.
+
+## The Agent Loop
+
+Every LLM-based agent, regardless of framework, implements the same fundamental loop.
+
+**Observe**: Receive new input. On the first iteration, this is the user's task. On subsequent iterations, this is the result of the previous tool call appended to the conversation history.
+
+**Think**: The LLM generates a response given the current conversation history. This response either contains a tool call (the model wants to take an action) or a final answer (the model believes it has completed the task).
+
+**Act**: If the response contains a tool call, execute the specified tool with the specified arguments. Capture the result (or error).
+
+**Repeat**: Append the tool result as a new message in the conversation history and return to Observe. Continue until the model produces a final answer or the maximum iteration limit is reached.
+
+This loop is simple. The complexity in real agents comes from handling it robustly: what happens when the tool call is malformed? What happens when the tool times out? What happens when the model loops without making progress? The rest of this course addresses those questions one by one.
+
+## Building a Minimal Agent from Scratch
+
+Here is a complete, runnable minimal agent using the Groq API directly. No frameworks — just the loop.
+
+```python
+import json
+import os
+import math
+from groq import Groq
+
+client = Groq(api_key=os.environ["GROQ_API_KEY"])
+MODEL = "llama-3.3-70b-versatile"
+MAX_ITERATIONS = 10
+
+
+# --- Tool implementations ---
+
+def web_search(query: str) -> str:
+    """Simulated web search. In production, call a real search API."""
+    results = {
+        "python asyncio": "asyncio is Python's built-in async I/O library, introduced in Python 3.4.",
+        "groq api pricing": "Groq offers a free tier with rate limits; paid tiers available for production.",
+    }
+    for key, val in results.items():
+        if key.lower() in query.lower():
+            return val
+    return f"No results found for: {query}"
+
+
+def calculator(expression: str) -> str:
+    """Evaluate a mathematical expression safely."""
+    try:
+        # Allow only safe math operations
+        allowed_names = {k: v for k, v in math.__dict__.items() if not k.startswith("_")}
+        allowed_names.update({"abs": abs, "round": round})
+        result = eval(expression, {"__builtins__": {}}, allowed_names)
+        return str(result)
+    except Exception as e:
+        return f"Error evaluating expression: {e}"
+
+
+def read_file(path: str) -> str:
+    """Read a file and return its contents."""
+    try:
+        with open(path, "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        return f"Error: file not found at path '{path}'"
+    except Exception as e:
+        return f"Error reading file: {e}"
+
+
+# --- Tool registry ---
+
+TOOLS = {
+    "web_search": {
+        "fn": web_search,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": (
+                    "Search the web for information about a topic. "
+                    "Use this when you need factual information you don't already know. "
+                    "Returns a short text snippet with the most relevant information."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query. Be specific.",
+                        }
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+    },
+    "calculator": {
+        "fn": calculator,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "calculator",
+                "description": (
+                    "Evaluate a mathematical expression. "
+                    "Use this for any arithmetic, algebra, or math computation. "
+                    "Returns the numeric result as a string."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "expression": {
+                            "type": "string",
+                            "description": "A valid Python math expression, e.g. '2 ** 10' or 'math.sqrt(144)'.",
+                        }
+                    },
+                    "required": ["expression"],
+                },
+            },
+        },
+    },
+    "read_file": {
+        "fn": read_file,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": (
+                    "Read the contents of a file from the local filesystem. "
+                    "Use this when the user asks about a file or when you need to inspect code. "
+                    "Returns the full file contents as a string."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute or relative file path.",
+                        }
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+    },
+}
+
+TOOL_SCHEMAS = [tool["schema"] for tool in TOOLS.values()]
+
+
+# --- The agent loop ---
+
+def run_agent(user_task: str) -> str:
+    """
+    Run the agent loop until the task is complete or max iterations is reached.
+    Returns the agent's final answer.
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a helpful assistant with access to tools. "
+                "Use tools when you need external information or computation. "
+                "When you have enough information to answer the user's task, respond directly."
+            ),
+        },
+        {"role": "user", "content": user_task},
+    ]
+
+    for iteration in range(MAX_ITERATIONS):
+        print(f"\n[Iteration {iteration + 1}]")
+
+        # Think: ask the model what to do next
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            tools=TOOL_SCHEMAS,
+            tool_choice="auto",
+        )
+
+        message = response.choices[0].message
+
+        # Check if the model wants to use a tool
+        if message.tool_calls:
+            # Append the assistant's tool call message
+            messages.append({
+                "role": "assistant",
+                "content": message.content,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in message.tool_calls
+                ],
+            })
+
+            # Act: execute each tool call
+            for tool_call in message.tool_calls:
+                tool_name = tool_call.function.name
+                print(f"  Tool call: {tool_name}({tool_call.function.arguments})")
+
+                if tool_name not in TOOLS:
+                    result = f"Error: unknown tool '{tool_name}'. Available tools: {list(TOOLS.keys())}"
+                else:
+                    try:
+                        args = json.loads(tool_call.function.arguments)
+                        result = TOOLS[tool_name]["fn"](**args)
+                    except json.JSONDecodeError as e:
+                        result = f"Error: could not parse tool arguments: {e}"
+                    except TypeError as e:
+                        result = f"Error: invalid arguments for tool '{tool_name}': {e}"
+
+                print(f"  Result: {result[:200]}")
+
+                # Observe: append the tool result
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result,
+                })
+
+        else:
+            # No tool call — model has produced a final answer
+            final_answer = message.content
+            print(f"\n[Final Answer]\n{final_answer}")
+            return final_answer
+
+    # Max iterations reached without a final answer
+    return "I was unable to complete this task within the allowed number of steps."
+
+
+# --- Example usage ---
+
+if __name__ == "__main__":
+    task = "What is 2 to the power of 16? Also search for information about the Groq API pricing."
+    result = run_agent(task)
+    print(f"\nAgent result: {result}")
+```
+
+This agent is about 130 lines and implements the complete observe-think-act loop. Notice what is not in it: no framework, no magic, no hidden state. Every message in `messages` is visible. Every tool call is logged. The entire execution trace is a list you can inspect.
+
+The `MAX_ITERATIONS = 10` guard is the single most important safety mechanism in this implementation. Without it, a buggy model response that always produces a tool call would run forever, draining your API budget. Always include this guard.
+
+The error handling in the tool execution section (`json.JSONDecodeError`, `TypeError`, unknown tool name) is equally critical. When a tool call fails, the agent receives a structured error message as the tool result and can decide how to proceed — retry with corrected arguments, try a different approach, or give up gracefully. If you let the exception propagate, the agent loop crashes and the user gets a 500 error instead of a graceful failure.
+
+## Key Takeaways
+
+- An agent requires all four properties: perception, memory, action, and a goal. Remove any one and it is a simpler system.
+- Chains are fixed sequences, pipelines are fixed graphs, agents decide their own next step. Choose the simplest that works.
+- The autonomy spectrum runs from rigid pipeline to fully autonomous; most production agents are semi-autonomous.
+- Use agents when the solution path is unknown upfront, when variable tool ordering is needed, or when error recovery requires reasoning. Avoid agents when a pipeline works, when latency or cost matters, or when determinism is required.
+- Know the failure modes: hallucinated tool calls, infinite loops, context overflow, goal hijacking, scope creep. Design defences for each from the start.
+- The agent loop is simple: observe, think, act, repeat. The complexity is in handling it robustly.
+- Always include a `MAX_ITERATIONS` guard. Always handle tool execution errors without crashing the loop.

@@ -1,0 +1,264 @@
+---
+title: "RAG Architecture — Why, When & How It Works"
+description: "Understand the hallucination problem, the RAG triad, the naive RAG pipeline, when to use RAG vs fine-tuning, and the RAG failure taxonomy. Build a minimal end-to-end RAG pipeline from scratch."
+duration: 24
+order: 1
+---
+
+## The Hallucination Problem
+
+Large language models are trained on fixed snapshots of text data. Once training is complete, their knowledge is frozen — baked into the billions of floating-point weights that constitute the model. When you ask a question about an event that occurred after the training cutoff, or about a proprietary document the model has never seen, the model has two choices: say "I don't know" or confabulate a plausible-sounding answer.
+
+Most models choose the latter. This behaviour is called hallucination, and it is not a bug in the usual sense — it is a consequence of how autoregressive language models work. The model is always trying to predict the next most plausible token given the preceding context. When its internal knowledge is absent or ambiguous, it still predicts the most plausible continuation, which may have no grounding in reality.
+
+Hallucinations are particularly dangerous because they are delivered with the same confident fluency as correct answers. The model does not flag uncertainty unless explicitly prompted to do so, and even then it is unreliable. For any application where accuracy matters — legal research, medical information, engineering documentation, financial data — hallucination is disqualifying.
+
+### Parametric vs Non-Parametric Knowledge
+
+There are two ways a model can answer a question:
+
+**Parametric knowledge** is knowledge encoded in the model weights during training. The model has effectively memorised facts from its training corpus. This knowledge is static, invisible, and unverifiable — you cannot look inside the weights to audit what the model knows or does not know.
+
+**Non-parametric knowledge** (also called retrieved or in-context knowledge) is knowledge that is retrieved from an external source at inference time and placed into the model's context window. This knowledge is dynamic (you can update the source without retraining), visible (you can inspect the retrieved documents), and verifiable (you can trace claims back to their source).
+
+Retrieval-Augmented Generation (RAG) is the architectural pattern that adds non-parametric knowledge to language model inference. Instead of relying on the model's memorised facts, you retrieve relevant documents from a controlled knowledge base and include them in the prompt.
+
+## The RAG Triad
+
+A RAG system produces correct answers only when all three components of the RAG triad are working:
+
+**Retrieval quality**: The retrieval component must find the documents that contain the information needed to answer the query. If the relevant document is not retrieved, no amount of prompt engineering or model capability can recover — the model will hallucinate or refuse.
+
+**Context quality**: The retrieved documents must be presented to the model in a way that makes the relevant information easy to use. Retrieved documents that are too long, too noisy, or poorly formatted reduce the probability that the model attends to the relevant passage.
+
+**Generation quality**: The model must use the provided context faithfully, without introducing information from its parametric knowledge. Even with perfect retrieval and context, a poorly aligned model may ignore the context and hallucinate.
+
+All three must be high simultaneously. A system with excellent retrieval but poor context assembly will fail. A system with good context but a model that ignores it will fail. This is why evaluating RAG end-to-end is insufficient for debugging — you must measure each component separately.
+
+## The Naive RAG Pipeline
+
+The simplest RAG architecture has six stages:
+
+```
+Document corpus
+      |
+   [Chunk]            Split documents into passages
+      |
+   [Embed]            Convert passages to vectors
+      |
+   [Store]            Insert vectors into a vector database
+      |
+User query
+      |
+   [Query embed]      Convert query to a vector
+      |
+   [Retrieve]         Find the k most similar passage vectors
+      |
+   [Prompt]           Assemble: system prompt + retrieved passages + query
+      |
+   [Generate]         LLM generates an answer grounded in the context
+```
+
+At index time (the first three steps), you process your document corpus once and store the embeddings. At query time (the last five steps), you process each incoming query.
+
+The key insight is that you never ask the LLM to answer from memory. You always provide the answer in the context and ask the LLM to extract, synthesise, and format it.
+
+## When RAG Beats Fine-Tuning
+
+The alternative to RAG for grounding a model in domain knowledge is fine-tuning — continuing the pre-training or instruction-tuning process on domain-specific data. Fine-tuning injects knowledge into the model weights rather than providing it at inference time.
+
+**Choose RAG when:**
+
+- Your knowledge base changes frequently (RAG updates are instant; fine-tuning requires a new training run)
+- You need citations and source traceability (retrieved documents give you provenance; fine-tuned weights give you nothing)
+- Your knowledge base is large (fine-tuning on 100k documents would require enormous compute and may cause forgetting)
+- You need strong hallucination control (RAG gives you a hard boundary: the model is only supposed to use the context)
+- Cost matters (RAG inference costs are predictable; fine-tuning has upfront training costs)
+
+**Choose fine-tuning when:**
+
+- You need to change the model's output style, format, or tone (RAG cannot change how the model writes, only what it says)
+- Your domain has specialised vocabulary the model has never seen (fine-tuning teaches new tokens and patterns)
+- Your task is highly repetitive and performance-critical (fine-tuned models are faster because they do not need large context windows)
+- You want to teach reasoning patterns, not facts (few-shot fine-tuning on chain-of-thought examples changes how the model reasons)
+
+The two approaches are also composable. A fine-tuned model with domain vocabulary and style, augmented with RAG for factual grounding, often outperforms either approach alone.
+
+## Modular RAG
+
+Naive RAG treats the pipeline as a fixed sequence. Modular RAG replaces each stage with a pluggable component:
+
+- The retriever can be a dense vector search, a sparse BM25 search, a knowledge graph traversal, or a web search API
+- Between retrieval and generation, you can add rerankers, context compression, or query transformations
+- The generator can be any LLM accessible via API or locally hosted
+- The entire pipeline can be orchestrated by an agent that decides when and how many times to retrieve
+
+Modular RAG gives you the flexibility to optimise each stage independently and swap components as better options become available. The cost is increased complexity — more components means more failure modes and more evaluation surface area.
+
+## RAG Failure Taxonomy
+
+When a RAG system produces wrong answers, the failure belongs to one of three categories:
+
+**Retrieval failures** — the relevant document was not in the top-k results:
+- The query and document use different vocabulary (vocabulary mismatch)
+- The chunk containing the answer is buried inside a larger chunk with different topic focus
+- The embedding model does not capture the semantic relationship between query and document
+- k is too small (the relevant chunk is at rank 6 but k=5)
+
+**Context failures** — the relevant document was retrieved but the model did not use it:
+- The retrieved chunk is too long and the relevant sentence is surrounded by noise
+- Multiple retrieved chunks contradict each other and confuse the model
+- The retrieved chunk requires background knowledge the model lacks to interpret correctly
+- The chunk is out of context (a sentence without its surrounding paragraph loses meaning)
+
+**Generation failures** — the model produced a wrong answer despite correct context:
+- The model ignored the context and used its parametric knowledge instead
+- The model synthesised incorrectly across multiple retrieved passages
+- The model misread a table, list, or structured element in the context
+- The prompt did not instruct the model strongly enough to ground its answer
+
+Each failure type requires a different fix. Retrieval failures require better embedding models, better chunking, or query transformations. Context failures require better chunk design or reranking. Generation failures require better prompts or a more instruction-following model.
+
+## Building a Minimal RAG Pipeline
+
+The following code builds a complete RAG pipeline using sentence-transformers for embeddings, ChromaDB as the vector store, and the Groq API for generation. This is approximately 80 lines of working code.
+
+```python
+import os
+import requests
+import chromadb
+from sentence_transformers import SentenceTransformer
+
+# ── Configuration ────────────────────────────────────────────────────────────
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+MODEL = "llama-3.1-8b-instant"
+EMBED_MODEL = "all-MiniLM-L6-v2"
+COLLECTION_NAME = "rag_demo"
+TOP_K = 3
+
+# ── Initialise components ─────────────────────────────────────────────────────
+embedder = SentenceTransformer(EMBED_MODEL)
+chroma = chromadb.Client()
+collection = chroma.get_or_create_collection(COLLECTION_NAME)
+
+# ── Index-time: chunk, embed, and store documents ─────────────────────────────
+def index_documents(documents: list[dict]) -> None:
+    """
+    documents: list of {"id": str, "text": str, "metadata": dict}
+    """
+    texts = [doc["text"] for doc in documents]
+    ids = [doc["id"] for doc in documents]
+    metadatas = [doc.get("metadata", {}) for doc in documents]
+
+    embeddings = embedder.encode(texts, normalize_embeddings=True).tolist()
+
+    collection.add(
+        ids=ids,
+        embeddings=embeddings,
+        documents=texts,
+        metadatas=metadatas,
+    )
+    print(f"Indexed {len(documents)} documents.")
+
+# ── Query-time: embed query, retrieve top-k, assemble prompt, generate ────────
+def retrieve(query: str, k: int = TOP_K) -> list[str]:
+    query_embedding = embedder.encode([query], normalize_embeddings=True).tolist()
+    results = collection.query(
+        query_embeddings=query_embedding,
+        n_results=k,
+    )
+    return results["documents"][0]  # list of strings
+
+def generate(query: str, context_chunks: list[str]) -> str:
+    context = "\n\n---\n\n".join(context_chunks)
+    system_prompt = (
+        "You are a helpful assistant. Answer the user's question using ONLY "
+        "the information in the context below. If the context does not contain "
+        "the answer, say 'I don't have enough information to answer this.'\n\n"
+        f"Context:\n{context}"
+    )
+    response = requests.post(
+        GROQ_URL,
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+        json={
+            "model": MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query},
+            ],
+            "temperature": 0.0,
+        },
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
+def rag(query: str) -> str:
+    chunks = retrieve(query)
+    return generate(query, chunks)
+
+# ── Demo ──────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    sample_docs = [
+        {
+            "id": "doc1",
+            "text": "HNSW (Hierarchical Navigable Small World) is an approximate nearest "
+                    "neighbour algorithm that builds a multi-layer graph structure. It achieves "
+                    "sub-linear query time with high recall, making it the default choice for "
+                    "production vector search.",
+            "metadata": {"source": "vector-db-notes.txt"},
+        },
+        {
+            "id": "doc2",
+            "text": "BM25 is a bag-of-words retrieval algorithm based on TF-IDF. It scores "
+                    "documents by term frequency and inverse document frequency, with length "
+                    "normalisation. BM25 excels at keyword queries and is fast to compute.",
+            "metadata": {"source": "retrieval-notes.txt"},
+        },
+        {
+            "id": "doc3",
+            "text": "Chunking strategy directly affects retrieval quality. Chunks that are "
+                    "too small lose context; chunks that are too large dilute the embedding "
+                    "signal. A chunk size of 256 to 512 tokens with 10% overlap is a robust "
+                    "starting point for most document types.",
+            "metadata": {"source": "chunking-notes.txt"},
+        },
+    ]
+
+    index_documents(sample_docs)
+
+    question = "What algorithm should I use for production vector search?"
+    answer = rag(question)
+    print(f"Q: {question}")
+    print(f"A: {answer}")
+```
+
+### Understanding the Code
+
+The `index_documents` function handles the entire offline pipeline in three lines: encode the texts into embeddings, then store them in ChromaDB alongside the original text and metadata. ChromaDB handles all the vector indexing internally.
+
+The `retrieve` function encodes the query with the same model (critical — the query and documents must share an embedding space), then calls ChromaDB's `query` method which performs approximate nearest neighbour search and returns the top-k most similar document texts.
+
+The `generate` function assembles a structured prompt that places the retrieved context before the user's question and explicitly instructs the model to answer only from the provided context. The `temperature: 0.0` setting makes the output deterministic, which is important for factual question answering.
+
+The `rag` function composes retrieve and generate. In production you would add error handling, logging, and the retrieval quality evaluation we cover in lesson 6.
+
+## When This Minimal Pipeline Fails
+
+This pipeline will fail in predictable ways that motivate the rest of the course:
+
+- If the answer spans two chunks that were split at the wrong boundary, retrieval will miss it
+- If the user uses different vocabulary than the documents, embedding similarity will be low
+- If the knowledge base has 100k documents, query latency may be acceptable but index quality matters more
+- If you never measure Recall@k, you cannot know how often retrieval is failing
+
+Each subsequent lesson in this course addresses one or more of these failure modes with principled solutions.
+
+## Key Takeaways
+
+- LLMs hallucinate because their knowledge is parametric (frozen in weights) — RAG replaces parametric knowledge with retrieved non-parametric knowledge at inference time
+- The RAG triad (retrieval quality, context quality, generation quality) must all be high simultaneously — failure in any one component causes end-to-end failure
+- The naive RAG pipeline is: chunk documents, embed chunks, store in vector DB at index time; embed query, retrieve top-k, assemble prompt, generate at query time
+- RAG beats fine-tuning for dynamic knowledge, citation requirements, and large knowledge bases; fine-tuning beats RAG for style, format, and domain vocabulary
+- RAG failures fall into three categories: retrieval failures (wrong chunks returned), context failures (right chunks, model ignores them), generation failures (hallucination despite correct context)
+- You can build a complete working RAG system in approximately 80 lines of Python using sentence-transformers, ChromaDB, and a Groq API call

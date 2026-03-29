@@ -1,98 +1,309 @@
 ---
-title: "Designing ML Systems"
-description: "Translate business requirements into a concrete ML architecture with data flow diagrams and component boundaries."
+title: "ML System Design — Requirements, Constraints & Architecture"
+description: "A practitioner's framework for designing ML systems before writing a line of model code. Requirements gathering, architecture patterns, failure modes, and a full worked design for real-time fraud detection."
+duration: 26
 order: 1
-duration: 15
 ---
 
-Good ML engineering starts long before the first line of model code. A system design session forces you to surface hidden assumptions — about data freshness, labeling cost, acceptable latency, and failure modes — before those assumptions become expensive bugs. This lesson walks through a repeatable process for converting a product requirement into a deployable architecture.
+## Why Design Before You Model
 
-## Requirements Gathering
+Every senior ML engineer has a war story that begins the same way: a team spent three months training a model, then discovered at deploy time that the required feature was not available at inference, or that the latency requirement was 50 ms and the model took 800 ms, or that retraining daily was assumed but the data pipeline only ran weekly. These failures have nothing to do with model quality. They are system design failures.
 
-Start with four axes:
+ML system design is a discipline distinct from algorithm selection. It asks: what are we actually trying to build, what are the constraints we must operate within, and what architecture satisfies both? This lesson gives you a repeatable framework for answering those questions.
 
-| Axis | Question to answer | Example answer |
-|---|---|---|
-| Prediction type | Classification, regression, generation, ranking? | Binary classification |
-| Latency budget | Real-time (&lt;100 ms), near-real-time (&lt;2 s), batch? | Near-real-time |
-| Throughput | Requests per second at peak | 500 RPS |
-| Data freshness | How stale can features be? | 15 minutes |
+## The ML Canvas — A Requirements Framework
 
-Write down answers before opening a code editor. They drive every downstream decision.
+Before choosing a model architecture, you need to fill out what practitioners call the ML canvas. It is a structured set of questions that force you to articulate decisions that are usually left implicit.
 
-## Anatomy of an ML System
+### Functional Requirements
 
-A production system has five distinct planes:
+The functional requirements define what the system must do:
 
-1. **Data plane** — raw sources, ingestion, feature store
-2. **Training plane** — pipeline, compute, experiment registry
-3. **Serving plane** — model server, API gateway, caching
-4. **Monitoring plane** — metrics, drift detectors, alerting
-5. **Control plane** — CI/CD, retraining triggers, rollback logic
+- **Prediction task**: What is the model predicting? (binary classification, multi-class, regression, ranking, generation)
+- **Output contract**: What does the consumer of predictions expect? A score, a label, a ranked list, a probability with calibration guarantees?
+- **Input contract**: What data is available at inference time? Be specific — list every field and its source.
+- **Freshness requirement**: How stale can predictions be before they cause harm? Real-time, near-real-time (seconds), batch (hours)?
 
-Sketch these as boxes and arrows before choosing frameworks. The sketch also becomes documentation.
+### Non-Functional Requirements
 
-## Data Flow Planning
+Non-functional requirements are the constraints that determine which architectures are even feasible:
 
-Trace every feature from its raw source to the model input tensor:
+- **Latency SLA**: p99 latency budget in milliseconds. This single number rules out entire classes of models.
+- **Throughput**: Requests per second at peak. Determines horizontal scaling strategy.
+- **Availability**: 99.9% vs 99.99% has enormous operational implications.
+- **Cost envelope**: GPU inference costs money. Sometimes a smaller, faster model is the right answer even if it is less accurate.
+- **Retraining frequency**: How often must the model be retrained to stay accurate? This determines your pipeline complexity.
 
-```python
-# Pseudo-code: document the transformation lineage
-FEATURE_LINEAGE = {
-    "user_click_rate_7d": {
-        "source": "kafka.events.clicks",
-        "transform": "windowed_count / session_count",
-        "latency_sla_minutes": 15,
-        "owner": "data-platform",
-    },
-    "item_embedding": {
-        "source": "postgres.items",
-        "transform": "two-tower model v3",
-        "latency_sla_minutes": 1440,  # daily batch
-        "owner": "recommendations",
-    },
-}
-```
+### Framing — ML vs Non-ML
 
-Documenting latency SLAs per feature reveals mismatches early: if your model needs a 15-minute-fresh feature but the pipeline runs hourly, you have a design gap to resolve before training.
+Not every prediction problem needs an ML model. Before building a system, ask honestly:
 
-## Choosing the Right Architecture Pattern
+- Can a rule-based system hit 80% of the accuracy at 5% of the cost?
+- Is there enough labelled data to train a model that beats heuristics?
+- Is the pattern stable enough that a model trained today will still be useful in six months?
 
-Three patterns cover most use cases:
+If the answer to any of these is unclear, start with heuristics, instrument them, collect labels from production, then replace with an ML model once you have evidence it helps.
 
-```
-Pattern A — Request-time inference
-  Client → API Gateway → Feature Server → Model Server → Response
+## Online vs Batch Inference
 
-Pattern B — Pre-computed scores
-  Batch job → Feature Store → Model → Score Table
-  Client → API Gateway → Score Table → Response
+The single most consequential architecture decision is whether predictions are generated online (at request time) or offline (pre-computed and cached).
 
-Pattern C — Streaming inference
-  Event Stream → Feature Processor → Model → Output Stream
-```
+### Batch Inference
 
-Pattern A is simplest but fails above ~1000 RPS without caching. Pattern B trades freshness for cost. Pattern C is most complex but enables sub-second freshness at scale.
-
-## Capacity Estimation
-
-Back-of-envelope math catches sizing mistakes before deployment:
+In batch inference, you run the model over all inputs on a schedule and store predictions in a lookup table. At serving time you just read from the table.
 
 ```python
-peak_rps = 500
-avg_inference_ms = 40          # measured from prototype
-p99_inference_ms = 120         # assume 3x average for tail
-replicas_needed = (peak_rps * avg_inference_ms / 1000) / 0.7  # 70% CPU target
+# Batch inference pattern — runs nightly via Airflow/Prefect
+import pandas as pd
+import mlflow
+import sqlalchemy
 
-print(f"Minimum replicas: {replicas_needed:.1f}")  # → 28.6 → round up to 30
+def run_batch_inference(
+    model_uri: str,
+    input_query: str,
+    output_table: str,
+    engine: sqlalchemy.Engine,
+) -> None:
+    model = mlflow.pyfunc.load_model(model_uri)
+
+    df = pd.read_sql(input_query, engine)
+    predictions = model.predict(df)
+
+    output = df[["user_id"]].copy()
+    output["score"] = predictions
+    output["predicted_at"] = pd.Timestamp.utcnow()
+
+    output.to_sql(
+        output_table,
+        engine,
+        if_exists="replace",
+        index=False,
+        method="multi",
+        chunksize=10_000,
+    )
 ```
 
-Add 30% headroom for traffic spikes and rolling restarts.
+Batch inference is appropriate when: predictions can be stale (hours), the input space is bounded (you can enumerate all users), and latency at serving time must be sub-millisecond (cache hit).
 
-## Summary
+### Online Inference
 
-- Gather requirements on four axes before writing code: prediction type, latency, throughput, and data freshness.
-- Split every ML system into five planes: data, training, serving, monitoring, and control.
-- Document feature lineage and per-feature latency SLAs to catch pipeline gaps early.
-- Choose among request-time, pre-computed, or streaming inference based on freshness vs. cost tradeoffs.
-- Do capacity math upfront — replicas needed = (RPS × inference time) / target utilisation.
+Online inference generates predictions synchronously in response to a request. The model runs on each request in real time.
+
+```python
+# Online inference pattern — FastAPI endpoint
+from fastapi import FastAPI
+from pydantic import BaseModel
+import mlflow
+
+app = FastAPI()
+model = None  # loaded at startup
+
+@app.on_event("startup")
+async def load_model():
+    global model
+    model = mlflow.pyfunc.load_model("models:/fraud-detector/Production")
+
+class PredictionRequest(BaseModel):
+    transaction_id: str
+    amount: float
+    merchant_category: str
+    user_velocity_1h: int
+
+class PredictionResponse(BaseModel):
+    transaction_id: str
+    fraud_score: float
+    decision: str
+
+@app.post("/predict", response_model=PredictionResponse)
+def predict(req: PredictionRequest):
+    features = req.model_dump()
+    score = float(model.predict(pd.DataFrame([features]))[0])
+    return PredictionResponse(
+        transaction_id=req.transaction_id,
+        fraud_score=score,
+        decision="block" if score > 0.85 else "allow",
+    )
+```
+
+Online inference is required when: the prediction depends on context only available at request time (current cart, live session), decisions must be made in real time, or the input space is too large to pre-compute.
+
+## Training Frequency and Data Availability
+
+How often you retrain is determined by two factors: how fast the data distribution drifts, and how expensive retraining is. These interact to create a retraining cadence.
+
+For a fraud detection model, transaction patterns can shift within hours when a new attack vector emerges. For a content recommendation model, preferences drift over weeks. For a credit risk model, regulatory constraints may prohibit retraining more than quarterly.
+
+Data availability is the other half of this equation. You cannot retrain on data that does not exist yet. If labels are delayed (e.g., chargeback data takes 30 days to arrive), your feedback loop is 30 days regardless of how fast you can run training.
+
+## The Three Types of ML System Failures
+
+Production ML systems fail in three distinct ways, and each requires a different mitigation strategy.
+
+### Data Failures
+
+The model receives malformed, missing, or out-of-distribution input. This is the most common failure mode and the hardest to debug because the model still produces a prediction — it just silently produces the wrong one.
+
+Mitigations: input validation with strict schemas, feature monitoring with distribution alerts, upstream data quality SLAs.
+
+### Model Failures
+
+The model's learned patterns no longer match reality. This happens due to distribution shift (the world changed), label shift (the definition of the target changed), or feedback loops (the model's own decisions altered the distribution it was trained on).
+
+Mitigations: continuous monitoring of prediction distributions, held-out evaluation sets refreshed regularly, automated retraining pipelines.
+
+### System Failures
+
+Infrastructure components fail: the model server crashes, the feature store has elevated latency, the database connection pool exhausts. These are standard software reliability problems, but ML systems are often less battle-hardened than traditional services.
+
+Mitigations: health checks, circuit breakers, fallback strategies (rule-based backup, cached predictions), runbooks.
+
+## Architecture Patterns
+
+### Two-Tower Architecture
+
+Used widely in recommendation and retrieval systems. Two separate neural networks — one for the query (user), one for the document (item) — produce embeddings that can be compared with dot product or cosine similarity.
+
+```
+User Tower             Item Tower
+  [user_id]              [item_id]
+  [history]              [category]
+  [context]              [features]
+      |                      |
+   Embedding              Embedding
+      \                      /
+       \                    /
+        dot_product(u, v) = score
+```
+
+The key advantage is that item embeddings can be pre-computed offline and indexed with ANN (approximate nearest-neighbour) search (Faiss, ScaNN). At serving time you only run the user tower (fast) and do an ANN lookup.
+
+### Cascaded (Funnel) Architecture
+
+Used when the full candidate space is too large to score with an expensive model. A cheap retrieval stage narrows millions of candidates to hundreds, which a more expensive ranking model re-scores.
+
+```
+All items (10M)
+    |
+[Retrieval: ANN / BM25]  -- fast, low precision
+    |
+Top 500 candidates
+    |
+[Ranking model: full features]  -- slow, high precision
+    |
+Top 10 results
+```
+
+### Multi-Task Architecture
+
+A single model trained on multiple related objectives simultaneously. Useful when tasks share representation (e.g., click prediction and purchase prediction for the same items).
+
+```python
+class MultiTaskModel(torch.nn.Module):
+    def __init__(self, input_dim: int, shared_dim: int):
+        super().__init__()
+        self.shared = torch.nn.Sequential(
+            torch.nn.Linear(input_dim, shared_dim),
+            torch.nn.ReLU(),
+        )
+        # Task-specific heads
+        self.click_head = torch.nn.Linear(shared_dim, 1)
+        self.purchase_head = torch.nn.Linear(shared_dim, 1)
+
+    def forward(self, x: torch.Tensor):
+        shared = self.shared(x)
+        return {
+            "click_logit": self.click_head(shared),
+            "purchase_logit": self.purchase_head(shared),
+        }
+```
+
+## Scalability From Day One
+
+Scalability is not something you add later. Certain decisions made early are expensive to reverse:
+
+- **Stateless servers**: If your model server accumulates state (user session, running averages), horizontal scaling becomes hard. Design for statelessness from the start.
+- **Feature computation location**: Computing features inside the model server couples computation to serving. Extract feature computation to a feature store.
+- **Model size**: A 10 GB model cannot be loaded on every server replica. Plan for model size relative to fleet size.
+- **Serialisation format**: Pickle is not reproducible across Python versions. Commit to ONNX or TorchScript early.
+
+## Worked Design — Real-Time Fraud Detection
+
+### Requirements
+
+**Functional**: Score each payment transaction as fraud risk within 200 ms of authorisation request. The decision to block or allow is made by the rule engine; the model provides a score between 0 and 1.
+
+**Non-functional**:
+- p99 latency: 150 ms (leaving 50 ms for the rule engine)
+- Throughput: 2,000 TPS peak
+- Availability: 99.95%
+- Retraining: daily on prior 90 days of transactions
+
+### Framing
+
+Binary classification. Label = chargeback filed within 60 days. Class imbalance is severe (~0.3% fraud rate). Will require careful threshold calibration and cost-sensitive evaluation.
+
+### Data Availability at Inference
+
+Available within 200 ms of transaction:
+- Transaction amount, currency, merchant category code
+- Card BIN (first 6 digits), card country, issuing bank
+- User velocity features (transactions in last 1h, 24h, 7d) — must come from online feature store
+- Device fingerprint, IP geolocation
+
+Not available at inference:
+- Chargeback label (arrives 30–60 days later)
+- Merchant settlement data
+
+### Architecture Decision — Online Inference
+
+The 200 ms budget and context-dependence (velocity features are live) mandate online inference. Batch inference is not viable.
+
+### High-Level Architecture
+
+```
+Payment gateway
+      |
+  [API Gateway]
+      |
+  [Fraud Scoring Service]  -- FastAPI, 8 replicas, GPU optional
+      |           |
+  [Feature Store]   [Model Server]
+  (Redis, online)   (ONNX runtime)
+      |
+  [Offline Feature Store]
+  (Parquet on S3, for training)
+```
+
+### Training Pipeline (Daily)
+
+```python
+# Pseudocode for daily retraining DAG
+@dag(schedule_interval="0 2 * * *")
+def fraud_retraining_dag():
+    raw = extract_transactions(days=90)
+    labelled = join_chargebacks(raw, delay_days=30)
+    features = compute_features(labelled)
+    validated = validate_schema(features)
+    model = train_model(validated)
+    evaluated = evaluate_model(model, holdout=last_7_days)
+    promoted = promote_if_better(evaluated, champion_model)
+    deployed = deploy_to_serving(promoted)
+```
+
+### Failure Modes and Mitigations
+
+| Failure | Detection | Mitigation |
+|---------|-----------|------------|
+| Feature store latency spike | p99 latency alert | Fallback to cached features or rule-based score |
+| Model server crash | Health check failure | Auto-restart + circuit breaker to rule engine |
+| Data drift (new merchant category) | PSI alert on feature distribution | Alert + trigger off-schedule retraining |
+| Label delay (chargeback data late) | Pipeline SLA alert | Hold previous model, flag for manual review |
+
+## Key Takeaways
+
+- Fill out the ML canvas before writing model code: task framing, input/output contracts, latency SLA, throughput, retraining frequency.
+- The online vs batch inference decision is the most consequential architecture choice. It is driven by freshness requirements and input space size.
+- ML systems fail in three distinct categories: data failures, model failures, and system failures. Design mitigations for each.
+- Two-tower, cascaded, and multi-task architectures solve different scale and accuracy tradeoffs — choose based on your latency budget and candidate space size.
+- Scalability constraints (stateless servers, feature store separation, model serialisation format) must be decided at design time, not retrofitted.
+- A fraud detection system at 2,000 TPS with a 150 ms p99 budget requires online inference, a low-latency feature store, and a model serialised to ONNX or TorchScript — not a scikit-learn pickle loaded from disk.

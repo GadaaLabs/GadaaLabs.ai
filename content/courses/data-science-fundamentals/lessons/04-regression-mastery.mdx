@@ -1,0 +1,472 @@
+---
+title: "Regression — Linear, Polynomial, Regularised"
+description: "Master OLS regression from normal equations to diagnostic plots, detect multicollinearity with VIF, regularise with Ridge and Lasso, and interpret logistic regression coefficients as log-odds."
+duration: 26
+order: 4
+---
+
+Regression is where theory meets measurement. Every time you estimate an effect, predict a continuous outcome, or test whether one variable explains variance in another, you are doing regression. This lesson goes beyond fitting a line — it covers the assumptions that must hold for OLS estimates to be meaningful, the diagnostics that detect when they are violated, and the regularisation techniques that keep models honest when those assumptions break down.
+
+## The OLS Objective
+
+Ordinary Least Squares regression finds the coefficient vector beta that minimises the sum of squared residuals (SSR):
+
+SSR = sum over i of (y_i - y_hat_i)^2 = (y - X*beta)^T * (y - X*beta)
+
+The closed-form solution — the normal equations — is:
+
+beta = (X^T X)^(-1) X^T y
+
+This solution is exact, requiring no iterations. It exists when X^T X is invertible (full column rank — no perfect multicollinearity). For n observations and p features, this involves a p x p matrix inversion that costs O(p^3), which becomes expensive for wide datasets (p > 10,000).
+
+```python
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import scipy.stats as stats
+from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet, LogisticRegression
+from sklearn.linear_model import RidgeCV, LassoCV, ElasticNetCV
+from sklearn.preprocessing import PolynomialFeatures, StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, r2_score
+import statsmodels.api as sm
+import warnings
+warnings.filterwarnings('ignore')
+
+rng = np.random.default_rng(42)
+
+# Generate realistic housing price dataset
+n = 500
+sqft       = rng.normal(1500, 400, n)
+bedrooms   = rng.integers(1, 6, n).astype(float)
+age        = rng.uniform(1, 50, n)
+dist_center= rng.exponential(5, n)
+noise      = rng.normal(0, 25_000, n)
+
+price = (100 * sqft
+         + 20_000 * bedrooms
+         - 1_500 * age
+         - 8_000 * dist_center
+         + 80_000
+         + noise)
+
+df = pd.DataFrame({
+    'price': price,
+    'sqft': sqft,
+    'bedrooms': bedrooms,
+    'age': age,
+    'dist_center': dist_center
+})
+
+X = df[['sqft', 'bedrooms', 'age', 'dist_center']].values
+y = df['price'].values
+
+print(f"Dataset: {n} houses")
+print(df.describe().round(1))
+```
+
+### Normal Equations vs Gradient Descent
+
+```python
+# Closed-form solution (Normal equations)
+X_aug = np.column_stack([np.ones(n), X])  # Add intercept column
+beta_ols = np.linalg.solve(X_aug.T @ X_aug, X_aug.T @ y)
+
+print("\nNormal Equations coefficients:")
+labels = ['Intercept', 'sqft', 'bedrooms', 'age', 'dist_center']
+for name, coef in zip(labels, beta_ols):
+    print(f"  {name:15s}: {coef:,.2f}")
+
+# Gradient descent implementation (educational)
+def gradient_descent(X, y, lr=1e-8, n_iter=5000):
+    n_samples, n_feats = X.shape
+    theta = np.zeros(n_feats)
+    loss_history = []
+    for _ in range(n_iter):
+        preds = X @ theta
+        residuals = preds - y
+        gradient = (2 / n_samples) * X.T @ residuals
+        theta -= lr * gradient
+        loss_history.append((residuals**2).mean())
+    return theta, loss_history
+
+X_scaled = (X_aug - X_aug.mean(axis=0)) / (X_aug.std(axis=0) + 1e-8)
+beta_gd, losses = gradient_descent(X_scaled, y, lr=1e-4, n_iter=10_000)
+
+# sklearn for reference
+model_sk = LinearRegression()
+model_sk.fit(X, y)
+print(f"\nsklearn R²: {model_sk.score(X, y):.4f}")
+```
+
+## The LINE Assumptions
+
+OLS estimates are BLUE (Best Linear Unbiased Estimators) only when the Gauss-Markov assumptions hold:
+
+- **L**inearity: the relationship between X and y is linear
+- **I**ndependence: residuals are independent of each other (no autocorrelation)
+- **N**ormality: residuals are normally distributed (for valid inference)
+- **E**qual variance (Homoscedasticity): residual variance is constant across fitted values
+
+Violating these does not necessarily make the point estimates wrong, but it invalidates the standard errors, p-values, and confidence intervals — which is what you use to make decisions.
+
+```python
+def diagnostic_plots(model, X, y, feature_names=None):
+    """Four standard regression diagnostic plots."""
+    y_hat   = model.predict(X)
+    resids  = y - y_hat
+    std_resids = resids / resids.std()
+    sqrt_abs_std_resids = np.sqrt(np.abs(std_resids))
+
+    # Leverage (hat matrix diagonal)
+    X_aug_d = np.column_stack([np.ones(len(X)), X])
+    H = X_aug_d @ np.linalg.pinv(X_aug_d.T @ X_aug_d) @ X_aug_d.T
+    leverage = np.diag(H)
+
+    fig = plt.figure(figsize=(14, 10))
+    gs  = gridspec.GridSpec(2, 2, figure=fig)
+
+    # 1. Residuals vs Fitted
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.scatter(y_hat, resids, alpha=0.4, s=20, color='steelblue')
+    ax1.axhline(0, color='red', linestyle='--')
+    ax1.set_xlabel('Fitted values')
+    ax1.set_ylabel('Residuals')
+    ax1.set_title('Residuals vs Fitted\n(look for pattern = non-linearity; funnel = heteroscedasticity)')
+
+    # 2. QQ plot of residuals
+    ax2 = fig.add_subplot(gs[0, 1])
+    stats.probplot(resids, dist='norm', plot=ax2)
+    ax2.set_title('Normal QQ Plot of Residuals\n(deviations from line = non-normality)')
+
+    # 3. Scale-Location
+    ax3 = fig.add_subplot(gs[1, 0])
+    ax3.scatter(y_hat, sqrt_abs_std_resids, alpha=0.4, s=20, color='steelblue')
+    ax3.set_xlabel('Fitted values')
+    ax3.set_ylabel('sqrt(|Standardised Residuals|)')
+    ax3.set_title('Scale-Location\n(non-flat trend = heteroscedasticity)')
+
+    # 4. Residuals vs Leverage
+    ax4 = fig.add_subplot(gs[1, 1])
+    ax4.scatter(leverage, std_resids, alpha=0.4, s=20, color='steelblue')
+    ax4.axhline(0, color='red', linestyle='--')
+    # Cook's distance contours (approximate)
+    x_lev = np.linspace(leverage.min(), leverage.max(), 100)
+    for cook_d in [0.5, 1.0]:
+        y_cook = np.sqrt(cook_d * (X.shape[1] + 1) * (1 - x_lev) / x_lev)
+        ax4.plot(x_lev, y_cook, 'r:', linewidth=0.8)
+        ax4.plot(x_lev, -y_cook, 'r:', linewidth=0.8)
+    ax4.set_xlabel('Leverage')
+    ax4.set_ylabel('Standardised Residuals')
+    ax4.set_title("Residuals vs Leverage\n(top-right = high leverage + outlier = influential)")
+
+    plt.tight_layout()
+    plt.savefig('regression_diagnostics.png', dpi=150, bbox_inches='tight')
+    plt.show()
+
+diagnostic_plots(model_sk, X, y)
+```
+
+### Reading the Diagnostic Plots
+
+**Residuals vs Fitted**: should show a random horizontal band around zero. A curved pattern indicates non-linearity (add polynomial terms). A funnel shape (variance grows with fitted values) indicates heteroscedasticity (consider log-transforming y or using weighted least squares).
+
+**QQ Plot of Residuals**: should show points on the diagonal line. Heavy tails (S-shape) suggest the normality assumption is violated — bootstrapped confidence intervals may be more appropriate than t-based ones.
+
+**Scale-Location**: similar to Residuals vs Fitted but uses sqrt of absolute standardised residuals. A positive slope confirms heteroscedasticity.
+
+**Residuals vs Leverage**: points in the upper or lower right (high leverage, large residual) are influential — they are pulling the regression line toward them. Cook's distance contours (the dotted lines) mark combinations that have outsized influence on the fit. Points outside the contour warrant investigation.
+
+## Multicollinearity and VIF
+
+When predictor variables are strongly correlated, the normal equations become numerically unstable — small changes in data produce large swings in coefficients. The **Variance Inflation Factor (VIF)** quantifies how much the variance of a coefficient is inflated due to collinearity.
+
+VIF_j = 1 / (1 - R²_j)
+
+where R²_j is the R² from regressing feature j on all other features. VIF = 1 means no collinearity; VIF > 5 is concerning; VIF > 10 indicates severe collinearity requiring action.
+
+```python
+def compute_vif(X_df):
+    """Compute VIF for each feature in a DataFrame."""
+    from sklearn.linear_model import LinearRegression
+
+    vif_data = {}
+    cols = X_df.columns.tolist()
+    for col in cols:
+        y_col  = X_df[col].values
+        X_rest = X_df[[c for c in cols if c != col]].values
+        r2 = LinearRegression().fit(X_rest, y_col).score(X_rest, y_col)
+        vif_data[col] = 1 / (1 - r2) if r2 < 1 else np.inf
+    return pd.Series(vif_data, name='VIF').round(2)
+
+X_df = df[['sqft', 'bedrooms', 'age', 'dist_center']]
+print("VIF values:")
+print(compute_vif(X_df))
+
+# Demonstrate severe multicollinearity
+X_collinear = X_df.copy()
+X_collinear['sqft_nearly_same'] = X_df['sqft'] + rng.normal(0, 10, n)  # Almost identical to sqft
+print("\nVIF with near-duplicate feature:")
+print(compute_vif(X_collinear))
+
+# Remedies: drop one collinear feature, use PCA, or apply Ridge (which handles collinearity)
+```
+
+## Polynomial Features and the Overfitting Trap
+
+Polynomial regression fits curves by adding polynomial transformations of X as new features. PolynomialFeatures(degree=2) with one input feature x produces [1, x, x²]; with two features [x1, x2] it produces [1, x1, x2, x1², x1*x2, x2²].
+
+```python
+# Demonstrate polynomial overfitting
+x_1d = rng.uniform(-3, 3, 40)
+y_true = np.sin(x_1d) + 0.3 * x_1d
+y_noisy = y_true + rng.normal(0, 0.4, 40)
+
+x_plot = np.linspace(-3.5, 3.5, 200).reshape(-1, 1)
+x_1d_reshaped = x_1d.reshape(-1, 1)
+
+fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+degrees = [1, 3, 9, 15]
+
+for ax, deg in zip(axes, degrees):
+    pipe = Pipeline([
+        ('poly', PolynomialFeatures(degree=deg)),
+        ('scaler', StandardScaler()),
+        ('reg', LinearRegression())
+    ])
+    pipe.fit(x_1d_reshaped, y_noisy)
+    y_pred_plot = pipe.predict(x_plot)
+
+    ax.scatter(x_1d, y_noisy, s=30, alpha=0.7, color='steelblue', label='Data')
+    ax.plot(x_plot, y_pred_plot, color='red', linewidth=2, label=f'Degree {deg}')
+    ax.set_ylim(-3, 3)
+    ax.set_title(f'Degree {deg}')
+    ax.legend(fontsize=8)
+
+plt.suptitle('Polynomial Regression: Underfitting (deg=1) to Overfitting (deg=15)',
+             fontsize=12, y=1.02)
+plt.tight_layout()
+plt.savefig('polynomial_overfitting.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+The degree-1 fit misses the curvature. The degree-3 fit captures the signal. The degree-15 fit memorises the training data, oscillating wildly in regions with no training points — it will fail badly on new data.
+
+## Ridge Regression (L2 Regularisation)
+
+Ridge adds a penalty on the squared magnitude of coefficients to the OLS objective:
+
+Loss = SSR + alpha * sum over j of beta_j^2
+
+This shrinks all coefficients toward zero but never exactly to zero. The effect is largest on coefficients associated with redundant or weakly-predictive features. Crucially, Ridge makes X^T X + alpha * I always invertible, solving the multicollinearity problem.
+
+```python
+# Ridge with cross-validated alpha selection
+alphas = np.logspace(-3, 5, 100)
+ridge_cv = RidgeCV(alphas=alphas, cv=5, scoring='neg_mean_squared_error')
+ridge_cv.fit(X, y)
+
+print(f"Best Ridge alpha: {ridge_cv.alpha_:.4f}")
+
+# Coefficient shrinkage path
+fig, ax = plt.subplots(figsize=(9, 5))
+feature_names = ['sqft', 'bedrooms', 'age', 'dist_center']
+coefs = []
+
+for alpha in alphas:
+    ridge = Ridge(alpha=alpha)
+    ridge.fit(X, y)
+    coefs.append(ridge.coef_)
+
+coefs = np.array(coefs)
+for j, name in enumerate(feature_names):
+    ax.semilogx(alphas, coefs[:, j], linewidth=2, label=name)
+
+ax.axvline(ridge_cv.alpha_, color='black', linestyle='--', label='CV alpha')
+ax.set_xlabel('Alpha (regularisation strength)')
+ax.set_ylabel('Coefficient value')
+ax.set_title('Ridge Shrinkage Path — Coefficients vs Alpha')
+ax.legend()
+plt.tight_layout()
+plt.savefig('ridge_shrinkage.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+# Compare OLS vs Ridge on test set
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+scaler = StandardScaler()
+X_train_s = scaler.fit_transform(X_train)
+X_test_s  = scaler.transform(X_test)
+
+ols   = LinearRegression().fit(X_train_s, y_train)
+ridge = Ridge(alpha=ridge_cv.alpha_).fit(X_train_s, y_train)
+
+for name, mdl in [('OLS', ols), ('Ridge', ridge)]:
+    train_rmse = np.sqrt(mean_squared_error(y_train, mdl.predict(X_train_s)))
+    test_rmse  = np.sqrt(mean_squared_error(y_test,  mdl.predict(X_test_s)))
+    print(f"{name}: train RMSE={train_rmse:,.0f}  test RMSE={test_rmse:,.0f}")
+```
+
+## Lasso Regression (L1 Regularisation)
+
+Lasso adds a penalty on the absolute magnitude of coefficients:
+
+Loss = SSR + alpha * sum over j of |beta_j|
+
+The L1 penalty has a geometric property that drives some coefficients to exactly zero, performing automatic feature selection. This makes Lasso invaluable when you have many features and expect only a subset to matter.
+
+```python
+# Lasso with cross-validated alpha — note: LassoCV uses coordinate descent
+lasso_cv = LassoCV(alphas=alphas, cv=5, max_iter=10_000)
+lasso_cv.fit(X_train_s, y_train)
+
+print(f"Best Lasso alpha: {lasso_cv.alpha_:.4f}")
+print(f"Non-zero coefficients: {(lasso_cv.coef_ != 0).sum()} / {X_train_s.shape[1]}")
+
+# Coefficient comparison
+comparison = pd.DataFrame({
+    'Feature':     feature_names,
+    'OLS':         ols.coef_.round(2),
+    'Ridge':       ridge.coef_.round(2),
+    'Lasso':       lasso_cv.coef_.round(2),
+})
+print("\nCoefficient Comparison (standardised features):")
+print(comparison.to_string(index=False))
+
+# High-dimensional example: Lasso for feature selection
+n_hd, p_hd = 200, 50
+X_hd = rng.normal(0, 1, (n_hd, p_hd))
+true_coefs = np.zeros(p_hd)
+true_coefs[[0, 5, 12, 23, 31]] = [3, -2, 1.5, -1, 2.5]  # Only 5 truly predictive
+y_hd = X_hd @ true_coefs + rng.normal(0, 0.5, n_hd)
+
+lasso_hd = LassoCV(cv=5, max_iter=20_000).fit(X_hd, y_hd)
+selected = np.where(lasso_hd.coef_ != 0)[0]
+print(f"\nHigh-dimensional: true features [0,5,12,23,31]")
+print(f"Lasso selected: {selected.tolist()}")
+```
+
+## ElasticNet: Best of Both
+
+ElasticNet combines L1 and L2 penalties:
+
+Loss = SSR + alpha * (r * L1 + (1-r) * L2)
+
+where r controls the mixing ratio. l1_ratio=1 is pure Lasso; l1_ratio=0 is pure Ridge. ElasticNet is preferred over pure Lasso when features are correlated (Lasso arbitrarily picks one; ElasticNet tends to group them).
+
+```python
+enet_cv = ElasticNetCV(l1_ratio=[0.1, 0.3, 0.5, 0.7, 0.9, 0.95, 1.0],
+                       cv=5, max_iter=10_000)
+enet_cv.fit(X_train_s, y_train)
+print(f"ElasticNet best alpha={enet_cv.alpha_:.4f}, l1_ratio={enet_cv.l1_ratio_:.2f}")
+```
+
+## Full Statistical Output with statsmodels
+
+sklearn optimises for prediction; statsmodels optimises for statistical inference. When you need p-values, standard errors, confidence intervals, and F-statistics, use statsmodels.
+
+```python
+# statsmodels OLS: add constant manually for intercept
+X_sm = sm.add_constant(X)
+ols_sm = sm.OLS(y, X_sm).fit()
+print(ols_sm.summary())
+```
+
+Reading the output:
+- **coef**: the estimated beta values
+- **std err**: standard error of each coefficient (smaller = more precise)
+- **t / P>|t|**: t-statistic and p-value for H0: beta_j = 0; p < 0.05 conventionally means statistically significant
+- **[0.025 0.975]**: 95% confidence interval for the coefficient
+- **R-squared**: fraction of variance in y explained by the model
+- **Adj. R-squared**: R² penalised for number of predictors; always use this for model comparison
+- **F-statistic**: tests whether at least one predictor has nonzero effect
+- **AIC/BIC**: information criteria for model selection (lower is better)
+
+## Logistic Regression
+
+Logistic regression handles binary outcomes by modelling the log-odds of the positive class as a linear function:
+
+log(p / (1-p)) = beta_0 + beta_1*x_1 + ... + beta_p*x_p
+
+The sigmoid function maps this to [0, 1]:
+
+p = 1 / (1 + exp(-z))
+
+The loss function is log-loss (cross-entropy), not SSR. There is no closed-form solution; logistic regression is solved iteratively (IRLS or gradient descent).
+
+```python
+from sklearn.datasets import make_classification
+from sklearn.metrics import roc_auc_score, log_loss, classification_report
+
+# Generate a binary classification problem
+X_cls, y_cls = make_classification(
+    n_samples=800, n_features=6, n_informative=4,
+    n_redundant=1, n_repeated=0, random_state=42
+)
+
+X_tr_c, X_te_c, y_tr_c, y_te_c = train_test_split(
+    X_cls, y_cls, test_size=0.2, random_state=42
+)
+
+scaler_cls = StandardScaler()
+X_tr_cs = scaler_cls.fit_transform(X_tr_c)
+X_te_cs  = scaler_cls.transform(X_te_c)
+
+lr = LogisticRegression(C=1.0, max_iter=500)
+lr.fit(X_tr_cs, y_tr_c)
+
+proba = lr.predict_proba(X_te_cs)[:, 1]
+print(f"AUC-ROC:  {roc_auc_score(y_te_c, proba):.4f}")
+print(f"Log-loss: {log_loss(y_te_c, proba):.4f}")
+print(classification_report(y_te_c, lr.predict(X_te_cs)))
+
+# Interpreting coefficients as log-odds
+print("\nCoefficients (log-odds change per 1-unit increase in standardised feature):")
+for j, (name, coef) in enumerate(zip([f'x{j}' for j in range(6)], lr.coef_[0])):
+    odds_ratio = np.exp(coef)
+    print(f"  {name}: coef={coef:.4f}  odds ratio={odds_ratio:.4f}")
+
+# Decision boundary visualisation (2D projection)
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+# ROC curve
+from sklearn.metrics import roc_curve
+fpr, tpr, _ = roc_curve(y_te_c, proba)
+axes[0].plot(fpr, tpr, color='steelblue', linewidth=2,
+             label=f'AUC = {roc_auc_score(y_te_c, proba):.3f}')
+axes[0].plot([0, 1], [0, 1], 'k--', alpha=0.5)
+axes[0].set_xlabel('False Positive Rate')
+axes[0].set_ylabel('True Positive Rate')
+axes[0].set_title('ROC Curve — Logistic Regression')
+axes[0].legend()
+
+# Predicted probability distribution
+axes[1].hist(proba[y_te_c == 0], bins=20, alpha=0.6, color='coral', label='Class 0')
+axes[1].hist(proba[y_te_c == 1], bins=20, alpha=0.6, color='steelblue', label='Class 1')
+axes[1].set_xlabel('Predicted probability of class 1')
+axes[1].set_ylabel('Count')
+axes[1].set_title('Probability Distribution by True Class')
+axes[1].legend()
+
+plt.tight_layout()
+plt.savefig('logistic_regression.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+### Interpreting Logistic Regression Coefficients
+
+A coefficient of beta_j = 0.4 means that a 1-unit increase in x_j multiplies the odds of the positive class by exp(0.4) = 1.49 — a 49% increase in odds, holding all other features constant. Note that this is the odds ratio, not the probability ratio. With standardised features, coefficients are comparable in magnitude.
+
+The regularisation parameter C = 1/alpha. Large C means less regularisation (closer to MLE); small C means more regularisation (stronger shrinkage). Use cross-validation (LogisticRegressionCV) to select C.
+
+## Key Takeaways
+
+- OLS minimises SSR; the normal equations beta = (X^T X)^(-1) X^T y give the closed-form solution, but require X^T X to be invertible and cost O(p^3) — gradient descent scales better for large p.
+- The LINE assumptions (Linearity, Independence, Normality of residuals, Equal variance) must hold for OLS standard errors and p-values to be valid; residuals-vs-fitted and QQ plots are the primary diagnostics.
+- VIF above 5 signals collinearity that inflates coefficient variance; above 10 it is severe. Remedies include dropping one correlated feature, PCA, or switching to Ridge regression.
+- Ridge (L2) shrinks all coefficients toward zero and always produces a unique solution, making it the right choice when multicollinearity is present or when you need all features.
+- Lasso (L1) drives some coefficients to exactly zero, performing automatic feature selection; it is preferred when you believe only a sparse subset of features matter.
+- ElasticNet combines L1 and L2 penalties and is preferred over pure Lasso when correlated features should be selected together rather than arbitrarily.
+- Logistic regression models log-odds as a linear function; coefficients represent log-odds changes and exponentiate to odds ratios; the loss is cross-entropy, not SSR.
+- Use statsmodels for p-values, confidence intervals, and model fit statistics; use sklearn for pipelines, cross-validation, and production prediction.

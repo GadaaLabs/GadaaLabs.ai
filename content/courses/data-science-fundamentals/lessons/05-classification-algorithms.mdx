@@ -1,0 +1,511 @@
+---
+title: "Classification Algorithms — From Logistic Regression to Gradient Boosting"
+description: "Master decision trees, random forests, gradient boosting, XGBoost, LightGBM, and SVMs — with class imbalance handling, probability calibration, and production-ready evaluation."
+duration: 28
+order: 5
+---
+
+Classification is the task of assigning inputs to discrete categories. The field is rich with algorithms that make radically different assumptions, have different strengths, and fail in different ways. A practitioner who understands why each algorithm works — not just how to call `.fit()` — can choose the right tool for each problem and diagnose failures when they occur.
+
+## Decision Trees
+
+A decision tree recursively partitions the feature space by choosing splits that maximise information gain. At each node, the algorithm evaluates every feature and every split point, selecting the one that most reduces impurity in the resulting child nodes.
+
+### Entropy and Information Gain
+
+**Entropy** measures the impurity (disorder) of a set S:
+
+H(S) = -sum over classes c of p_c * log2(p_c)
+
+A pure node (all one class) has H = 0. Maximum entropy for a binary problem is H = 1 (equal class proportions).
+
+**Information Gain** for a split on feature A:
+
+IG(S, A) = H(S) - sum over values v of (|S_v| / |S|) * H(S_v)
+
+The algorithm selects the split that maximises IG.
+
+**Gini impurity** is an alternative to entropy:
+
+Gini(S) = 1 - sum over c of p_c^2
+
+Gini is slightly faster to compute (no logarithm) and is the default in sklearn.
+
+```python
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.tree import DecisionTreeClassifier, export_text, plot_tree
+from sklearn.ensemble import (RandomForestClassifier, GradientBoostingClassifier,
+                               BaggingClassifier)
+from sklearn.svm import SVC
+from sklearn.datasets import make_classification, make_moons
+from sklearn.model_selection import train_test_split, cross_val_score, learning_curve
+from sklearn.metrics import (accuracy_score, classification_report, roc_auc_score,
+                              confusion_matrix, precision_recall_curve, roc_curve,
+                              average_precision_score)
+from sklearn.preprocessing import StandardScaler
+from sklearn.calibration import CalibratedClassifierCV, calibration_curve
+from sklearn.inspection import permutation_importance
+import warnings
+warnings.filterwarnings('ignore')
+
+rng = np.random.default_rng(42)
+
+# Build a realistic fraud detection dataset (imbalanced)
+n_total = 10_000
+X_full, y_full = make_classification(
+    n_samples=n_total, n_features=15, n_informative=8,
+    n_redundant=3, n_repeated=1, n_classes=2,
+    weights=[0.97, 0.03],  # 3% fraud — imbalanced
+    flip_y=0.01, random_state=42
+)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X_full, y_full, test_size=0.2, random_state=42, stratify=y_full
+)
+
+print(f"Training set: {y_train.sum()} fraud out of {len(y_train)} ({y_train.mean():.2%})")
+print(f"Test set:     {y_test.sum()} fraud out of {len(y_test)} ({y_test.mean():.2%})")
+
+# Entropy calculation helper
+def entropy(labels):
+    _, counts = np.unique(labels, return_counts=True)
+    probs = counts / counts.sum()
+    return -(probs * np.log2(probs + 1e-12)).sum()
+
+# Verify on perfectly impure set
+print(f"\nEntropy(50/50 split): {entropy(np.array([0]*50 + [1]*50)):.4f}")  # 1.0
+print(f"Entropy(pure class):  {entropy(np.array([1]*100)):.4f}")            # 0.0
+```
+
+### Growing and Regularising a Tree
+
+```python
+# Unregularised tree — overfits badly
+tree_deep = DecisionTreeClassifier(random_state=42)
+tree_deep.fit(X_train, y_train)
+print(f"\nDeep tree depth: {tree_deep.get_depth()}")
+print(f"Train accuracy: {tree_deep.score(X_train, y_train):.4f}")
+print(f"Test accuracy:  {tree_deep.score(X_test, y_test):.4f}")
+
+# Regularised tree
+tree_reg = DecisionTreeClassifier(
+    max_depth=6,
+    min_samples_leaf=20,
+    min_samples_split=40,
+    class_weight='balanced',  # address imbalance
+    random_state=42
+)
+tree_reg.fit(X_train, y_train)
+print(f"\nRegularised tree depth: {tree_reg.get_depth()}")
+print(f"Train AUC: {roc_auc_score(y_train, tree_reg.predict_proba(X_train)[:,1]):.4f}")
+print(f"Test AUC:  {roc_auc_score(y_test,  tree_reg.predict_proba(X_test)[:,1]):.4f}")
+
+# Visualise the first few levels
+fig, ax = plt.subplots(figsize=(20, 6))
+plot_tree(tree_reg, max_depth=3, feature_names=[f'f{i}' for i in range(15)],
+          class_names=['legit', 'fraud'], filled=True, ax=ax, fontsize=8)
+plt.title('Decision Tree (first 3 levels)')
+plt.tight_layout()
+plt.savefig('decision_tree.png', dpi=100, bbox_inches='tight')
+plt.show()
+
+# Hyperparameter: max_depth effect on AUC
+depths = range(1, 20)
+train_aucs, test_aucs = [], []
+for d in depths:
+    dt = DecisionTreeClassifier(max_depth=d, class_weight='balanced', random_state=42)
+    dt.fit(X_train, y_train)
+    train_aucs.append(roc_auc_score(y_train, dt.predict_proba(X_train)[:,1]))
+    test_aucs.append(roc_auc_score(y_test,  dt.predict_proba(X_test)[:,1]))
+
+plt.figure(figsize=(8, 4))
+plt.plot(depths, train_aucs, label='Train AUC', color='steelblue')
+plt.plot(depths, test_aucs,  label='Test AUC',  color='coral')
+plt.xlabel('max_depth')
+plt.ylabel('AUC-ROC')
+plt.title('Tree Depth vs AUC: Overfitting Curve')
+plt.legend()
+plt.tight_layout()
+plt.savefig('tree_depth_auc.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+## Random Forest: Bagging with Feature Subsampling
+
+Random Forest extends bagging (bootstrap aggregating) by adding feature randomness. Each tree is trained on a bootstrap sample of the data, and at each split only a random subset of sqrt(n_features) features is considered. This decorrelates the trees — averaging uncorrelated errors reduces variance without increasing bias.
+
+OOB (out-of-bag) error: each bootstrap sample uses about 63.2% of the data. The remaining 37% — never seen by that tree — provides a free validation estimate without a separate validation set.
+
+```python
+rf = RandomForestClassifier(
+    n_estimators=300,
+    max_features='sqrt',         # Feature subsampling
+    min_samples_leaf=10,
+    class_weight='balanced',
+    oob_score=True,              # Free OOB validation
+    n_jobs=-1,
+    random_state=42
+)
+rf.fit(X_train, y_train)
+
+print(f"OOB AUC estimate: {roc_auc_score(y_train, rf.oob_decision_function_[:,1]):.4f}")
+print(f"Test AUC:         {roc_auc_score(y_test, rf.predict_proba(X_test)[:,1]):.4f}")
+
+# n_estimators vs performance: diminishing returns curve
+n_est_range = [10, 25, 50, 100, 200, 300, 500]
+oob_scores = []
+for n in n_est_range:
+    rf_tmp = RandomForestClassifier(n_estimators=n, max_features='sqrt',
+                                    oob_score=True, class_weight='balanced',
+                                    n_jobs=-1, random_state=42)
+    rf_tmp.fit(X_train, y_train)
+    oob_scores.append(roc_auc_score(y_train, rf_tmp.oob_decision_function_[:,1]))
+
+plt.figure(figsize=(8, 4))
+plt.plot(n_est_range, oob_scores, 'o-', color='steelblue')
+plt.xlabel('n_estimators')
+plt.ylabel('OOB AUC')
+plt.title('Random Forest: n_estimators vs OOB AUC (diminishing returns)')
+plt.tight_layout()
+plt.savefig('rf_n_estimators.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+### Feature Importance: Impurity-Based vs Permutation
+
+```python
+feature_names = [f'feature_{i}' for i in range(15)]
+
+# Impurity-based (mean decrease impurity): fast but biased toward high-cardinality features
+mdi_importance = pd.Series(rf.feature_importances_, index=feature_names).sort_values(ascending=False)
+
+# Permutation importance: shuffle one feature at a time and measure AUC drop
+# More reliable, especially when cardinality varies
+perm_imp = permutation_importance(rf, X_test, y_test, scoring='roc_auc',
+                                   n_repeats=10, random_state=42, n_jobs=-1)
+perm_importance = pd.Series(perm_imp.importances_mean, index=feature_names).sort_values(ascending=False)
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+mdi_importance.head(10).plot.barh(ax=axes[0], color='steelblue')
+axes[0].set_title('Impurity-Based Importance (MDI)\nFast but biased')
+axes[0].invert_yaxis()
+
+perm_importance.head(10).plot.barh(ax=axes[1], color='coral')
+axes[1].set_title('Permutation Importance\nSlower but unbiased')
+axes[1].invert_yaxis()
+
+plt.tight_layout()
+plt.savefig('feature_importance_comparison.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+## Gradient Boosting: Additive Residual Learning
+
+Gradient boosting builds an ensemble sequentially. Each new tree fits the **pseudo-residuals** — the gradient of the loss with respect to the current model's predictions. For MSE loss, pseudo-residuals are simply the residuals (y - y_hat). For log-loss, they are the differences between true labels and predicted probabilities.
+
+The final prediction is the sum of all trees' predictions, each weighted by the learning rate:
+
+F_m(x) = F_{m-1}(x) + learning_rate * h_m(x)
+
+A smaller learning rate requires more trees but generalises better (shrinkage regularisation).
+
+```python
+from sklearn.ensemble import GradientBoostingClassifier
+
+gbm = GradientBoostingClassifier(
+    n_estimators=300,
+    max_depth=4,
+    learning_rate=0.05,
+    subsample=0.8,        # Stochastic GBM: use 80% of data per tree
+    min_samples_leaf=20,
+    random_state=42
+)
+gbm.fit(X_train, y_train)
+
+# Staged predictions: AUC at each boosting round
+train_staged = list(gbm.staged_decision_function(X_train))
+test_staged  = list(gbm.staged_decision_function(X_test))
+
+train_auc_staged = [roc_auc_score(y_train, s[:,0]) for s in train_staged]
+test_auc_staged  = [roc_auc_score(y_test,  s[:,0]) for s in test_staged]
+
+plt.figure(figsize=(8, 4))
+plt.plot(train_auc_staged, label='Train AUC', color='steelblue')
+plt.plot(test_auc_staged,  label='Test AUC',  color='coral')
+plt.xlabel('Boosting round')
+plt.ylabel('AUC-ROC')
+plt.title('GBM Learning Curve: Learning Rate-n_estimators Tradeoff')
+plt.legend()
+plt.tight_layout()
+plt.savefig('gbm_learning_curve.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+print(f"GBM Test AUC: {roc_auc_score(y_test, gbm.predict_proba(X_test)[:,1]):.4f}")
+```
+
+## XGBoost: Regularised Gradient Boosting
+
+XGBoost extends gradient boosting with explicit regularisation (L1 and L2 on leaf weights and tree complexity), second-order gradient approximations, and highly optimised tree construction. It is typically 2-10x faster than sklearn's GBM and often achieves better generalisation.
+
+```python
+try:
+    import xgboost as xgb
+
+    xgb_model = xgb.XGBClassifier(
+        n_estimators=500,
+        max_depth=4,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,     # Feature subsampling per tree
+        gamma=1.0,                # Minimum loss reduction for split (complexity)
+        reg_alpha=0.1,            # L1 on leaf weights
+        reg_lambda=1.0,           # L2 on leaf weights
+        scale_pos_weight=y_train.value_counts()[0] / y_train.value_counts()[1]
+            if hasattr(y_train, 'value_counts')
+            else (y_train == 0).sum() / (y_train == 1).sum(),  # Imbalance correction
+        early_stopping_rounds=30,
+        eval_metric='auc',
+        use_label_encoder=False,
+        random_state=42,
+        n_jobs=-1
+    )
+
+    eval_set = [(X_train, y_train), (X_test, y_test)]
+    xgb_model.fit(X_train, y_train,
+                  eval_set=eval_set,
+                  verbose=False)
+
+    print(f"XGBoost Test AUC: {roc_auc_score(y_test, xgb_model.predict_proba(X_test)[:,1]):.4f}")
+    print(f"Best iteration:   {xgb_model.best_iteration}")
+
+except ImportError:
+    print("XGBoost not installed. Run: pip install xgboost")
+```
+
+### XGBoost Key Parameters
+
+- `max_depth` (3-6 typical): deeper trees learn more complex interactions but overfit faster
+- `learning_rate` (0.01-0.3): smaller requires more trees; use with `early_stopping_rounds`
+- `subsample` (0.6-0.9): fraction of training data per tree; adds stochasticity, reduces overfitting
+- `colsample_bytree` (0.6-1.0): fraction of features per tree; like Random Forest's max_features
+- `min_child_weight`: minimum sum of instance weights in a child node; higher prevents overfitting on small groups
+- `gamma`: minimum loss reduction required to make a split; acts like a complexity penalty
+- `scale_pos_weight`: ratio of negative to positive instances; critical for imbalanced classification
+- `early_stopping_rounds`: stop training when validation metric does not improve for N rounds
+
+## LightGBM vs XGBoost
+
+LightGBM (LGBM) uses **leaf-wise** tree growth: instead of growing all nodes at a given depth (level-wise like XGBoost), it grows the leaf with the maximum loss reduction. This typically produces better accuracy with the same number of leaves, but requires careful tuning of `num_leaves` and `min_data_in_leaf` to prevent overfitting.
+
+```python
+try:
+    import lightgbm as lgb
+
+    lgbm_model = lgb.LGBMClassifier(
+        n_estimators=500,
+        num_leaves=31,            # Max number of leaves — key parameter
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        min_child_samples=20,     # min_data_in_leaf — prevents overfit on small leaves
+        class_weight='balanced',
+        random_state=42,
+        n_jobs=-1,
+        verbose=-1
+    )
+    lgbm_model.fit(X_train, y_train,
+                   eval_set=[(X_test, y_test)],
+                   callbacks=[lgb.early_stopping(30, verbose=False),
+                               lgb.log_evaluation(period=-1)])
+
+    print(f"LightGBM Test AUC: {roc_auc_score(y_test, lgbm_model.predict_proba(X_test)[:,1]):.4f}")
+
+    # Speed comparison (not run here, but LightGBM is typically 3-10x faster than XGBoost)
+    print("LightGBM is typically 3-10x faster than XGBoost on large datasets")
+    print("due to histogram-based split finding and leaf-wise growth.")
+
+except ImportError:
+    print("LightGBM not installed. Run: pip install lightgbm")
+```
+
+## Support Vector Machines
+
+SVMs find the hyperplane that maximises the margin — the distance between the hyperplane and the nearest training points (support vectors) from each class. The soft-margin SVM allows some misclassification, controlled by the parameter C:
+
+- Large C: small margin tolerance, fewer misclassifications on training data (risk: overfit)
+- Small C: larger margin, more misclassifications allowed (risk: underfit)
+
+The **kernel trick** maps data to higher-dimensional spaces without computing the mapping explicitly, allowing nonlinear decision boundaries. The RBF kernel measures Gaussian similarity between points.
+
+```python
+# SVM shines on small-to-medium datasets with high-dimensional features
+# Generate a cleaner dataset (SVMs struggle with very noisy data)
+X_svm, y_svm = make_moons(n_samples=400, noise=0.2, random_state=42)
+X_tr_s, X_te_s, y_tr_s, y_te_s = train_test_split(X_svm, y_svm, test_size=0.2, random_state=42)
+
+scaler_svm = StandardScaler()
+X_tr_ss = scaler_svm.fit_transform(X_tr_s)
+X_te_ss  = scaler_svm.transform(X_te_s)
+
+# Linear SVM (kernel='linear')
+svm_linear = SVC(kernel='linear', C=1.0, probability=True)
+svm_linear.fit(X_tr_ss, y_tr_s)
+print(f"SVM Linear AUC: {roc_auc_score(y_te_s, svm_linear.predict_proba(X_te_ss)[:,1]):.4f}")
+
+# RBF SVM (kernel='rbf') — handles nonlinear boundaries
+svm_rbf = SVC(kernel='rbf', C=5.0, gamma='scale', probability=True)
+svm_rbf.fit(X_tr_ss, y_tr_s)
+print(f"SVM RBF AUC:    {roc_auc_score(y_te_s, svm_rbf.predict_proba(X_te_ss)[:,1]):.4f}")
+
+# Visualise decision boundaries
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+xx, yy = np.meshgrid(np.linspace(-3, 3, 200), np.linspace(-3, 3, 200))
+grid = np.c_[xx.ravel(), yy.ravel()]
+
+for ax, (model, title) in zip(axes, [(svm_linear, 'SVM Linear'), (svm_rbf, 'SVM RBF')]):
+    Z = model.predict_proba(grid)[:, 1].reshape(xx.shape)
+    ax.contourf(xx, yy, Z, levels=20, cmap='RdBu_r', alpha=0.7)
+    ax.scatter(X_te_ss[:, 0], X_te_ss[:, 1], c=y_te_s,
+               cmap='RdBu', edgecolors='white', s=50, linewidth=0.5)
+    ax.set_title(title)
+
+plt.tight_layout()
+plt.savefig('svm_boundaries.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+SVM shines when: feature count is large relative to sample count (text classification), the data is relatively free of noise, and kernel tricks are needed for nonlinear boundaries. SVM struggles when: n is very large (training is O(n^2) to O(n^3)), class imbalance is severe, or probability estimates (not just predictions) are needed.
+
+## Handling Class Imbalance
+
+The 3% fraud rate in our dataset means a model that predicts "no fraud" for everything achieves 97% accuracy. This is useless. Three main strategies exist.
+
+```python
+# Strategy 1: class_weight='balanced'
+# Internally weights each sample by inverse class frequency
+rf_balanced = RandomForestClassifier(
+    n_estimators=200, class_weight='balanced', random_state=42, n_jobs=-1
+)
+rf_balanced.fit(X_train, y_train)
+print("Balanced weights RF:")
+print(classification_report(y_test, rf_balanced.predict(X_test), target_names=['legit', 'fraud']))
+
+# Strategy 2: SMOTE (Synthetic Minority Oversampling Technique)
+try:
+    from imblearn.over_sampling import SMOTE
+    from imblearn.pipeline import Pipeline as ImbPipeline
+
+    smote_pipe = ImbPipeline([
+        ('smote', SMOTE(random_state=42, k_neighbors=5)),
+        ('rf', RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1))
+    ])
+    smote_pipe.fit(X_train, y_train)
+    print("\nSMOTE + RF:")
+    print(classification_report(y_test, smote_pipe.predict(X_test), target_names=['legit', 'fraud']))
+
+except ImportError:
+    print("imbalanced-learn not installed. Run: pip install imbalanced-learn")
+
+# Strategy 3: Threshold tuning via Precision-Recall curve
+rf_proba = rf_balanced.predict_proba(X_test)[:, 1]
+precisions, recalls, thresholds = precision_recall_curve(y_test, rf_proba)
+f1_scores = 2 * precisions * recalls / (precisions + recalls + 1e-8)
+best_threshold_idx = f1_scores.argmax()
+best_threshold = thresholds[best_threshold_idx]
+
+print(f"\nDefault threshold (0.5): "
+      f"Precision={precisions[np.searchsorted(thresholds, 0.5)]:.3f}, "
+      f"Recall={recalls[np.searchsorted(thresholds, 0.5)]:.3f}")
+print(f"Optimal threshold ({best_threshold:.3f}): "
+      f"Precision={precisions[best_threshold_idx]:.3f}, "
+      f"Recall={recalls[best_threshold_idx]:.3f}, "
+      f"F1={f1_scores[best_threshold_idx]:.3f}")
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+axes[0].plot(recalls, precisions, color='steelblue', linewidth=2)
+axes[0].axvline(recalls[best_threshold_idx], color='red', linestyle='--',
+                label=f'Best F1 threshold={best_threshold:.2f}')
+axes[0].set_xlabel('Recall')
+axes[0].set_ylabel('Precision')
+axes[0].set_title(f'PR Curve (AUC={average_precision_score(y_test, rf_proba):.3f})')
+axes[0].legend()
+
+thresholds_plot = np.append(thresholds, 1)
+axes[1].plot(thresholds_plot, precisions, label='Precision', color='coral')
+axes[1].plot(thresholds_plot, recalls, label='Recall', color='steelblue')
+axes[1].plot(thresholds_plot, f1_scores, label='F1', color='green')
+axes[1].axvline(best_threshold, color='black', linestyle='--', alpha=0.5)
+axes[1].set_xlabel('Decision threshold')
+axes[1].set_ylabel('Score')
+axes[1].set_title('Threshold Tuning: Precision/Recall/F1')
+axes[1].legend()
+
+plt.tight_layout()
+plt.savefig('threshold_tuning.png', dpi=150, bbox_inches='tight')
+plt.show()
+```
+
+## Probability Calibration
+
+Many classifiers (especially trees and SVMs with probability=True) produce poorly calibrated probabilities. A score of 0.7 from an uncalibrated model does not mean P(positive | score=0.7) = 0.7. Calibration fixes this.
+
+```python
+from sklearn.calibration import CalibratedClassifierCV, CalibrationDisplay
+
+# Raw decision tree — tends to produce extreme probabilities (0 or 1)
+dt_uncal = DecisionTreeClassifier(max_depth=5, class_weight='balanced', random_state=42)
+dt_uncal.fit(X_train, y_train)
+
+# Platt scaling (sigmoid calibration — works well for SVM-like models)
+dt_platt = CalibratedClassifierCV(dt_uncal, method='sigmoid', cv=5)
+dt_platt.fit(X_train, y_train)
+
+# Isotonic regression (non-parametric — more flexible, needs more data)
+dt_iso = CalibratedClassifierCV(
+    DecisionTreeClassifier(max_depth=5, class_weight='balanced', random_state=42),
+    method='isotonic', cv=5
+)
+dt_iso.fit(X_train, y_train)
+
+fig, ax = plt.subplots(figsize=(7, 5))
+
+for model, name, color in [
+    (dt_uncal, 'Uncalibrated Tree', 'red'),
+    (dt_platt, 'Platt Scaling',     'steelblue'),
+    (dt_iso,   'Isotonic',          'green'),
+    (rf,       'Random Forest',     'orange'),
+]:
+    try:
+        proba = model.predict_proba(X_test)[:, 1]
+        fraction_of_positives, mean_predicted = calibration_curve(y_test, proba, n_bins=10)
+        ax.plot(mean_predicted, fraction_of_positives, 'o-', label=name, color=color)
+    except Exception:
+        pass
+
+ax.plot([0, 1], [0, 1], 'k--', label='Perfectly calibrated')
+ax.set_xlabel('Mean predicted probability')
+ax.set_ylabel('Fraction of positives')
+ax.set_title('Calibration Curves (Reliability Diagrams)')
+ax.legend(fontsize=8)
+plt.tight_layout()
+plt.savefig('calibration_curves.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+print("\nCalibration matters when:")
+print("- You need to rank predictions by probability")
+print("- Downstream systems use probabilities as inputs")
+print("- You compare predicted probability to a business threshold")
+```
+
+## Key Takeaways
+
+- Decision trees split greedily by maximising information gain (entropy) or minimising Gini impurity; they overfit easily and require regularisation via max_depth, min_samples_leaf, and min_samples_split.
+- Random Forest reduces variance by averaging decorrelated trees (bootstrap sampling plus feature subsampling); OOB error is a free cross-validated accuracy estimate; permutation importance is more reliable than impurity-based importance for feature selection.
+- Gradient boosting fits pseudo-residuals sequentially; the learning_rate-n_estimators tradeoff is managed by using a small learning rate with early stopping rather than grid searching n_estimators directly.
+- XGBoost adds L1/L2 regularisation, second-order gradient approximations, and column subsampling; scale_pos_weight and early_stopping_rounds are critical for imbalanced data; LightGBM's leaf-wise growth is faster on large datasets.
+- SVMs maximise the margin between classes; the C parameter controls the bias-variance tradeoff; the RBF kernel handles nonlinear boundaries; SVMs are best on small-medium, high-dimensional datasets and struggle with large n.
+- Class imbalance requires explicit handling: class_weight='balanced', SMOTE oversampling, or threshold tuning via the precision-recall curve — never rely on accuracy as the metric.
+- Probability calibration (Platt scaling or isotonic regression) aligns model scores with true probabilities; uncalibrated scores from trees or SVMs should not be used as probabilities in downstream systems.
+- Choosing the right algorithm depends on dataset size, feature dimensionality, class balance, whether probabilities are needed, and training time constraints — no single algorithm wins universally.

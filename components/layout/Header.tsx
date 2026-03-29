@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
-import { Menu, X, Zap } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Menu, X, Zap, Search } from "lucide-react";
 import { AuthButton } from "@/components/auth/AuthButton";
+import { SearchModal } from "@/components/layout/SearchModal";
 
 const nav = [
   { label: "Learn", href: "/learn" },
@@ -19,6 +20,19 @@ const nav = [
 export function Header() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // ⌘K / Ctrl+K opens search
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   return (
     <header
@@ -71,6 +85,19 @@ export function Header() {
 
         {/* CTA + Auth */}
         <div className="hidden md:flex items-center gap-3">
+          <button
+            onClick={() => setSearchOpen(true)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-all"
+            style={{
+              background: "var(--color-bg-elevated)",
+              border: "1px solid var(--color-border-subtle)",
+              color: "var(--color-text-muted)",
+            }}
+          >
+            <Search className="h-3.5 w-3.5" />
+            <span>Search</span>
+            <kbd className="text-xs px-1 py-0.5 rounded ml-1" style={{ background: "var(--color-bg-surface)", border: "1px solid var(--color-border-subtle)", color: "var(--color-text-disabled)" }}>⌘K</kbd>
+          </button>
           <AuthButton />
           <Link
             href="/playground"
@@ -84,6 +111,9 @@ export function Header() {
             Try Playground
           </Link>
         </div>
+
+        {/* Search modal */}
+        <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
 
         {/* Mobile hamburger */}
         <button

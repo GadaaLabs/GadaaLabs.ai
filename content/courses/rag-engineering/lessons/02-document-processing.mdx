@@ -1,0 +1,585 @@
+---
+title: "Document Processing & Ingestion Pipelines"
+description: "Extract clean text from PDF, DOCX, and HTML sources. Handle tables, multi-column layouts, headers and footers, and PII. Build a DocumentProcessor class that returns structured Document objects with rich metadata."
+duration: 24
+order: 2
+---
+
+## Why Document Processing Quality Determines Your RAG Ceiling
+
+A RAG system is only as good as the text it indexes. If your extraction pipeline produces garbled text — merged words from hyphenation, repeated page headers mixed into body text, table cells concatenated without delimiters — then every downstream component (chunking, embedding, retrieval) operates on corrupted input.
+
+Document processing is unglamorous work. It is also the most commonly neglected stage in RAG engineering. Teams spend weeks tuning embedding models and retrieval parameters only to discover that their PDF extraction is producing text like `"Therevenuegrew14%year-over-year"` because line breaks were not handled correctly.
+
+The rule is simple: garbage in, garbage out. Fix the input quality first and you get a free boost at every downstream stage.
+
+## PDF Extraction
+
+PDFs are the dominant format for enterprise documents — contracts, research papers, technical manuals, financial reports. Unfortunately, PDF is a visual format, not a semantic one. The PDF specification describes how to place glyphs at coordinates on a page. It does not describe paragraphs, sentences, or reading order. Extracting text from a PDF is fundamentally a reconstruction problem.
+
+### Three PDF Libraries Compared
+
+```python
+# Library 1: pdfplumber — best for tables and structured layout
+import pdfplumber
+
+def extract_with_pdfplumber(path: str) -> dict:
+    pages = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text(x_tolerance=3, y_tolerance=3) or ""
+            tables = page.extract_tables()
+            pages.append({"text": text, "tables": tables})
+    return {"pages": pages, "source": "pdfplumber"}
+
+# Library 2: PyMuPDF (fitz) — fastest, good text, limited table support
+import fitz  # pip install pymupdf
+
+def extract_with_pymupdf(path: str) -> dict:
+    doc = fitz.open(path)
+    pages = []
+    for page in doc:
+        text = page.get_text("text")
+        pages.append({"text": text})
+    doc.close()
+    return {"pages": pages, "source": "pymupdf"}
+
+# Library 3: pypdf — pure Python, slowest, limited table support
+from pypdf import PdfReader
+
+def extract_with_pypdf(path: str) -> dict:
+    reader = PdfReader(path)
+    pages = []
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        pages.append({"text": text})
+    return {"pages": pages, "source": "pypdf"}
+```
+
+| Library | Speed | Table extraction | Multi-column | Install size | Best for |
+|---|---|---|---|---|---|
+| pdfplumber | Slow | Excellent | Good | Medium | Structured reports, financial PDFs |
+| PyMuPDF | Fast | Basic | Excellent | Large | High-volume ingestion, scanned PDFs |
+| pypdf | Slowest | Poor | Poor | Small | Simple single-column documents |
+
+For most enterprise RAG pipelines, pdfplumber is the right default choice. Its table extraction and layout analysis are far superior to the alternatives. Use PyMuPDF when throughput is critical and tables are rare.
+
+### Extracting Tables from PDFs
+
+Tables in PDFs are frequently the most information-dense content. Losing them or extracting them as unstructured text destroys their value. pdfplumber can extract tables as Python lists that you can convert to Markdown for better LLM comprehension.
+
+```python
+def table_to_markdown(table: list[list]) -> str:
+    """Convert a pdfplumber table (list of lists) to Markdown format."""
+    if not table or not table[0]:
+        return ""
+
+    # Clean None values
+    cleaned = [[cell or "" for cell in row] for row in table]
+
+    # Build header row
+    header = "| " + " | ".join(cleaned[0]) + " |"
+    separator = "| " + " | ".join(["---"] * len(cleaned[0])) + " |"
+    rows = ["| " + " | ".join(row) + " |" for row in cleaned[1:]]
+
+    return "\n".join([header, separator] + rows)
+
+def extract_pdf_with_tables(path: str) -> list[dict]:
+    """Extract text and tables, converting tables to Markdown."""
+    extracted_pages = []
+
+    with pdfplumber.open(path) as pdf:
+        for page_num, page in enumerate(pdf.pages):
+            # Get table bounding boxes to exclude from text extraction
+            tables = page.extract_tables()
+            table_bboxes = [tbl.bbox for tbl in page.find_tables()]
+
+            # Extract text outside table regions
+            if table_bboxes:
+                non_table_page = page
+                for bbox in table_bboxes:
+                    non_table_page = non_table_page.outside_bbox(bbox)
+                text = non_table_page.extract_text() or ""
+            else:
+                text = page.extract_text() or ""
+
+            # Convert tables to Markdown
+            table_texts = [table_to_markdown(t) for t in tables]
+
+            extracted_pages.append({
+                "page_number": page_num + 1,
+                "text": text,
+                "tables": table_texts,
+            })
+
+    return extracted_pages
+```
+
+### Handling Multi-Column PDFs
+
+Academic papers and newspaper-style documents use multi-column layouts. A naive extraction reads across columns left-to-right, producing garbled text that mixes column A with column B. The fix is to detect columns by clustering text blocks by their x-coordinate and then reading each column top-to-bottom.
+
+```python
+def detect_and_extract_columns(page) -> str:
+    """
+    Detect multi-column layout and extract columns in reading order.
+    Works with pdfplumber page objects.
+    """
+    words = page.extract_words(x_tolerance=3, y_tolerance=3)
+    if not words:
+        return ""
+
+    # Find the horizontal midpoint of the page
+    page_mid = page.width / 2
+
+    # Group words into left and right columns
+    left_words = [w for w in words if w["x0"] < page_mid - 20]
+    right_words = [w for w in words if w["x0"] >= page_mid - 20]
+
+    # If column split is lopsided, it's probably single column
+    left_count = len(left_words)
+    right_count = len(right_words)
+    if min(left_count, right_count) < 0.2 * max(left_count, right_count):
+        return page.extract_text() or ""
+
+    # Sort each column top-to-bottom, then left-to-right within a line
+    def words_to_text(words_list: list[dict]) -> str:
+        sorted_words = sorted(words_list, key=lambda w: (round(w["top"] / 5) * 5, w["x0"]))
+        lines = []
+        current_line_top = None
+        current_line = []
+        for word in sorted_words:
+            line_top = round(word["top"] / 5) * 5
+            if current_line_top is None or abs(line_top - current_line_top) > 5:
+                if current_line:
+                    lines.append(" ".join(current_line))
+                current_line = [word["text"]]
+                current_line_top = line_top
+            else:
+                current_line.append(word["text"])
+        if current_line:
+            lines.append(" ".join(current_line))
+        return "\n".join(lines)
+
+    left_text = words_to_text(left_words)
+    right_text = words_to_text(right_words)
+    return left_text + "\n\n" + right_text
+```
+
+## Word / DOCX Extraction
+
+DOCX files have a clean semantic structure: headings, paragraphs, tables, lists. The `python-docx` library exposes this structure directly. The key challenge is preserving the heading hierarchy so that you can include section context in chunk metadata.
+
+```python
+from docx import Document as DocxDocument
+from dataclasses import dataclass, field
+
+@dataclass
+class Section:
+    level: int
+    title: str
+    content: str
+
+def extract_docx(path: str) -> list[Section]:
+    """
+    Extract a DOCX file preserving heading hierarchy.
+    Returns a flat list of sections, each with its heading level and text.
+    """
+    doc = DocxDocument(path)
+    sections = []
+    current_section = None
+
+    for para in doc.paragraphs:
+        style_name = para.style.name
+
+        if style_name.startswith("Heading"):
+            # Save previous section
+            if current_section:
+                sections.append(current_section)
+            level = int(style_name.split()[-1]) if style_name.split()[-1].isdigit() else 1
+            current_section = Section(level=level, title=para.text, content="")
+        else:
+            text = para.text.strip()
+            if text and current_section:
+                current_section.content += text + "\n"
+            elif text:
+                # Content before any heading
+                if not sections:
+                    current_section = Section(level=0, title="Introduction", content="")
+                if current_section:
+                    current_section.content += text + "\n"
+
+    if current_section:
+        sections.append(current_section)
+
+    return sections
+
+def extract_docx_tables(path: str) -> list[str]:
+    """Extract tables from DOCX as Markdown."""
+    doc = DocxDocument(path)
+    tables = []
+    for table in doc.tables:
+        rows = []
+        for i, row in enumerate(table.rows):
+            cells = [cell.text.strip() for cell in row.cells]
+            rows.append("| " + " | ".join(cells) + " |")
+            if i == 0:
+                rows.append("| " + " | ".join(["---"] * len(cells)) + " |")
+        tables.append("\n".join(rows))
+    return tables
+```
+
+## HTML Extraction
+
+Web pages contain substantial boilerplate — navigation bars, headers, footers, cookie banners, advertisement iframes, scripts, and styles. Naively converting HTML to text includes all of this noise. The goal is to extract the main content while preserving semantic structure.
+
+```python
+from bs4 import BeautifulSoup
+import re
+
+# Tags that are purely presentational or non-content
+NOISE_TAGS = {
+    "script", "style", "nav", "header", "footer", "aside",
+    "advertisement", "figure", "noscript", "iframe", "form",
+}
+
+# Tags that carry semantic meaning and should be preserved
+SEMANTIC_TAGS = {
+    "h1", "h2", "h3", "h4", "h5", "h6",
+    "p", "li", "td", "th", "blockquote", "pre", "code",
+}
+
+def extract_html(html: str, base_url: str = "") -> dict:
+    """
+    Extract clean text from HTML, removing navigation and boilerplate.
+    Returns {"text": str, "title": str, "headings": list[str]}.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Remove noise tags
+    for tag in soup.find_all(NOISE_TAGS):
+        tag.decompose()
+
+    # Extract title
+    title = ""
+    if soup.title:
+        title = soup.title.get_text(strip=True)
+    elif soup.find("h1"):
+        title = soup.find("h1").get_text(strip=True)
+
+    # Extract headings for metadata
+    headings = [h.get_text(strip=True) for h in soup.find_all(["h1", "h2", "h3"])]
+
+    # Find the main content area (heuristic: largest text block)
+    main = (
+        soup.find("main")
+        or soup.find("article")
+        or soup.find(id=re.compile(r"content|main|body", re.I))
+        or soup.find("body")
+        or soup
+    )
+
+    # Extract text with line breaks between block elements
+    text_parts = []
+    for element in main.descendants:
+        if element.name in SEMANTIC_TAGS:
+            text = element.get_text(separator=" ", strip=True)
+            if text:
+                text_parts.append(text)
+
+    text = "\n\n".join(text_parts)
+
+    return {"text": text, "title": title, "headings": headings, "url": base_url}
+```
+
+## Post-Extraction Cleaning
+
+Raw extracted text almost always requires cleaning before chunking. The most common issues are:
+
+```python
+import re
+from collections import Counter
+
+def remove_headers_footers(pages: list[str]) -> list[str]:
+    """
+    Detect and remove repeated strings (page headers/footers) across pages.
+    A string is a header/footer if it appears in more than 60% of pages.
+    """
+    if len(pages) < 3:
+        return pages
+
+    # Collect the first and last line of each page as candidates
+    candidates = Counter()
+    for page in pages:
+        lines = [l.strip() for l in page.split("\n") if l.strip()]
+        if lines:
+            candidates[lines[0]] += 1
+        if len(lines) > 1:
+            candidates[lines[-1]] += 1
+
+    threshold = len(pages) * 0.6
+    repeated = {text for text, count in candidates.items() if count >= threshold and len(text) > 5}
+
+    cleaned = []
+    for page in pages:
+        lines = page.split("\n")
+        filtered = [l for l in lines if l.strip() not in repeated]
+        cleaned.append("\n".join(filtered))
+
+    return cleaned
+
+def fix_hyphenation(text: str) -> str:
+    """Rejoin words split by hyphenation at line breaks (e.g. 'retriev-\nal' -> 'retrieval')."""
+    return re.sub(r"(\w)-\n(\w)", r"\1\2", text)
+
+def normalise_whitespace(text: str) -> str:
+    """Collapse multiple spaces/tabs to single space, normalise line endings."""
+    text = re.sub(r"[ \t]+", " ", text)         # multiple spaces/tabs -> single space
+    text = re.sub(r"\n{3,}", "\n\n", text)       # 3+ newlines -> double newline
+    text = re.sub(r" \n", "\n", text)            # trailing spaces before newline
+    return text.strip()
+
+def remove_boilerplate(text: str) -> str:
+    """Remove common boilerplate sections."""
+    boilerplate_patterns = [
+        r"Table of Contents.*?(?=\n\n)",
+        r"This page intentionally left blank",
+        r"Copyright ©.*?(?=\n)",
+        r"All rights reserved.*?(?=\n)",
+        r"Confidential.*?(?=\n)",
+    ]
+    for pattern in boilerplate_patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
+    return text
+
+def clean_text(text: str) -> str:
+    """Apply all cleaning steps in sequence."""
+    text = fix_hyphenation(text)
+    text = remove_boilerplate(text)
+    text = normalise_whitespace(text)
+    return text
+```
+
+## Metadata Extraction
+
+Every Document object should carry rich metadata. At retrieval time, metadata enables filtering (only search documents from this date range, this department, this product version). It also enables citations — showing users where the answer came from.
+
+```python
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Optional
+import hashlib
+
+@dataclass
+class Document:
+    """A processed document ready for chunking."""
+    id: str
+    text: str
+    source_path: str
+    format: str                         # "pdf", "docx", "html"
+    title: str = ""
+    author: str = ""
+    date: Optional[datetime] = None
+    url: str = ""
+    section_path: list[str] = field(default_factory=list)  # e.g. ["Chapter 2", "Section 2.3"]
+    page_number: Optional[int] = None
+    metadata: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not self.id:
+            # Generate a stable ID from content hash + source
+            content_hash = hashlib.md5(self.text.encode()).hexdigest()[:8]
+            self.id = f"{self.source_path}-{content_hash}"
+
+def extract_pdf_metadata(path: str) -> dict:
+    """Extract PDF metadata from document properties."""
+    with pdfplumber.open(path) as pdf:
+        meta = pdf.metadata or {}
+        return {
+            "title": meta.get("Title", ""),
+            "author": meta.get("Author", ""),
+            "creation_date": meta.get("CreationDate", ""),
+            "subject": meta.get("Subject", ""),
+        }
+```
+
+## The DocumentProcessor Class
+
+Bringing everything together into a single class with format detection and async batch processing:
+
+```python
+import asyncio
+import aiofiles
+from pathlib import Path
+from typing import AsyncIterator
+import httpx
+
+class DocumentProcessor:
+    """
+    Accepts a file path or URL, detects format, extracts text + metadata,
+    and returns a list of Document objects (one per page or section).
+    """
+
+    SUPPORTED_FORMATS = {".pdf", ".docx", ".doc", ".html", ".htm", ".txt"}
+
+    def process_file(self, path: str) -> list[Document]:
+        p = Path(path)
+        suffix = p.suffix.lower()
+
+        if suffix not in self.SUPPORTED_FORMATS:
+            raise ValueError(f"Unsupported format: {suffix}")
+
+        if suffix == ".pdf":
+            return self._process_pdf(path)
+        elif suffix in {".docx", ".doc"}:
+            return self._process_docx(path)
+        elif suffix in {".html", ".htm"}:
+            return self._process_html(path)
+        elif suffix == ".txt":
+            return self._process_txt(path)
+
+    def _process_pdf(self, path: str) -> list[Document]:
+        meta = extract_pdf_metadata(path)
+        pages = extract_pdf_with_tables(path)
+        page_texts = remove_headers_footers([p["text"] for p in pages])
+
+        documents = []
+        for i, (page_data, cleaned_text) in enumerate(zip(pages, page_texts)):
+            full_text = cleaned_text
+            # Append tables as Markdown after the page text
+            for table_md in page_data["tables"]:
+                if table_md:
+                    full_text += "\n\n" + table_md
+
+            full_text = clean_text(full_text)
+            if not full_text.strip():
+                continue
+
+            documents.append(Document(
+                id=f"{path}-page-{i+1}",
+                text=full_text,
+                source_path=path,
+                format="pdf",
+                title=meta.get("title", Path(path).stem),
+                author=meta.get("author", ""),
+                page_number=i + 1,
+            ))
+
+        return documents
+
+    def _process_docx(self, path: str) -> list[Document]:
+        sections = extract_docx(path)
+        documents = []
+        for section in sections:
+            text = clean_text(section.content)
+            if not text.strip():
+                continue
+            documents.append(Document(
+                id=f"{path}-section-{section.title[:30]}",
+                text=text,
+                source_path=path,
+                format="docx",
+                title=section.title,
+                section_path=[section.title],
+            ))
+        return documents
+
+    def _process_html(self, path: str) -> list[Document]:
+        with open(path, "r", encoding="utf-8") as f:
+            html = f.read()
+        result = extract_html(html, base_url=f"file://{path}")
+        text = clean_text(result["text"])
+        return [Document(
+            id=path,
+            text=text,
+            source_path=path,
+            format="html",
+            title=result["title"],
+            url=result["url"],
+        )]
+
+    def _process_txt(self, path: str) -> list[Document]:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        text = clean_text(text)
+        return [Document(
+            id=path,
+            text=text,
+            source_path=path,
+            format="txt",
+            title=Path(path).stem,
+        )]
+
+    async def process_url(self, url: str) -> list[Document]:
+        """Fetch a URL and extract its content."""
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "")
+            if "html" in content_type:
+                result = extract_html(response.text, base_url=url)
+                text = clean_text(result["text"])
+                return [Document(
+                    id=url,
+                    text=text,
+                    source_path=url,
+                    format="html",
+                    title=result["title"],
+                    url=url,
+                )]
+        return []
+
+    async def process_batch(
+        self, paths: list[str], max_concurrent: int = 8
+    ) -> AsyncIterator[Document]:
+        """Process a large collection of files concurrently."""
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def process_one(path: str) -> list[Document]:
+            async with semaphore:
+                loop = asyncio.get_event_loop()
+                return await loop.run_in_executor(None, self.process_file, path)
+
+        tasks = [process_one(p) for p in paths]
+        for coro in asyncio.as_completed(tasks):
+            docs = await coro
+            for doc in docs:
+                yield doc
+```
+
+## Running the Processor
+
+```python
+import asyncio
+
+async def main():
+    processor = DocumentProcessor()
+
+    # Single file
+    docs = processor.process_file("/data/technical-manual.pdf")
+    print(f"Extracted {len(docs)} pages from PDF")
+    for doc in docs[:2]:
+        print(f"  Page {doc.page_number}: {len(doc.text)} chars")
+
+    # Batch of files
+    pdf_files = list(Path("/data/corpus/").glob("**/*.pdf"))
+    all_docs = []
+    async for doc in processor.process_batch([str(f) for f in pdf_files]):
+        all_docs.append(doc)
+        if len(all_docs) % 100 == 0:
+            print(f"Processed {len(all_docs)} documents...")
+
+    print(f"Total: {len(all_docs)} documents ready for chunking")
+
+asyncio.run(main())
+```
+
+## Key Takeaways
+
+- Document processing quality sets the ceiling for all downstream RAG performance — corrupted or garbled text cannot be recovered by better embedding models or retrieval algorithms
+- For PDFs, pdfplumber is the best default choice: it handles tables, multi-column layouts, and structured PDFs better than PyMuPDF or pypdf, though PyMuPDF is faster for high-volume ingestion without tables
+- Always convert tables to Markdown format before indexing — this preserves the relational structure that row-by-row text extraction destroys
+- Multi-column PDFs (common in academic papers) require column detection; naive extraction merges columns and produces garbled text
+- Post-extraction cleaning is mandatory: fix hyphenation, remove repeated headers and footers, normalise whitespace, and strip boilerplate
+- Every Document object should carry rich metadata (title, author, date, page number, section path, source URL) to enable filtering at retrieval time and citation in answers
+- Async batch processing with a concurrency semaphore is the right pattern for large document collections — it saturates CPU and I/O without overwhelming system resources
