@@ -1,0 +1,628 @@
+---
+title: "GitHub Actions — Automate Everything"
+description: "Understand GitHub Actions from first principles: workflows, jobs, steps, actions, runners, triggers, and how to write your first workflow. Learn to use marketplace actions and read workflow run logs."
+duration: 26
+order: 9
+---
+
+## What GitHub Actions Is
+
+GitHub Actions is an event-driven automation platform built directly into GitHub. It executes arbitrary code in response to events that happen in your repository: a push to a branch, a pull request being opened, an issue being labeled, a release being published, a schedule, or a manual trigger.
+
+The practical effect is enormous: every aspect of your software delivery process can be automated. Tests run automatically on every PR. Code is deployed to production as soon as it merges. A release draft is created when a tag is pushed. Dependencies are kept up to date without manual intervention. Security scans run on every commit. Changelogs are generated. Notifications are sent. Documentation is built and published. All of this happens without human coordination, running on infrastructure GitHub provides for free (within limits) or on your own servers.
+
+GitHub Actions is not unique — Jenkins, CircleCI, GitLab CI, and others solve similar problems. But Actions is tightly integrated with GitHub's event system, has a massive marketplace of pre-built automation components, and is the default choice for any project hosted on GitHub.
+
+---
+
+## Core Concepts
+
+Understanding Actions requires understanding its five core abstractions:
+
+### Workflows
+
+A **workflow** is an automated process defined in a YAML file. Workflows live in `.github/workflows/` in your repository. Every `.yml` or `.yaml` file in that directory is a workflow.
+
+A workflow specifies:
+- **When** it runs (the trigger/event)
+- **What** it runs (jobs containing steps)
+
+You can have multiple workflow files — common patterns: one for CI, one for deployment, one for automated releases, one for scheduled maintenance.
+
+### Jobs
+
+A **job** is a set of steps that run on a single runner (a virtual machine). Jobs in the same workflow run in parallel by default. You can make jobs sequential using the `needs` keyword.
+
+Each job starts with a fresh runner environment — there is no shared state between jobs unless you explicitly use artifacts to pass data.
+
+### Steps
+
+A **step** is an individual task within a job. Steps run sequentially within a job, sharing the same runner's filesystem and environment variables.
+
+A step is either:
+- A **shell command** (`run: npm test`)
+- An **action** (`uses: actions/checkout@v4`)
+
+### Actions
+
+An **action** is a reusable unit of automation packaged as a repository. Actions are the building blocks of workflows — instead of writing shell commands for common tasks, you use actions that someone else has already written and tested.
+
+Actions can be:
+- **JavaScript actions** — run directly on the runner
+- **Docker container actions** — run in a Docker container
+- **Composite actions** — combine other actions and shell commands
+
+The GitHub Actions Marketplace at [github.com/marketplace?type=actions](https://github.com/marketplace?type=actions) hosts thousands of community-built actions.
+
+### Runners
+
+A **runner** is the virtual machine that executes a job. GitHub provides hosted runners:
+
+- `ubuntu-latest` (Linux) — fastest and most commonly used
+- `windows-latest` (Windows)
+- `macos-latest` (macOS) — slower and consumes more usage minutes
+
+GitHub also supports **self-hosted runners** — VMs or physical machines you control, registered to run jobs. Self-hosted runners are used when:
+- You need access to private network resources
+- You need specific hardware (GPUs, ARM processors)
+- You want to avoid GitHub's per-minute charges at scale
+
+---
+
+## Workflow File Anatomy
+
+Every workflow file follows the same top-level structure:
+
+```yaml
+name: CI               # Display name in the GitHub UI (optional but helpful)
+
+on:                    # Trigger definition
+  push:
+    branches: [main]
+
+jobs:                  # One or more jobs
+  test:                # Job ID (used in needs: references)
+    runs-on: ubuntu-latest   # Runner type
+    steps:             # Sequential steps
+      - uses: actions/checkout@v4
+      - run: npm test
+```
+
+---
+
+## Triggers
+
+The `on:` key defines when the workflow runs. Most workflows use one or more of these triggers:
+
+### push
+
+Runs when commits are pushed to the repository:
+
+```yaml
+on:
+  push:
+    branches: [main, develop]      # Only on these branches
+    tags: ['v*']                   # Also when a version tag is pushed
+    paths:                         # Only when these paths change
+      - 'src/**'
+      - 'package.json'
+    paths-ignore:                  # Ignore changes to these paths
+      - 'docs/**'
+      - '*.md'
+```
+
+### pull_request
+
+Runs when PR-related events occur:
+
+```yaml
+on:
+  pull_request:
+    branches: [main]               # Only for PRs targeting main
+    types:                         # Only for these PR events
+      - opened                     # New PR opened
+      - synchronize                # New commits pushed to PR branch
+      - reopened                   # Closed PR reopened
+      - ready_for_review           # Draft PR marked ready
+```
+
+By default, `pull_request` triggers on `opened`, `synchronize`, and `reopened` — sufficient for most CI workflows.
+
+### schedule
+
+Runs on a cron schedule:
+
+```yaml
+on:
+  schedule:
+    - cron: '0 9 * * 1'           # Every Monday at 9:00 UTC
+    - cron: '0 2 * * *'           # Every day at 2:00 AM UTC
+```
+
+Cron syntax: `minute hour day-of-month month day-of-week`
+
+Scheduled workflows run on the default branch. Common uses: nightly security scans, weekly dependency checks, periodic cleanup tasks.
+
+### workflow_dispatch
+
+Enables manual triggering from the GitHub UI or CLI:
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      dry_run:
+        description: 'Dry run (no actual deployment)'
+        required: false
+        type: boolean
+        default: false
+```
+
+With inputs, the GitHub UI shows a form when manually triggering the workflow. The values are accessed in the workflow as `${{ inputs.environment }}`.
+
+Trigger manually via CLI:
+
+```bash
+gh workflow run deploy.yml \
+  --field environment=staging \
+  --field dry_run=true
+```
+
+### release
+
+Runs when a release is published, created, or edited:
+
+```yaml
+on:
+  release:
+    types: [published]    # Only when a release is officially published
+```
+
+Common use: automatically build and upload release artifacts when a new version is published.
+
+### issue_comment
+
+Runs when a comment is created on an issue or PR:
+
+```yaml
+on:
+  issue_comment:
+    types: [created]
+```
+
+Used for ChatOps workflows: a comment like `/deploy staging` can trigger a deployment workflow.
+
+### Combining Multiple Triggers
+
+```yaml
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 0 * * 0'    # Weekly on Sunday midnight
+  workflow_dispatch:         # Also manually triggerable
+```
+
+---
+
+## Your First Workflow — Hello World
+
+Create `.github/workflows/hello.yml`:
+
+```yaml
+name: Hello World
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  greet:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Print greeting
+        run: echo "Hello, GitHub Actions!"
+
+      - name: Show environment
+        run: |
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Branch: $GITHUB_REF_NAME"
+          echo "Commit SHA: $GITHUB_SHA"
+          echo "Actor: $GITHUB_ACTOR"
+          echo "Runner OS: $RUNNER_OS"
+
+      - name: Multi-line script
+        run: |
+          echo "Step 1: Install dependencies"
+          echo "Step 2: Run tests"
+          echo "Step 3: Build artifact"
+          echo "All steps complete!"
+```
+
+Push this file to your repository's `main` branch. In the **Actions** tab, you will see the workflow run. Click it to see the job. Click the job to see the individual steps and their output.
+
+---
+
+## Default Environment Variables
+
+GitHub Actions populates several environment variables automatically in every workflow run:
+
+| Variable | Value |
+|----------|-------|
+| `GITHUB_REPOSITORY` | `owner/repo` |
+| `GITHUB_REF` | `refs/heads/main` or `refs/tags/v1.0.0` |
+| `GITHUB_REF_NAME` | `main` or `v1.0.0` (short form) |
+| `GITHUB_SHA` | Full commit SHA that triggered the workflow |
+| `GITHUB_ACTOR` | Username of the person who triggered the workflow |
+| `GITHUB_EVENT_NAME` | `push`, `pull_request`, `workflow_dispatch`, etc. |
+| `GITHUB_WORKSPACE` | Path to the checked-out code |
+| `RUNNER_OS` | `Linux`, `Windows`, or `macOS` |
+| `GITHUB_TOKEN` | Automatically-generated token for this workflow run |
+
+---
+
+## Using Marketplace Actions
+
+Rather than writing shell scripts for common tasks, use actions from the marketplace. Actions are referenced with the `uses:` keyword and always include a version reference.
+
+### actions/checkout
+
+Every workflow that needs to access the repository's code must check it out. The `actions/checkout` action does this:
+
+```yaml
+steps:
+  - name: Check out code
+    uses: actions/checkout@v4
+
+  # By default, checks out the commit that triggered the workflow
+  # Options:
+  - uses: actions/checkout@v4
+    with:
+      ref: main                  # Specific branch or tag
+      fetch-depth: 0             # Fetch full history (default is shallow clone of 1 commit)
+      submodules: recursive      # Also initialize git submodules
+```
+
+### actions/setup-node
+
+Sets up a specific Node.js version on the runner:
+
+```yaml
+steps:
+  - uses: actions/checkout@v4
+
+  - uses: actions/setup-node@v4
+    with:
+      node-version: 20          # Specific version
+      cache: npm                # Cache npm dependencies
+
+  - run: npm ci
+  - run: npm test
+```
+
+### actions/setup-python
+
+```yaml
+steps:
+  - uses: actions/checkout@v4
+
+  - uses: actions/setup-python@v5
+    with:
+      python-version: '3.12'
+      cache: pip
+
+  - run: pip install -r requirements.txt
+  - run: pytest
+```
+
+### actions/cache
+
+Caches directories between workflow runs to speed up builds:
+
+```yaml
+steps:
+  - uses: actions/checkout@v4
+
+  - name: Cache node_modules
+    uses: actions/cache@v4
+    with:
+      path: ~/.npm
+      key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+      restore-keys: |
+        ${{ runner.os }}-node-
+
+  - run: npm ci
+```
+
+The cache `key` includes a hash of `package-lock.json`. If the lockfile changes, the cache is invalidated and rebuilt. If it hasn't changed, the cached `~/.npm` directory is restored, making `npm ci` much faster.
+
+### actions/upload-artifact and actions/download-artifact
+
+Pass build outputs between jobs:
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: dist/
+
+  test-build:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: dist/
+
+      - name: Test the build output
+        run: ls -la dist/
+```
+
+---
+
+## A Complete CI Workflow
+
+Putting the concepts together, here is a production-ready CI workflow for a Node.js project:
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test -- --coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7     # Artifact is deleted after 7 days
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, test]         # Only runs if lint and test pass
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+```
+
+This workflow:
+1. Runs `lint` and `test` in parallel
+2. Only runs `build` if both pass
+3. Uploads the coverage report as an artifact (viewable from the Actions tab)
+4. Uploads the build output as an artifact for potential use in a downstream deployment workflow
+
+---
+
+## Viewing Workflow Runs and Logs
+
+### In the GitHub UI
+
+1. Click the **Actions** tab in your repository.
+2. The left sidebar lists all workflows. Click one to filter runs by workflow.
+3. Each row in the main area is a workflow run with:
+   - Status icon (queued, in progress, success, failure, cancelled)
+   - Workflow name and branch
+   - Commit message
+   - Actor (who triggered it)
+   - Duration
+4. Click a run to see all jobs.
+5. Click a job to see all steps.
+6. Click a step to expand its log output.
+
+### Searching Workflow Runs
+
+Use the filters at the top of the Actions tab:
+- Filter by **Status**: Success, Failure, Cancelled, In Progress
+- Filter by **Branch**
+- Filter by **Actor**
+- Filter by **Event**: push, pull_request, schedule, etc.
+
+### Via gh CLI
+
+```bash
+# List recent workflow runs
+gh run list
+
+# List runs for a specific workflow
+gh run list --workflow=ci.yml
+
+# View a specific run's details
+gh run view 12345678
+
+# Stream live logs for a running workflow
+gh run watch
+
+# Download logs from a completed run
+gh run view --log 12345678
+
+# View logs for a specific job in a run
+gh run view 12345678 --job=test
+```
+
+---
+
+## Re-Running Failed Jobs
+
+Not every failure requires code changes — sometimes a test is flaky, a network request times out, or a dependency download fails intermittently. GitHub Actions supports re-running failed jobs without re-running the entire workflow.
+
+### Via UI
+
+On a failed workflow run page, click **Re-run failed jobs** (partial re-run, starting from the first failed job) or **Re-run all jobs** (full re-run).
+
+### Via gh CLI
+
+```bash
+# Re-run all failed jobs in the most recent run
+gh run rerun --failed
+
+# Re-run a specific run
+gh run rerun 12345678
+
+# Re-run with debug logging enabled
+gh run rerun 12345678 --debug
+```
+
+Debug logging is extremely useful for diagnosing failures — it shows every shell command executed and every variable expanded.
+
+---
+
+## Workflow Syntax Reference
+
+Key syntax elements you will use frequently:
+
+### Setting Environment Variables
+
+```yaml
+# Job-level: available to all steps in the job
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      API_BASE_URL: https://api.example.com
+
+    steps:
+      # Step-level: available only to this step
+      - name: Build
+        env:
+          BUILD_VERSION: ${{ github.sha }}
+        run: npm run build
+```
+
+### Expressions and Contexts
+
+```yaml
+steps:
+  - name: Show PR number
+    if: github.event_name == 'pull_request'
+    run: echo "PR number is ${{ github.event.number }}"
+
+  - name: Deploy (only on main push)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    run: ./deploy.sh
+```
+
+Available contexts: `github`, `env`, `jobs`, `steps`, `runner`, `secrets`, `inputs`
+
+### Outputs Between Steps
+
+```yaml
+steps:
+  - name: Get version
+    id: version
+    run: echo "value=$(cat VERSION)" >> $GITHUB_OUTPUT
+
+  - name: Use version
+    run: echo "Building version ${{ steps.version.outputs.value }}"
+```
+
+### Timeouts
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30    # Job is cancelled if it runs longer than 30 minutes
+
+    steps:
+      - name: Long-running step
+        timeout-minutes: 10   # Step-level timeout
+        run: ./run-tests.sh
+```
+
+---
+
+## Practical Exercises
+
+### Exercise 1 — Hello World Workflow
+
+1. Create `.github/workflows/hello.yml` in a repository.
+2. Add a trigger for `push` to `main` and `workflow_dispatch`.
+3. Add a job with 3 steps: one that echoes a greeting, one that prints environment variables, and one that runs a multi-line script.
+4. Push to `main` and view the run in the Actions tab.
+5. Manually trigger the workflow from the Actions tab UI.
+
+### Exercise 2 — CI Workflow with Caching
+
+1. In a repository with a `package.json` and a test script, create a CI workflow.
+2. Add dependency caching using `actions/cache` or the `cache` parameter in `actions/setup-node`.
+3. Run the workflow twice. Check the second run's logs — the "Cache hit" message should appear and the install step should be significantly faster.
+
+### Exercise 3 — Multi-Job Workflow
+
+1. Create a workflow with three jobs: `lint`, `test`, and `build`.
+2. Make `build` depend on both `lint` and `test` using `needs`.
+3. Deliberately make the `lint` job fail and observe that `build` does not run.
+4. Fix the lint failure and observe all three jobs run successfully.
+
+### Exercise 4 — workflow_dispatch with Inputs
+
+1. Create a workflow with a `workflow_dispatch` trigger.
+2. Add two inputs: a string `message` and a boolean `verbose`.
+3. In the workflow, echo the message. If `verbose` is true, also echo additional details.
+4. Trigger the workflow manually from the Actions tab with different input values.
+
+### Exercise 5 — Artifact Upload
+
+1. Create a workflow that generates some output file (e.g., `echo "report" > report.txt`).
+2. Upload the file as an artifact using `actions/upload-artifact`.
+3. View the artifact in the workflow run summary and download it.

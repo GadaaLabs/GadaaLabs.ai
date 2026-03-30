@@ -1,0 +1,951 @@
+---
+title: "CI/CD Pipelines — Test, Build & Deploy with Actions"
+description: "Build complete CI/CD pipelines with GitHub Actions: matrix builds, dependency caching, artifacts, environment deployments, conditional steps, reusable workflows, composite actions, and security best practices."
+duration: 28
+order: 10
+---
+
+## From Workflow Basics to Production Pipelines
+
+Lesson 9 covered the foundational concepts: what triggers are, how jobs and steps work, and how to write your first workflow. This lesson builds complete production-grade pipelines — the kind that run in real engineering teams at scale.
+
+A production CI/CD pipeline does several things that a basic workflow does not:
+
+- Tests against multiple runtime versions and operating systems simultaneously
+- Caches dependencies intelligently to keep builds fast as the codebase grows
+- Stores build artifacts and passes them between jobs
+- Deploys to multiple environments (preview, staging, production) with proper gates
+- Handles secrets and environment-specific configuration cleanly
+- Runs only the steps that are relevant for the specific trigger
+- Is maintainable — avoids copy-pasting YAML through reusable workflows and composite actions
+- Is secure — does not give workflows more access than they need
+
+Each of these is covered in this lesson with working, production-realistic examples.
+
+---
+
+## Complete CI/CD Pipeline for a Node.js Application
+
+Here is a complete pipeline for a Node.js web application — test it, build it, and deploy it to Vercel:
+
+```yaml
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: 'Deploy target'
+        type: choice
+        options: [staging, production]
+        default: staging
+
+permissions:
+  contents: read
+  deployments: write
+  pull-requests: write
+
+env:
+  NODE_VERSION: 20
+
+jobs:
+  # ─── Quality Gate ───────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+
+  # ─── Test Suite ─────────────────────────────────────────────────
+  test:
+    name: Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18, 20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run tests with coverage
+        run: npm test -- --coverage --ci
+
+      - name: Upload coverage
+        if: matrix.node-version == 20
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+
+  # ─── Build ──────────────────────────────────────────────────────
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build production bundle
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: ${{ vars.API_URL }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-build
+          path: .next/
+          retention-days: 1
+
+  # ─── Deploy: Preview (PRs only) ─────────────────────────────────
+  deploy-preview:
+    name: Deploy Preview
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'pull_request'
+    environment:
+      name: preview
+      url: ${{ steps.deploy.outputs.preview_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: production-build
+          path: .next/
+
+      - name: Deploy to Vercel (Preview)
+        id: deploy
+        run: |
+          npm install -g vercel
+          DEPLOYMENT_URL=$(vercel deploy --token=${{ secrets.VERCEL_TOKEN }} \
+            --project=${{ vars.VERCEL_PROJECT_ID }} \
+            --scope=${{ vars.VERCEL_ORG_ID }} \
+            2>&1 | tail -1)
+          echo "preview_url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+
+      - name: Comment PR with preview URL
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = '${{ steps.deploy.outputs.preview_url }}';
+            const body = `## Preview Deployment\n\nYour changes are live at: ${url}`;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+  # ─── Deploy: Production (main branch only) ─────────────────────
+  deploy-production:
+    name: Deploy Production
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: https://myapp.com
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: production-build
+          path: .next/
+
+      - name: Deploy to Vercel (Production)
+        run: |
+          npm install -g vercel
+          vercel deploy --prod \
+            --token=${{ secrets.VERCEL_TOKEN }} \
+            --project=${{ vars.VERCEL_PROJECT_ID }} \
+            --scope=${{ vars.VERCEL_ORG_ID }}
+```
+
+---
+
+## Matrix Builds
+
+Matrix builds run the same job across multiple combinations of variables — operating systems, language versions, or any other dimension. They are essential for ensuring your project works in all the environments your users have.
+
+### Basic Matrix
+
+```yaml
+strategy:
+  matrix:
+    node-version: [18, 20, 22]
+    os: [ubuntu-latest, windows-latest, macos-latest]
+
+runs-on: ${{ matrix.os }}
+
+steps:
+  - uses: actions/checkout@v4
+  - uses: actions/setup-node@v4
+    with:
+      node-version: ${{ matrix.node-version }}
+  - run: npm test
+```
+
+With 3 Node versions and 3 OSes, this generates 9 parallel jobs. The matrix is fully combinatorial by default.
+
+### Including and Excluding Combinations
+
+```yaml
+strategy:
+  matrix:
+    node-version: [18, 20, 22]
+    os: [ubuntu-latest, windows-latest]
+    include:
+      # Add an extra combination not in the matrix
+      - os: macos-latest
+        node-version: 20
+    exclude:
+      # Skip a specific combination
+      - os: windows-latest
+        node-version: 18
+```
+
+### fail-fast
+
+```yaml
+strategy:
+  fail-fast: false   # Continue other matrix jobs even if one fails
+  matrix:
+    node-version: [18, 20, 22]
+```
+
+By default, `fail-fast: true` cancels all in-progress matrix jobs when any one fails. This is efficient when any failure means the whole build is broken. Set `fail-fast: false` when you want to see all results even if some fail — useful for compatibility testing.
+
+### Python Example with Matrix
+
+```yaml
+name: Python CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - run: pip install -r requirements.txt
+      - run: pip install pytest pytest-cov
+      - run: pytest --cov=src tests/
+```
+
+---
+
+## Caching Dependencies
+
+Dependency caching is one of the highest-leverage optimizations for CI pipelines. Without caching, a typical Node.js project with hundreds of dependencies spends 30-60 seconds on `npm ci` per run. With caching, that drops to 2-5 seconds.
+
+### The Cache Mechanism
+
+`actions/cache` saves and restores directories between runs. It uses a cache key to determine whether to restore an existing cache or create a new one.
+
+```yaml
+- name: Cache npm packages
+  uses: actions/cache@v4
+  with:
+    path: ~/.npm
+    key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
+    restore-keys: |
+      ${{ runner.os }}-npm-
+```
+
+**key**: The primary cache key. If an exact match exists, the cache is restored. `hashFiles` generates a hash of the lockfile — if the lockfile changes, the key changes, and the cache is invalidated.
+
+**restore-keys**: Fallback keys, tried in order if the primary key misses. Using a prefix like `ubuntu-npm-` allows restoring a partial cache from a previous run even when the lockfile has changed. This "stale" cache is faster than no cache — `npm ci` only needs to download changed packages.
+
+### Built-in Caching in Setup Actions
+
+`actions/setup-node@v4`, `actions/setup-python@v5`, `actions/setup-java@v4`, and others have built-in cache support that handles the key logic automatically:
+
+```yaml
+- uses: actions/setup-node@v4
+  with:
+    node-version: 20
+    cache: npm        # or 'yarn' or 'pnpm'
+# No need for a separate actions/cache step for node_modules
+```
+
+### Pip Caching
+
+```yaml
+- uses: actions/setup-python@v5
+  with:
+    python-version: '3.12'
+    cache: pip
+    cache-dependency-path: requirements*.txt
+```
+
+### Advanced Cache Patterns
+
+For monorepos or workspaces where `node_modules` is installed at multiple levels:
+
+```yaml
+- uses: actions/cache@v4
+  with:
+    path: |
+      ~/.npm
+      node_modules
+      packages/*/node_modules
+    key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}
+```
+
+---
+
+## Artifacts — Upload and Download
+
+Artifacts persist data between jobs or beyond the workflow run, available for download from the GitHub UI.
+
+### Uploading Artifacts
+
+```yaml
+- uses: actions/upload-artifact@v4
+  with:
+    name: test-results         # Artifact name (must be unique in the workflow run)
+    path: |
+      test-results/
+      coverage/
+    retention-days: 30         # Default 90 days, max 400 days (or 1 day on free tier)
+    if-no-files-found: error   # error, warn, or ignore (default: warn)
+    compression-level: 9       # 0-9, higher = smaller artifact, slower upload
+```
+
+### Downloading Artifacts
+
+```yaml
+# Download in a subsequent job
+- uses: actions/download-artifact@v4
+  with:
+    name: test-results
+    path: test-results/        # Where to place the downloaded files
+
+# Download all artifacts from the current run
+- uses: actions/download-artifact@v4
+  with:
+    path: all-artifacts/       # Each artifact goes into a subdirectory
+```
+
+### Sharing Artifacts Between Workflow Runs
+
+Artifacts from a previous workflow run can be downloaded in a subsequent run using the GitHub API. This is the basis for "publish once, deploy many" patterns where a build artifact is created in CI and then deployed by separate workflows.
+
+---
+
+## Environment Variables and Secrets in Workflows
+
+### Repository Variables (Non-Secret Configuration)
+
+For non-secret configuration that varies between environments (API endpoints, feature flags, resource names), use repository variables — distinct from secrets and visible in plaintext:
+
+**Settings** → **Secrets and variables** → **Actions** → **Variables tab**
+
+```yaml
+- name: Build
+  run: npm run build
+  env:
+    NEXT_PUBLIC_API_URL: ${{ vars.API_URL }}
+    NEXT_PUBLIC_ENV: ${{ vars.ENVIRONMENT }}
+```
+
+### Environment-Scoped Variables and Secrets
+
+```yaml
+jobs:
+  deploy:
+    environment: production    # Uses production's secrets and variables
+    steps:
+      - run: ./deploy.sh
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}      # production's DB URL
+          API_KEY: ${{ secrets.API_KEY }}                # production's API key
+          APP_VERSION: ${{ vars.APP_VERSION }}           # from variables
+```
+
+### Dynamic Environment Variables with GITHUB_ENV
+
+Set environment variables that persist across subsequent steps in the same job:
+
+```yaml
+steps:
+  - name: Set release version
+    run: echo "RELEASE_VERSION=$(cat VERSION)" >> $GITHUB_ENV
+
+  - name: Use the version
+    run: echo "Building version $RELEASE_VERSION"
+
+  - name: Tag the Docker image
+    run: docker tag myapp:latest myapp:$RELEASE_VERSION
+```
+
+---
+
+## Conditional Steps
+
+The `if:` expression controls whether a step or job runs.
+
+### Common Conditions
+
+```yaml
+# Only run on pushes to main
+if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+# Only run on pull requests
+if: github.event_name == 'pull_request'
+
+# Only run if the previous step failed
+if: failure()
+
+# Only run if the previous step succeeded (implicit default, but useful for clarity)
+if: success()
+
+# Run even if previous steps failed (useful for cleanup or notifications)
+if: always()
+
+# Only run if the job was cancelled
+if: cancelled()
+
+# Check for a specific branch or tag
+if: startsWith(github.ref, 'refs/tags/v')
+
+# Check if a file changed (requires actions/changed-files or similar)
+if: contains(github.event.head_commit.message, '[deploy]')
+
+# Only run for a specific actor
+if: github.actor == 'dependabot[bot]'
+```
+
+### Conditional Deployment Example
+
+```yaml
+jobs:
+  deploy-staging:
+    if: github.event_name == 'pull_request'
+    environment: staging
+
+  deploy-production:
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+  notify-failure:
+    needs: [deploy-production]
+    if: failure()
+    steps:
+      - name: Send failure notification
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: '{"text": "Production deployment FAILED!"}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+```
+
+---
+
+## Reusable Workflows
+
+Reusable workflows allow one workflow to call another, eliminating the need to copy-paste large blocks of YAML across repositories or workflow files.
+
+### Defining a Reusable Workflow
+
+Create `.github/workflows/deploy-shared.yml`:
+
+```yaml
+name: Shared Deploy Workflow
+
+on:
+  workflow_call:                    # This is the key — makes it callable
+    inputs:
+      environment:
+        required: true
+        type: string
+      image_tag:
+        required: true
+        type: string
+    secrets:
+      deploy_token:
+        required: true
+      registry_password:
+        required: true
+    outputs:
+      deployment_url:
+        description: "The URL of the deployment"
+        value: ${{ jobs.deploy.outputs.url }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy
+        id: deploy
+        run: |
+          echo "Deploying ${{ inputs.image_tag }} to ${{ inputs.environment }}"
+          # ... actual deployment steps ...
+          echo "url=https://${{ inputs.environment }}.myapp.com" >> $GITHUB_OUTPUT
+        env:
+          DEPLOY_TOKEN: ${{ secrets.deploy_token }}
+```
+
+### Calling a Reusable Workflow
+
+In another workflow file:
+
+```yaml
+name: Release Pipeline
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.tag.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: echo "value=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+
+  deploy-staging:
+    needs: build
+    uses: ./.github/workflows/deploy-shared.yml     # Same repo
+    with:
+      environment: staging
+      image_tag: ${{ needs.build.outputs.image_tag }}
+    secrets:
+      deploy_token: ${{ secrets.STAGING_DEPLOY_TOKEN }}
+      registry_password: ${{ secrets.REGISTRY_PASSWORD }}
+
+  deploy-production:
+    needs: deploy-staging
+    uses: ./.github/workflows/deploy-shared.yml
+    with:
+      environment: production
+      image_tag: ${{ needs.build.outputs.image_tag }}
+    secrets:
+      deploy_token: ${{ secrets.PROD_DEPLOY_TOKEN }}
+      registry_password: ${{ secrets.REGISTRY_PASSWORD }}
+```
+
+For cross-repository reuse, reference the other repo's workflow:
+
+```yaml
+uses: my-org/shared-workflows/.github/workflows/deploy.yml@main
+```
+
+---
+
+## Composite Actions
+
+A composite action packages a sequence of steps into a reusable action. Unlike reusable workflows (which run as separate jobs), composite actions run inline within the calling job — they share the same runner and environment.
+
+### Creating a Composite Action
+
+Create `actions/setup-and-test/action.yml` in your repository:
+
+```yaml
+name: Setup and Test
+description: Install dependencies and run the test suite
+
+inputs:
+  node-version:
+    description: Node.js version to use
+    required: false
+    default: '20'
+  test-command:
+    description: The test command to run
+    required: false
+    default: 'npm test'
+
+outputs:
+  test-result:
+    description: Whether tests passed
+    value: ${{ steps.test.outcome }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+
+    - name: Install dependencies
+      shell: bash
+      run: npm ci
+
+    - name: Run tests
+      id: test
+      shell: bash
+      run: ${{ inputs.test-command }}
+```
+
+### Using the Composite Action
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup and test
+        uses: ./.github/actions/setup-and-test    # Local composite action
+        with:
+          node-version: '20'
+          test-command: 'npm run test:ci'
+
+      - name: Setup and test (Node 22)
+        uses: ./.github/actions/setup-and-test
+        with:
+          node-version: '22'
+```
+
+### When to Use Composite Actions vs Reusable Workflows
+
+| | Composite Action | Reusable Workflow |
+|--|--|--|
+| Runs on | Same job's runner | Its own job (own runner) |
+| Can define jobs | No — steps only | Yes |
+| Output to calling job | Yes, directly | Via job outputs |
+| Best for | Extracting repeated steps | Extracting repeated jobs |
+
+---
+
+## Security: Pinning Action Versions to SHAs
+
+When you use `uses: actions/checkout@v4`, you are trusting that the `v4` tag in the `actions/checkout` repository hasn't been changed to point to malicious code. Tags are mutable — an attacker who compromises an action author's account could move the tag to a malicious commit.
+
+The secure practice is to pin actions to a full commit SHA:
+
+```yaml
+# Vulnerable — tag can be moved to malicious code
+- uses: actions/checkout@v4
+
+# Secure — specific immutable commit
+- uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+```
+
+The `# v4.2.2` comment documents what version this SHA corresponds to. Tools like `dependabot` (with `package-ecosystem: github-actions`) can automatically update these SHA pins when new versions are released.
+
+### Dependabot for Actions
+
+```yaml
+# .github/dependabot.yml
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+```
+
+With this configuration, Dependabot opens PRs to update pinned action SHAs when new versions of the actions are released.
+
+---
+
+## GITHUB_TOKEN Permissions
+
+The principle of least privilege applies to workflow tokens. By default, `GITHUB_TOKEN` has read access to the repository. Explicitly grant only the permissions the workflow needs:
+
+```yaml
+permissions:
+  contents: read       # Read source code
+  pull-requests: write # Comment on PRs
+  issues: write        # Create or update issues
+  packages: write      # Push to GitHub Container Registry
+  deployments: write   # Create deployment records
+  checks: write        # Create check runs
+  statuses: write      # Create commit statuses
+  id-token: write      # Required for OIDC cloud authentication
+```
+
+For workflows that only need to run tests and upload artifacts, the default `contents: read` is sufficient. Do not grant `write` unless you need it.
+
+### OIDC for Cloud Authentication
+
+Rather than storing long-lived cloud credentials as secrets, use OIDC (OpenID Connect) to generate short-lived tokens:
+
+```yaml
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789:role/GitHubActionsDeployRole
+          aws-region: us-east-1
+          # No long-lived credentials needed!
+
+      - name: Deploy to ECS
+        run: aws ecs update-service --cluster prod --service my-app --force-new-deployment
+```
+
+This approach means you never store AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY in GitHub Secrets. The OIDC token exchange happens automatically and produces credentials that expire when the workflow finishes.
+
+---
+
+## Deploying to Common Platforms
+
+### Deploying to Vercel
+
+```yaml
+- name: Deploy to Vercel
+  run: |
+    npm i -g vercel
+    vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+    vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+    vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+  env:
+    VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+    VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+```
+
+### Deploying to GitHub Pages (Covered in Lesson 6)
+
+```yaml
+- uses: actions/upload-pages-artifact@v3
+  with:
+    path: ./dist
+
+- uses: actions/deploy-pages@v4
+```
+
+### Deploying to a VPS via SSH
+
+```yaml
+- name: Deploy to VPS
+  uses: appleboy/ssh-action@v1
+  with:
+    host: ${{ secrets.VPS_HOST }}
+    username: ${{ secrets.VPS_USER }}
+    key: ${{ secrets.VPS_SSH_KEY }}
+    script: |
+      cd /var/www/myapp
+      git pull origin main
+      npm ci --production
+      pm2 restart myapp
+```
+
+---
+
+## Putting It All Together: Complete CI/CD for a Python App
+
+```yaml
+name: Python CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  quality:
+    name: Quality (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: |
+          flake8 src/ tests/
+          mypy src/
+
+      - name: Test
+        run: pytest tests/ --cov=src --cov-report=xml --cov-report=html
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: htmlcov/
+          retention-days: 7
+
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: quality
+    if: github.ref == 'refs/heads/main' || github.event_name == 'release'
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-production:
+    name: Deploy Production
+    runs-on: ubuntu-latest
+    needs: build-docker
+    if: github.event_name == 'release'
+    environment:
+      name: production
+      url: https://myapp.example.com
+
+    steps:
+      - name: Deploy new image
+        run: |
+          echo "Deploying ${{ needs.build-docker.outputs.image_tag }}"
+          # kubectl set image deployment/myapp myapp=${{ needs.build-docker.outputs.image_tag }}
+```
+
+---
+
+## Practical Exercises
+
+### Exercise 1 — Matrix Build
+
+1. Create a Node.js repository with a simple test suite.
+2. Write a CI workflow that runs tests on Node.js 18, 20, and 22.
+3. Add `fail-fast: false` and verify the behavior when one matrix job fails.
+4. Add macOS to the OS matrix dimension, creating a 3x2 = 6 job matrix.
+
+### Exercise 2 — Full CI with Caching and Artifacts
+
+1. Create a workflow with lint, test, and build jobs.
+2. Add dependency caching with `actions/setup-node` and its built-in cache.
+3. Upload the build output as an artifact in the build job.
+4. Add a separate job that downloads the artifact and runs smoke tests on it.
+5. Compare build time with and without cache (check the step durations).
+
+### Exercise 3 — Conditional Deployment
+
+1. Create a workflow that:
+   - Always runs lint and test (on any push or PR)
+   - Deploys to "staging" only on PRs (using `if: github.event_name == 'pull_request'`)
+   - Deploys to "production" only on pushes to main
+2. Create the environments in Settings.
+3. Add a required reviewer to the production environment.
+4. Trigger a merge to main and approve the production deployment.
+
+### Exercise 4 — Reusable Workflow
+
+1. Create a reusable workflow in `.github/workflows/build-and-push.yml` with `on: workflow_call`.
+2. Define inputs for `image_name` and `registry`.
+3. Define a secret input for `registry_token`.
+4. Call this workflow from two other workflows (e.g., one for `main` branch and one for releases).
+
+### Exercise 5 — Composite Action
+
+1. In `.github/actions/install-and-test/action.yml`, create a composite action that:
+   - Takes a `language` input (node or python)
+   - Sets up the appropriate runtime
+   - Installs dependencies
+   - Runs tests
+2. Use this composite action in a workflow with two jobs — one for Node.js and one for Python.
+
+### Exercise 6 — Pin Actions to SHAs
+
+1. Find a workflow that uses actions with mutable tags (e.g., `@v4`).
+2. Look up the current commit SHA for each action's tag on GitHub.
+3. Update all action references to use full SHA pins with version comments.
+4. Add `dependabot.yml` with `package-ecosystem: github-actions` to keep them updated automatically.

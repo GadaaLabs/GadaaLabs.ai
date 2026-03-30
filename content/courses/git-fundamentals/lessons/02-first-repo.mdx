@@ -1,0 +1,808 @@
+---
+title: "Your First Repository — init, add, commit"
+description: "Create a Git repository from scratch, understand the .git directory, learn to stage and commit files, write great commit messages, read your history with git log, control what Git ignores, and compare changes with git diff."
+duration: 22
+order: 2
+---
+
+## Creating Your First Repository
+
+In this lesson you will build `taskr` — a simple command-line task manager — and version-control it with Git from the very first file. Every concept introduced here will be used throughout the rest of the course.
+
+### git init — Starting a New Repository
+
+To create a new Git repository, navigate to your project directory and run `git init`:
+
+```bash
+mkdir taskr
+cd taskr
+git init
+```
+
+You will see output like:
+
+```
+Initialized empty Git repository in /Users/yourname/taskr/.git/
+```
+
+That is all it takes. The directory `taskr/` is now a Git repository. Git has created a hidden `.git/` subdirectory inside it. This subdirectory is the repository — it contains the entire history, configuration, and object database.
+
+You can also initialize a repository in an existing directory that already has files in it:
+
+```bash
+cd existing-project/
+git init
+# Initialized empty Git repository in /Users/yourname/existing-project/.git/
+```
+
+Initializing a repository in an existing directory is safe — Git does not touch your files. It just creates the `.git/` directory.
+
+### git init with a name
+
+You can pass a directory name to `git init` to create the directory and initialize a repo in one step:
+
+```bash
+git init taskr
+# Initialized empty Git repository in /Users/yourname/taskr/.git/
+cd taskr
+```
+
+---
+
+## The .git Directory — What Git Actually Stores
+
+Before you make any commits, take a moment to look inside `.git/`. Understanding this directory demystifies Git considerably.
+
+```bash
+ls -la .git/
+```
+
+You will see something like:
+
+```
+total 40
+drwxr-xr-x   9 yourname  staff   288 Jan 15 10:23 .
+drwxr-xr-x   3 yourname  staff    96 Jan 15 10:23 ..
+-rw-r--r--   1 yourname  staff    23 Jan 15 10:23 HEAD
+drwxr-xr-x   2 yourname  staff    64 Jan 15 10:23 branches
+-rw-r--r--   1 yourname  staff    92 Jan 15 10:23 config
+-rw-r--r--   1 yourname  staff    73 Jan 15 10:23 description
+drwxr-xr-x  14 yourname  staff   448 Jan 15 10:23 hooks
+drwxr-xr-x   3 yourname  staff    96 Jan 15 10:23 info
+drwxr-xr-x   4 yourname  staff   128 Jan 15 10:23 objects
+drwxr-xr-x   4 yourname  staff   128 Jan 15 10:23 refs
+```
+
+Key contents (do not modify these manually):
+
+- **HEAD**: A pointer to the current branch or commit. Right now it contains `ref: refs/heads/main`.
+- **config**: Repository-specific Git configuration (overrides global config for this repo).
+- **objects/**: The object database. All commits, file contents, and directory trees are stored here as compressed objects identified by SHA-1 hashes.
+- **refs/**: References — named pointers to commits. Branches are stored here as files in `refs/heads/`, tags in `refs/tags/`, and remote-tracking branches in `refs/remotes/`.
+- **hooks/**: Directory containing sample hook scripts. Hooks let you run custom scripts at specific Git events. Covered in lesson 10.
+
+You will explore the internals of `.git/` in detail in lesson 9. For now, just know it exists and do not delete or manually edit anything inside it.
+
+---
+
+## git status — Understanding What Git Sees
+
+`git status` is the command you will run more than any other. It tells you the current state of your working directory and staging area.
+
+```bash
+git status
+```
+
+In a brand-new, empty repository:
+
+```
+On branch main
+
+No commits yet
+
+nothing to commit (create/copy files and use "git add" to track)
+```
+
+Let's create some files:
+
+```bash
+# Create the main task manager script
+cat > taskr.sh << 'EOF'
+#!/usr/bin/env bash
+# taskr - A simple command-line task manager
+
+TASKS_FILE="$HOME/.taskr_tasks"
+
+add_task() {
+    echo "$1" >> "$TASKS_FILE"
+    echo "Added: $1"
+}
+
+list_tasks() {
+    if [ ! -f "$TASKS_FILE" ]; then
+        echo "No tasks yet."
+        return
+    fi
+    nl -ba "$TASKS_FILE"
+}
+
+case "$1" in
+    add)  add_task "$2" ;;
+    list) list_tasks ;;
+    *)    echo "Usage: taskr [add|list] [task]" ;;
+esac
+EOF
+
+# Create a README
+cat > README.md << 'EOF'
+# taskr
+
+A minimal command-line task manager written in Bash.
+
+## Usage
+
+    ./taskr.sh add "Buy groceries"
+    ./taskr.sh list
+EOF
+```
+
+Now run `git status` again:
+
+```bash
+git status
+```
+
+```
+On branch main
+
+No commits yet
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+        README.md
+        taskr.sh
+
+nothing added to commit but untracked files present (use "git add" to track)
+```
+
+Git sees both files but reports them as "untracked" — Git knows they exist in the working directory but is not tracking their history. They will not be included in any commit until you explicitly add them.
+
+The status output is structured in sections:
+1. The current branch (`On branch main`)
+2. Changes staged for commit (empty right now)
+3. Changes not staged for commit (empty right now)
+4. Untracked files (`README.md`, `taskr.sh`)
+
+---
+
+## Tracking Files: git add
+
+`git add` moves files from the working directory to the staging area (the index). Once staged, they will be included in the next commit.
+
+### Adding a Single File
+
+```bash
+git add README.md
+git status
+```
+
+```
+On branch main
+
+No commits yet
+
+Changes to be committed:
+  (use "git rm --cached <file>..." to unstage)
+        new file:   README.md
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+        taskr.sh
+```
+
+`README.md` has moved from "Untracked files" to "Changes to be committed". It is now staged. `taskr.sh` is still untracked.
+
+### Adding All Files
+
+```bash
+git add taskr.sh
+# Or add everything at once:
+git add .        # Add all files in current directory and subdirectories
+git add -A       # Add all files in the entire working tree
+git status
+```
+
+```
+On branch main
+
+No commits yet
+
+Changes to be committed:
+  (use "git rm --cached <file>..." to unstage)
+        new file:   README.md
+        new file:   taskr.sh
+```
+
+Both files are now staged and ready to commit.
+
+### Adding with Patterns
+
+```bash
+git add "*.md"        # Add all Markdown files
+git add src/          # Add all files in the src/ directory
+git add src/*.js      # Add all .js files in src/
+```
+
+### Adding Interactively (Partial Staging)
+
+One of Git's most powerful features is the ability to stage only part of a changed file — specific hunks (chunks of changed lines) rather than the whole file:
+
+```bash
+git add -p taskr.sh
+# or
+git add --patch taskr.sh
+```
+
+Git walks you through each changed hunk and asks what to do:
+- `y` — stage this hunk
+- `n` — do not stage this hunk
+- `s` — split the hunk into smaller pieces
+- `e` — manually edit the hunk
+- `q` — quit
+
+This lets you create commits that are logically coherent even if you made multiple unrelated changes in one editing session.
+
+---
+
+## The Staging Area in Depth
+
+The staging area is not just a waiting room. It is a precise instrument for constructing meaningful commits.
+
+Consider this scenario: you are working on a feature and you notice a typo in a comment somewhere. You fix the typo while also implementing the feature. Without the staging area, your only option is one commit that mixes the feature work and the typo fix. With the staging area, you can:
+
+1. Stage only the typo fix and commit it with message "fix: correct typo in auth module comment"
+2. Stage the feature work and commit it with message "feat: implement user authentication"
+
+The result is a cleaner history where every commit has a single, clear purpose. This makes `git log`, `git blame`, `git bisect`, and code review far more useful.
+
+Think of the staging area as your drafting table. Your working directory is where you do messy, exploratory work. The staging area is where you carefully compose the commit you want to make. The repository is where you publish that commit permanently.
+
+---
+
+## git commit — Recording a Snapshot
+
+Once your staging area contains exactly what you want to commit, you record it:
+
+```bash
+git commit
+```
+
+This opens your configured editor with a template:
+
+```
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+#
+# On branch main
+#
+# Initial commit
+#
+# Changes to be committed:
+#       new file:   README.md
+#       new file:   taskr.sh
+#
+```
+
+Write your message, save, and close the editor. Git records the commit.
+
+For short messages, use the `-m` flag to provide the message inline:
+
+```bash
+git commit -m "Initial commit: add taskr.sh and README"
+```
+
+Output:
+
+```
+[main (root-commit) 4f2a8b1] Initial commit: add taskr.sh and README
+ 2 files changed, 29 insertions(+)
+ create mode 100755 taskr.sh
+ create mode 100644 README.md
+```
+
+The output tells you:
+- The branch (`main`)
+- Whether this is the root commit (first commit in the repo)
+- The abbreviated SHA-1 hash of the commit (`4f2a8b1`)
+- The commit message
+- A summary of what changed
+
+### Writing Good Commit Messages
+
+A commit message is documentation. Future you — and your teammates — will read these messages when investigating bugs, understanding context, or reviewing changes. Write them well.
+
+**The Seven Rules of a Great Commit Message:**
+
+1. **Separate subject from body with a blank line**
+2. **Limit the subject line to 72 characters** (some say 50, but 72 is widely accepted)
+3. **Capitalize the subject line**
+4. **Do not end the subject line with a period**
+5. **Use the imperative mood in the subject line** ("Add feature" not "Added feature" or "Adds feature")
+6. **Use the body to explain what and why, not how**
+7. **Wrap the body at 72 characters**
+
+A full commit message with a body:
+
+```
+feat: add task deletion by index
+
+Tasks were previously only addable and listable. This commit
+adds a 'delete' subcommand that removes a task by its 1-based
+index in the task file.
+
+The implementation rewrites the file without the deleted line
+using a temporary file + rename pattern to avoid partial writes.
+Deletion of out-of-range indices is handled with an error message.
+
+Closes #12
+```
+
+Subject line styles vary by team. Common conventions:
+- **Conventional Commits** (`feat:`, `fix:`, `docs:`, `chore:`, etc.) — covered in lesson 10
+- **Imperative plain English** ("Add user auth", "Fix null pointer in login")
+- **Ticket references** ("JIRA-123: Add user auth")
+
+The most important rule: **explain why**, not just what. The diff already shows what changed. The commit message should explain the reasoning.
+
+### The -a Flag: Stage and Commit in One Step
+
+For already-tracked files (not new files), you can skip `git add` and commit everything in one step:
+
+```bash
+git commit -a -m "Update task listing to show timestamps"
+```
+
+The `-a` flag automatically stages all modified tracked files before committing. It does **not** include untracked files. Use this only when you want to commit all your changes as-is — use `git add` when you want to be selective.
+
+### Amending the Last Commit
+
+If you made a commit and immediately realize you forgot a file or made a typo in the message:
+
+```bash
+git add forgotten-file.txt
+git commit --amend -m "Correct commit message"
+```
+
+`--amend` replaces the last commit with a new one that includes your staged changes and the new message. The old commit is discarded.
+
+**Warning**: Only amend commits that have not been pushed to a shared remote. Amending rewrites history, which causes problems for anyone who has already pulled the original commit.
+
+---
+
+## git log — Viewing History
+
+`git log` shows the commit history of the current branch.
+
+```bash
+git log
+```
+
+```
+commit 4f2a8b1c3d2e5f6a7b8c9d0e1f2a3b4c5d6e7f8 (HEAD -> main)
+Author: Your Name <you@example.com>
+Date:   Mon Jan 15 10:30:45 2024 -0800
+
+    Initial commit: add taskr.sh and README
+```
+
+Let's make a second commit to have more to look at:
+
+```bash
+# Add a config file
+cat > .taskr.conf << 'EOF'
+# taskr configuration
+TASKS_FILE="$HOME/.taskr_tasks"
+DATE_FORMAT="%Y-%m-%d %H:%M"
+EOF
+
+git add .taskr.conf
+git commit -m "feat: add configuration file for taskr"
+```
+
+Now `git log` shows both commits:
+
+```
+commit 9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9 (HEAD -> main)
+Author: Your Name <you@example.com>
+Date:   Mon Jan 15 10:35:12 2024 -0800
+
+    feat: add configuration file for taskr
+
+commit 4f2a8b1c3d2e5f6a7b8c9d0e1f2a3b4c5d6e7f8
+Author: Your Name <you@example.com>
+Date:   Mon Jan 15 10:30:45 2024 -0800
+
+    Initial commit: add taskr.sh and README
+```
+
+### Useful git log Options
+
+The default output is verbose. These options make log much more useful:
+
+```bash
+# One line per commit — great for a quick overview
+git log --oneline
+```
+
+```
+9a1b2c3 (HEAD -> main) feat: add configuration file for taskr
+4f2a8b1 Initial commit: add taskr.sh and README
+```
+
+```bash
+# Show branching graph — essential when working with branches
+git log --oneline --graph
+
+# Include all branches (not just current)
+git log --oneline --graph --all
+
+# Show the files changed in each commit
+git log --stat
+
+# Show the full diff of each commit
+git log -p
+
+# Limit to last N commits
+git log -5
+
+# Filter by author
+git log --author="Your Name"
+
+# Filter by date
+git log --since="2024-01-01"
+git log --until="2024-01-31"
+
+# Filter by commit message content
+git log --grep="feat"
+
+# Search for commits that changed a specific string in the code
+git log -S "add_task"
+
+# Custom format
+git log --pretty=format:"%h %ad | %s%d [%an]" --date=short
+```
+
+A particularly useful combination for day-to-day use:
+
+```bash
+git log --oneline --graph --all --decorate
+```
+
+This gives you a compact, visual representation of your entire branch and commit history.
+
+---
+
+## .gitignore — Telling Git What to Ignore
+
+Not everything in your project directory should be tracked by Git. Build artifacts, compiled output, dependency directories, editor configuration, secrets, and operating system files should not be committed.
+
+The `.gitignore` file tells Git which files and directories to ignore.
+
+Create `.gitignore` in the root of your repository:
+
+```bash
+cat > .gitignore << 'EOF'
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Log files
+*.log
+logs/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+secrets.txt
+
+# Compiled output
+*.o
+*.class
+dist/
+build/
+out/
+
+# Dependency directories
+node_modules/
+vendor/
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+EOF
+
+git add .gitignore
+git commit -m "chore: add .gitignore"
+```
+
+### .gitignore Pattern Syntax
+
+```bash
+# Ignore a specific file
+secrets.txt
+
+# Ignore files with an extension
+*.log
+*.tmp
+
+# Ignore a directory and all its contents
+node_modules/
+dist/
+
+# Ignore anywhere in the tree (no leading slash)
+*.log
+
+# Ignore only at the root (leading slash)
+/TODO.md
+
+# Negate a pattern (track this file even if a broader pattern ignores it)
+!important.log
+
+# Ignore files in a specific directory
+docs/*.txt
+
+# Ignore files in docs/ and any subdirectory of docs/
+docs/**/*.txt
+
+# Match a single character
+debug?.log
+
+# Match a range
+debug[0-9].log
+```
+
+### Global .gitignore
+
+You can also create a global gitignore that applies to all repositories on your machine. This is useful for OS-specific files like `.DS_Store` (macOS) or `Thumbs.db` (Windows):
+
+```bash
+# Create the file
+touch ~/.gitignore_global
+
+# Add patterns to it
+echo ".DS_Store" >> ~/.gitignore_global
+echo "Thumbs.db" >> ~/.gitignore_global
+
+# Tell Git to use it
+git config --global core.excludesfile ~/.gitignore_global
+```
+
+### What if a File is Already Tracked?
+
+If a file is already committed to the repository, adding it to `.gitignore` will **not** stop Git from tracking it. You need to remove it from tracking first:
+
+```bash
+# Remove from tracking but keep the file on disk
+git rm --cached secrets.txt
+git commit -m "chore: stop tracking secrets.txt"
+```
+
+After this, `secrets.txt` will be ignored by Git (assuming it is in `.gitignore`) but the file will remain on your filesystem.
+
+---
+
+## git diff — Comparing Changes
+
+`git diff` shows you what has changed but not yet been staged. It is your window into the working directory.
+
+Let's make a change to see it in action:
+
+```bash
+# Modify taskr.sh - add a 'done' command
+cat >> taskr.sh << 'EOF'
+
+done_task() {
+    local line_num="$1"
+    local task=$(sed -n "${line_num}p" "$TASKS_FILE")
+    sed -i.bak "${line_num}d" "$TASKS_FILE"
+    echo "Done: $task"
+}
+EOF
+```
+
+Now:
+
+```bash
+# Show unstaged changes (working directory vs last commit)
+git diff
+```
+
+Output shows the added lines with `+` prefix in green:
+
+```diff
+diff --git a/taskr.sh b/taskr.sh
+index 7a8b9c0..1d2e3f4 100755
+--- a/taskr.sh
++++ b/taskr.sh
+@@ -15,4 +15,13 @@ case "$1" in
+     add)  add_task "$2" ;;
+     list) list_tasks ;;
+-    *)    echo "Usage: taskr [add|list] [task]" ;;
++    done) done_task "$2" ;;
++    *)    echo "Usage: taskr [add|list|done] [task]" ;;
+ esac
++
++done_task() {
++    local line_num="$1"
++    local task=$(sed -n "${line_num}p" "$TASKS_FILE")
++    sed -i.bak "${line_num}d" "$TASKS_FILE"
++    echo "Done: $task"
++}
+```
+
+### diff Variants
+
+```bash
+# Changes in working directory vs last commit (unstaged changes)
+git diff
+
+# Changes in staging area vs last commit (what will go into the next commit)
+git diff --staged
+# (also: git diff --cached — same thing)
+
+# Changes in working directory AND staging area vs last commit
+git diff HEAD
+
+# Diff between two specific commits
+git diff 4f2a8b1 9a1b2c3
+
+# Diff between two branches
+git diff main feature-branch
+
+# Diff of a specific file only
+git diff taskr.sh
+
+# Summary: just show which files changed and how many lines
+git diff --stat
+
+# Show word-level differences (useful for prose)
+git diff --word-diff
+```
+
+### Practical diff Workflow
+
+Before every commit, run both:
+
+```bash
+git diff          # What changed but is not yet staged
+git diff --staged # What is staged and will be committed
+```
+
+This two-step check ensures you are committing exactly what you intend and nothing else. Many experienced developers make this a habit: they never commit without reviewing the staged diff first.
+
+---
+
+## A Complete Workflow Example
+
+Here is the complete workflow you will use hundreds of times:
+
+```bash
+# 1. Make changes to your files
+vim taskr.sh
+
+# 2. See what changed
+git status
+
+# 3. Review the changes in detail
+git diff
+
+# 4. Stage the files you want to commit
+git add taskr.sh
+
+# 5. Review what you are about to commit
+git diff --staged
+
+# 6. Commit with a clear message
+git commit -m "feat: add done command to mark tasks complete"
+
+# 7. Verify the commit was recorded
+git log --oneline
+```
+
+This loop — edit, status, diff, add, diff staged, commit — is the heartbeat of working with Git. The more naturally you move through it, the more control you have over your history.
+
+---
+
+## Practical Exercises
+
+### Exercise 1: Build and Version the taskr Project
+
+```bash
+# Create the taskr directory and initialize a repository
+mkdir ~/taskr && cd ~/taskr
+git init
+
+# Create taskr.sh with at least add and list commands
+# (Use the examples from this lesson or write your own)
+
+# Create README.md with basic documentation
+
+# Create .gitignore with appropriate patterns
+
+# Make at least three separate commits:
+# Commit 1: Just README.md
+# Commit 2: taskr.sh
+# Commit 3: .gitignore
+
+# Verify with:
+git log --oneline
+```
+
+### Exercise 2: Practice Staging Control
+
+```bash
+# Make three different changes to taskr.sh in one editing session:
+# 1. Fix a typo in a comment
+# 2. Add a new function
+# 3. Change the usage message
+
+# Use git add -p to stage only the typo fix
+git add -p taskr.sh
+
+# Commit the typo fix alone
+git commit -m "fix: correct typo in comment"
+
+# Stage and commit the remaining changes separately
+git add taskr.sh
+git commit -m "feat: add new command and update usage message"
+```
+
+### Exercise 3: Explore git log Options
+
+```bash
+# Run each of these and understand what each shows:
+git log
+git log --oneline
+git log --stat
+git log -p
+git log --oneline --graph --all
+```
+
+### Exercise 4: Practice git diff
+
+```bash
+# Modify a file but do not stage it
+# Run: git diff
+# Then stage it
+# Run: git diff --staged
+# Note the difference in output
+```
+
+### Challenge: Reconstruct History
+
+Look at your `git log` output and for each commit, use `git show <hash>` to see the full details of that commit. `git show` combines the commit metadata with a full diff of what changed. Notice how each commit is a self-contained unit of information.
+
+---
+
+## Summary
+
+- `git init` creates a new repository by adding a `.git/` directory to your project folder.
+- The `.git/` directory contains the entire history, object database, configuration, and references for the repository.
+- `git status` shows which files are untracked, modified, or staged.
+- `git add` moves changes from the working directory to the staging area. Use `git add -p` to stage specific hunks.
+- The staging area lets you compose commits with precision, even when your working directory is messier.
+- `git commit` records everything in the staging area as a permanent snapshot. Write clear, imperative commit messages explaining why.
+- `git log` shows the commit history. Use `--oneline --graph --all` for a compact visual overview.
+- `.gitignore` tells Git to ignore specified files and directories. Add OS files, editor files, build artifacts, and secrets.
+- `git diff` shows changes in the working directory vs the last commit. `git diff --staged` shows what is staged for the next commit.
+
+In the next lesson, you will learn about branches — one of Git's most powerful features — and how they enable parallel lines of development without conflict.

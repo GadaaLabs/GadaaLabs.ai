@@ -1,0 +1,478 @@
+---
+title: "Pull Requests — The Core of GitHub Collaboration"
+description: "Master the full pull request lifecycle: creating PRs with great descriptions, draft PRs, review workflows, merge strategies, auto-merge, and closing issues with keywords."
+duration: 26
+order: 3
+---
+
+## What a Pull Request Actually Is
+
+The name "pull request" can be misleading for newcomers. A pull request is not a patch file, not a bundle of commits, and not a request to pull your code blindly. It is a **comparison** between two branches, presented as a conversation space where code can be reviewed, discussed, and refined before merging.
+
+When you open a PR, you are saying: "Here is the difference between my branch and the target branch. I would like these changes to become part of the target branch. Please review them."
+
+GitHub renders this comparison as a diff — lines removed shown in red, lines added in green — and adds a layer of tooling on top: comments, suggestions, status checks, reviews, and merge controls.
+
+Understanding that a PR is a live comparison (not a snapshot) is important because it means:
+
+- Every new commit you push to your branch automatically updates the PR diff.
+- If the target branch advances while your PR is open, the diff shifts — new commits on the target can reduce or increase apparent conflicts.
+- A PR is never "submitted and fixed" — it is a living document until it is merged or closed.
+
+---
+
+## Creating a Pull Request
+
+### Via GitHub UI
+
+After pushing your branch, navigate to the repository on GitHub. If you pushed recently, you will see a yellow banner: "Your branch had recent pushes. Compare & pull request." Click the button to pre-fill the PR form.
+
+Alternatively, go to the **Pull requests** tab → **New pull request**. Select your branch from the **compare** dropdown and the target branch from the **base** dropdown.
+
+The PR creation form has these fields:
+
+- **Title** — one-line summary of what the PR does
+- **Description** — freeform markdown body for detailed explanation
+- **Reviewers** — GitHub users or teams to request review from
+- **Assignees** — who is responsible for this PR (usually yourself)
+- **Labels** — categorization tags
+- **Projects** — link to a project board
+- **Milestone** — link to a milestone
+- **Linked issues** — issues this PR closes or references
+
+### Via gh CLI
+
+```bash
+# Interactive mode — prompts for title and body
+gh pr create
+
+# Provide everything inline
+gh pr create \
+  --title "feat: add user authentication with JWT" \
+  --body "## Summary
+Implements JWT-based authentication for the API.
+
+## Changes
+- Add /api/auth/login endpoint
+- Add /api/auth/refresh endpoint
+- Add JWT middleware for protected routes
+- Add tests for all new endpoints
+
+Closes #47" \
+  --reviewer alice,bob \
+  --label "enhancement" \
+  --assignee @me
+```
+
+---
+
+## Writing a Great PR Title
+
+The PR title is the first thing reviewers and maintainers see. A clear title saves everyone time.
+
+### The Conventional Commits Pattern
+
+Many teams adopt Conventional Commits for PR titles:
+
+```
+type(scope): short description
+
+Examples:
+feat(auth): add JWT authentication
+fix(parser): handle empty string without throwing
+docs(readme): update installation instructions
+refactor(api): extract request validation middleware
+chore(deps): upgrade next.js to 15.1.0
+test(auth): add unit tests for token expiry
+```
+
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+
+The scope is optional — use it when your codebase has clear modules or packages.
+
+### Rules for Good PR Titles
+
+- Use the imperative mood: "Add user auth" not "Added user auth" or "Adds user auth"
+- Keep it under 72 characters
+- Be specific about what the PR does, not how
+- Do not just repeat the issue title — add information about the approach
+
+Bad: "Fix bug"
+Bad: "Implement issue #47"
+Good: "fix: resolve race condition in concurrent cache writes"
+
+---
+
+## Writing a Great PR Description
+
+The PR description is your opportunity to give reviewers the full context they need to review your changes efficiently. A good description answers:
+
+1. **What** does this PR change?
+2. **Why** are these changes being made?
+3. **How** was this implemented?
+4. **How** can reviewers test or verify the changes?
+
+### PR Description Template
+
+Many teams store a PR template at `.github/pull_request_template.md`. GitHub automatically loads this template when a PR is created:
+
+```markdown
+## Summary
+
+<!-- One to three sentences describing what this PR does and why -->
+
+## Changes
+
+<!-- Bulleted list of the specific changes made -->
+-
+-
+
+## Testing
+
+<!-- How did you test these changes? How can reviewers verify them? -->
+- [ ] Unit tests added/updated
+- [ ] Manual testing performed
+- [ ] Screenshots attached (for UI changes)
+
+## Related Issues
+
+<!-- Use closing keywords to auto-close issues on merge -->
+Closes #
+
+## Notes for Reviewers
+
+<!-- Anything specific you want reviewers to focus on? Known trade-offs? -->
+```
+
+Create this file in your repository:
+
+```bash
+mkdir -p .github
+cat > .github/pull_request_template.md << 'TEMPLATE'
+## Summary
+
+
+
+## Changes
+
+-
+-
+
+## Testing
+
+- [ ] Unit tests pass
+- [ ] Manual testing performed
+
+Closes #
+TEMPLATE
+
+git add .github/pull_request_template.md
+git commit -m "chore: add PR description template"
+git push
+```
+
+### Multiple PR Templates
+
+If you need different templates for different kinds of PRs (features vs bug fixes vs release preparations), create a `PULL_REQUEST_TEMPLATE/` directory with multiple named templates:
+
+```
+.github/
+  PULL_REQUEST_TEMPLATE/
+    feature.md
+    bugfix.md
+    release.md
+```
+
+Users access them by adding `?template=feature.md` to the PR creation URL — or you can link to them from your CONTRIBUTING.md.
+
+---
+
+## Draft Pull Requests
+
+A draft PR signals that the work is in progress and not ready for review. Reviewers know not to spend time on it yet, but you still get:
+
+- Continuous integration checks running on every push
+- The ability to request early feedback on specific parts
+- A visible record of work-in-progress
+- Automated status checks running
+
+### Creating a Draft PR
+
+```bash
+# Via gh CLI
+gh pr create --draft
+
+# Via UI: on the PR creation form, click the dropdown arrow
+# next to "Create pull request" and select "Create draft pull request"
+```
+
+### Marking a Draft PR Ready for Review
+
+When your work is complete:
+
+```bash
+# Via gh CLI
+gh pr ready
+
+# Via UI: on the PR page, click "Ready for review" button at the top
+```
+
+Draft PRs are widely used for:
+
+- Starting a PR early to get CI running from the beginning
+- Requesting early architectural feedback before polishing the implementation
+- Sharing work-in-progress with collaborators who need to see the direction
+- Work that is blocked on another PR or external dependency
+
+---
+
+## Linked Issues
+
+Linking issues to PRs creates a clear trail from reported problem to implemented solution. GitHub tracks these relationships and displays them on both the PR and the issue.
+
+### Issue Closing Keywords
+
+Certain keywords in a PR title, description, or commit message will automatically close the linked issue when the PR is merged into the default branch:
+
+```
+Closes #123
+Fixes #123
+Resolves #123
+Close #123
+Fix #123
+Resolve #123
+```
+
+You can link multiple issues:
+
+```
+Closes #123, fixes #124, resolves #125
+```
+
+You can also link to issues in other repositories:
+
+```
+Closes owner/repository#123
+```
+
+### Referencing Without Closing
+
+To reference an issue without closing it when the PR merges:
+
+```
+Related to #123
+See also #45
+Part of #78
+```
+
+---
+
+## PR Review Process Overview
+
+Once a PR is open and marked ready for review, the review process begins. The full review workflow is covered in lesson 4, but here is the high-level overview:
+
+1. Reviewers receive a notification (email, GitHub inbox, Slack integration, etc.)
+2. Reviewers examine the diff, leave inline comments on specific lines, and optionally start a formal review
+3. The reviewer submits their review with one of three verdicts: **Approve**, **Request Changes**, or **Comment**
+4. The PR author addresses feedback by pushing new commits or responding to comments
+5. If changes were requested, reviewers re-review and either approve or request further changes
+6. Once all required reviews are approved and status checks pass, the PR can be merged
+
+---
+
+## Resolving Conversations
+
+When a reviewer leaves a comment on a specific line, it creates a "conversation" on that line. Conversations can be:
+
+- **Replied to** — continue the discussion
+- **Resolved** — marked as addressed. Either the reviewer or the PR author can mark a conversation resolved.
+
+Conventions vary by team, but a common pattern is: the PR author resolves conversations after addressing the feedback, and reviewers can re-open if they feel the feedback wasn't addressed.
+
+The PR page shows a "Conversations" count in the header. PRs with unresolved conversations cannot be merged if the repository has branch protection rules requiring "all conversations to be resolved before merging."
+
+---
+
+## Merge Strategies
+
+When a PR is approved and ready, there are three ways to merge it. The merge strategy affects the shape of the resulting Git history.
+
+### Merge Commit (Create a Merge Commit)
+
+```
+Before:
+main:     A --- B --- C
+                       \
+feature:               D --- E --- F
+
+After merge:
+main:     A --- B --- C --------- G (merge commit)
+                       \         /
+feature:               D --- E --- F
+```
+
+The merge commit `G` records that commits D, E, F from `feature` were merged into `main` at point C. The full branch history is preserved.
+
+**When to use:** When you want to preserve the complete history of feature development, including intermediate commits. Common in projects that value a detailed audit trail.
+
+### Squash and Merge
+
+```
+Before:
+main:     A --- B --- C
+                       \
+feature:               D --- E --- F
+
+After squash:
+main:     A --- B --- C --- G (squashed commit containing D+E+F changes)
+```
+
+All commits from the feature branch are squashed into a single new commit on `main`. The feature branch's intermediate commits are not present in `main`'s history.
+
+**When to use:** When feature branch commits are messy (lots of "WIP", "fix typo", "try again" commits) and you want a clean, readable `main` history. Each PR becomes one commit in main. This is the most popular strategy for application development.
+
+### Rebase and Merge
+
+```
+Before:
+main:     A --- B --- C
+                       \
+feature:               D --- E --- F
+
+After rebase merge:
+main:     A --- B --- C --- D' --- E' --- F'
+```
+
+Each commit from the feature branch is replayed on top of `main`. The commits get new SHAs (D', E', F') because their parent has changed, but no merge commit is created. Linear history is maintained.
+
+**When to use:** When you want to preserve individual commits (unlike squash) and also want a linear history (unlike merge commit). Common in projects that use Conventional Commits — each commit carries semantic meaning.
+
+### Configuring the Allowed Strategies
+
+Repository admins can restrict which merge strategies are available:
+
+**Settings** → **General** → scroll to **Pull Requests** section → uncheck the strategies you don't want to allow.
+
+### Which Should You Use?
+
+| Strategy | History | Commit Count | Traceability |
+|----------|---------|--------------|--------------|
+| Merge commit | Non-linear | Preserves all | Full branch preserved |
+| Squash | Linear | One per PR | Good (via PR link) |
+| Rebase | Linear | Preserves all | Individual commits |
+
+Most teams choose **squash and merge** as the default because it produces readable linear history while keeping individual PR history in the PR page (which is searchable on GitHub). The feature branch details are always accessible via the PR link in the squashed commit message.
+
+---
+
+## Auto-Merge
+
+Auto-merge allows you to pre-authorize a merge that will execute automatically once all required conditions are met: all required reviewers have approved, all required status checks have passed, and any other branch protection rules are satisfied.
+
+### Enabling Auto-Merge
+
+Repository admins must enable the feature first:
+
+**Settings** → **General** → **Pull Requests** → check **Allow auto-merge**
+
+### Activating Auto-Merge on a PR
+
+```bash
+# Via gh CLI (uses squash merge)
+gh pr merge --auto --squash
+
+# Via UI: on the PR page, click "Enable auto-merge" (visible after
+# the feature is enabled in settings)
+```
+
+Auto-merge is useful for:
+
+- PRs that are approved but waiting for a long-running CI pipeline
+- Dependency update PRs (Dependabot) that you want to merge as soon as CI passes
+- Low-risk changes that don't need synchronous attention to merge
+
+If new commits are pushed to the PR after enabling auto-merge (e.g., a reviewer requests changes), auto-merge is disabled and must be re-enabled after the changes are addressed.
+
+---
+
+## Closing PRs
+
+### Merging
+
+Once approved and checks pass, click **Merge pull request** and choose your merge strategy. The PR moves to the "Merged" state — shown with a purple icon.
+
+### Closing Without Merging
+
+If a PR is no longer needed — the approach was abandoned, someone else solved the problem differently, the issue is no longer relevant — close it without merging by clicking **Close pull request**. The PR moves to the "Closed" state — shown with a red icon.
+
+Provide a comment explaining why the PR is being closed without merging. This is respectful to the contributor and provides useful context for anyone who finds the PR later.
+
+### Reopening
+
+Closed PRs (not merged, just closed) can be reopened as long as the source branch still exists. Click **Reopen pull request** on the closed PR page.
+
+---
+
+## PR Best Practices
+
+### Keep PRs Small
+
+Large PRs are harder to review, take longer to get approved, have more merge conflicts, and are riskier to merge. Aim for PRs that:
+
+- Make one logical change (not one file, not one day's work)
+- Can be reviewed in 15-30 minutes
+- Have fewer than 400 lines of diff (excluding generated files)
+
+If a feature requires large changes, break it into a stack of sequential PRs, each building on the previous.
+
+### Use a Consistent Branch Off Main
+
+Avoid creating branches off other feature branches unless you intentionally need to (stacked PRs). Branching off main keeps things simple and reduces the risk of bringing in uncommitted or unstable changes.
+
+### Update the PR If the Description Changes
+
+If your implementation changes significantly during review, update the PR description. Reviewers sometimes re-read the description when re-reviewing — it should accurately reflect what the PR actually does.
+
+### Respond to Every Comment
+
+Even if you disagree with feedback, respond. "Addressed in latest commit" or "I think X is better here because Y — open to further discussion" are both better than silence. Unresponsive PRs get closed.
+
+---
+
+## Practical Exercises
+
+### Exercise 1 — Create a PR with a Full Description
+
+1. In a practice repository, create a branch, make a meaningful change, and push it.
+2. Open a PR with a title following Conventional Commits format.
+3. Write a full description using the template structure: Summary, Changes, Testing, Related Issues.
+4. Add yourself as the assignee and apply an appropriate label.
+
+### Exercise 2 — Draft PR Workflow
+
+1. Create a branch with some incomplete work (it doesn't need to compile or pass tests).
+2. Open a draft PR for this branch.
+3. Make two additional commits to the branch — observe that the PR updates automatically.
+4. Mark the PR ready for review.
+
+### Exercise 3 — Compare Merge Strategies
+
+1. Create a repository with a `main` branch that has 3 commits.
+2. Create a feature branch with 3 commits.
+3. Merge it three times using different strategies (use three separate feature branches with the same changes).
+4. Use `git log --oneline --graph` to compare the resulting histories.
+
+### Exercise 4 — Closing Keywords
+
+1. Create an issue in your repository.
+2. Open a PR and include "Closes #1" (or whatever the issue number is) in the description.
+3. Merge the PR.
+4. Verify that the issue was automatically closed.
+5. Open the issue and notice the "closed by" link to the PR.
+
+### Exercise 5 — Auto-Merge
+
+1. Enable auto-merge in a repository's Settings.
+2. Open a PR and enable auto-merge on it.
+3. Add a reviewer (or approve it yourself in a personal repo).
+4. Observe the PR auto-merge when all conditions are met.

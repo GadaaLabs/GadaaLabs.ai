@@ -1,0 +1,571 @@
+---
+title: "Branching — Create, Switch & Merge"
+description: "Master Git branches: understand what branches really are, create and switch between them, understand HEAD, perform fast-forward and three-way merges, and learn branch naming conventions used by professional teams."
+duration: 24
+order: 3
+---
+
+## Why Branches Matter
+
+If there is one feature that makes Git genuinely transformative for software development, it is branching. But to understand why, you need to understand what branching looked like before Git.
+
+In Subversion (SVN), creating a branch meant copying the entire directory tree on the server. This was slow (tens of seconds to minutes) and expensive in disk space. As a result, SVN teams created as few branches as possible — usually just `trunk` and the occasional release branch. Everyone committed directly to trunk. The result was constant integration pain, a constantly partially-broken codebase, and a culture of big-bang merges at the end of a feature.
+
+In Git, creating a branch takes a fraction of a millisecond. It costs 41 bytes of disk space (the size of a SHA-1 hash stored as a file). As a result, Git teams branch constantly — for every feature, every bugfix, every experiment. This is not a best practice bolted on top of Git. It is the way Git was designed to be used.
+
+Understanding branches deeply unlocks almost everything else in Git.
+
+---
+
+## What a Branch Actually Is
+
+A Git branch is nothing more than a lightweight movable pointer to a commit.
+
+Think back to the object model from lesson 1. Every commit has a SHA-1 hash. A branch is a file in `.git/refs/heads/` that contains one SHA-1 hash — the hash of the commit that the branch currently points to.
+
+```bash
+cat .git/refs/heads/main
+# 9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9
+```
+
+That is literally all a branch is: a 40-character hex string in a file.
+
+When you make a new commit on a branch, Git:
+1. Creates the new commit object, pointing to the previous commit as its parent
+2. Updates the branch file to contain the new commit's hash
+
+The branch "moves forward" automatically as you commit.
+
+```
+Before commit:   main → [commit A]
+
+After commit:    main → [commit B] → [commit A]
+```
+
+This is why branching in Git is essentially free — there is no directory copying, no server round-trip, no expensive operation of any kind. It is just updating a file.
+
+---
+
+## HEAD — The Special Pointer
+
+`HEAD` is a special pointer that tells Git which commit is currently checked out — which snapshot your working directory reflects.
+
+Most of the time, `HEAD` points to a branch, not directly to a commit. When `HEAD` points to a branch, committing causes the branch to advance to the new commit, and `HEAD` advances with it.
+
+```bash
+cat .git/HEAD
+# ref: refs/heads/main
+```
+
+When `HEAD` points directly to a commit (not a branch), you are in "detached HEAD" state. This happens when you check out a specific commit by its hash. You can look at the code and even make commits, but those commits are not reachable from any branch and will eventually be garbage-collected unless you create a branch to point to them.
+
+```
+Normal state:   HEAD → main → [commit B] → [commit A]
+
+Detached HEAD:  HEAD → [commit A]
+                main → [commit B] → [commit A]
+```
+
+You can see where HEAD is pointing at any time with:
+
+```bash
+git log --oneline -1
+# Shows current commit
+
+git status
+# Shows "On branch main" or "HEAD detached at abc1234"
+```
+
+---
+
+## Creating Branches
+
+### git branch — List and Create Branches
+
+```bash
+# List all local branches
+git branch
+
+# List all branches including remote-tracking branches
+git branch -a
+
+# List branches with their latest commit
+git branch -v
+```
+
+With no branches except `main` in our new repo:
+
+```
+* main
+```
+
+The `*` indicates the currently checked-out branch.
+
+Create a new branch with:
+
+```bash
+git branch feature/add-priority
+```
+
+This creates a new branch that points to the same commit as `main` right now. It does **not** switch to that branch — you are still on `main`.
+
+```bash
+git branch
+```
+
+```
+  feature/add-priority
+* main
+```
+
+You can create a branch pointing to any commit, not just the current HEAD:
+
+```bash
+git branch old-version 4f2a8b1    # Branch from a specific commit hash
+git branch from-tag v1.0           # Branch from a tag
+```
+
+---
+
+## Switching Between Branches
+
+### git switch (modern, recommended)
+
+`git switch` was introduced in Git 2.23 (2019) as a cleaner alternative to `git checkout` for switching branches:
+
+```bash
+# Switch to an existing branch
+git switch feature/add-priority
+
+# Create a new branch and switch to it in one step
+git switch -c feature/delete-tasks
+
+# Switch back to the previous branch
+git switch -
+```
+
+### git checkout (traditional)
+
+The older, still-widely-used command:
+
+```bash
+# Switch to an existing branch
+git checkout feature/add-priority
+
+# Create and switch in one step
+git checkout -b feature/delete-tasks
+
+# Switch back to previous branch
+git checkout -
+```
+
+Both work identically for branch switching. `git switch` is preferred for new workflows because it has a clearer purpose — `git checkout` does many things (switching branches, checking out files, checking out commits) which can be confusing. New learners should use `git switch`; you will encounter `git checkout` extensively in existing documentation and teams.
+
+---
+
+## Working with Branches in Practice
+
+Let's build on the `taskr` project with a realistic branching workflow.
+
+```bash
+# We are on main with our initial commits
+git log --oneline
+# 9a1b2c3 (HEAD -> main) chore: add .gitignore
+# 7c8d9e0 feat: add configuration file for taskr
+# 4f2a8b1 Initial commit: add taskr.sh and README
+
+# Create and switch to a feature branch
+git switch -c feature/add-priority
+
+# Verify we are on the new branch
+git branch
+# * feature/add-priority
+#   main
+```
+
+Now make changes on this branch:
+
+```bash
+cat >> taskr.sh << 'EOF'
+
+add_priority_task() {
+    local priority="$1"
+    local task="$2"
+    echo "[$priority] $task" >> "$TASKS_FILE"
+    echo "Added [$priority]: $task"
+}
+EOF
+
+git add taskr.sh
+git commit -m "feat: add priority levels to tasks"
+```
+
+Make another commit on this branch:
+
+```bash
+cat >> taskr.sh << 'EOF'
+
+list_by_priority() {
+    grep "^\[HIGH\]" "$TASKS_FILE"
+    grep "^\[MED\]"  "$TASKS_FILE"
+    grep "^\[LOW\]"  "$TASKS_FILE"
+}
+EOF
+
+git add taskr.sh
+git commit -m "feat: add list-by-priority command"
+```
+
+Now switch back to main and make a different change there:
+
+```bash
+git switch main
+
+# main does not have the priority changes — its working directory
+# reflects the state from before we created the feature branch
+cat taskr.sh   # No priority functions
+
+# Make a different change on main (e.g., a bug fix)
+sed -i '' 's/echo "Usage: taskr \[add|list\] \[task\]"/echo "Usage: taskr {add|list|done} <task>"/' taskr.sh
+git add taskr.sh
+git commit -m "fix: improve usage message formatting"
+```
+
+Now visualize the diverged history:
+
+```bash
+git log --oneline --graph --all
+```
+
+```
+* b3c4d5e (HEAD -> main) fix: improve usage message formatting
+| * 8f9a0b1 (feature/add-priority) feat: add list-by-priority command
+| * 2c3d4e5 feat: add priority levels to tasks
+|/
+* 9a1b2c3 chore: add .gitignore
+* 7c8d9e0 feat: add configuration file for taskr
+* 4f2a8b1 Initial commit: add taskr.sh and README
+```
+
+This graph shows two branches diverging from commit `9a1b2c3`. `main` has one commit ahead, `feature/add-priority` has two commits ahead.
+
+---
+
+## Merging: Bringing Branches Together
+
+When a feature branch is complete, you merge it back into `main` (or whatever base branch your team uses).
+
+Git performs two fundamentally different types of merges:
+
+### Fast-Forward Merge
+
+A fast-forward merge happens when the branch being merged in is a direct linear descendant of the current branch — there is no divergence.
+
+```
+Before merge:
+
+main:            [A] ← [B]
+                              ↑
+feature:                     [C] ← [D]
+```
+
+In this case, `main` just needs to move its pointer forward to point to `D`. No new merge commit is needed — Git just "fast-forwards" the pointer.
+
+```bash
+# First, let's create a clean example on a new branch
+git switch -c feature/add-help
+
+cat >> taskr.sh << 'EOF'
+
+show_help() {
+    echo "taskr - A simple command-line task manager"
+    echo ""
+    echo "Commands:"
+    echo "  add <task>    Add a new task"
+    echo "  list          List all tasks"
+    echo "  done <n>      Mark task n as done"
+    echo "  help          Show this help"
+}
+EOF
+
+git add taskr.sh
+git commit -m "feat: add help command"
+
+# Now merge back to main (which has not diverged)
+git switch main
+git merge feature/add-help
+```
+
+Output:
+
+```
+Updating b3c4d5e..f1a2b3c
+Fast-forward
+ taskr.sh | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+```
+
+The word "Fast-forward" confirms this was a fast-forward merge. `main` now points to the same commit as `feature/add-help`.
+
+### Three-Way Merge
+
+When both branches have diverged (both have commits since their common ancestor), Git performs a three-way merge. It uses three snapshots: the common ancestor, the tip of the current branch, and the tip of the branch being merged in.
+
+```
+Before merge:
+
+       [ancestor]
+      /           \
+  [main-A]    [feat-A]
+                  |
+              [feat-B]
+```
+
+Git combines the changes from both branches and creates a new **merge commit** — a commit with two parents.
+
+```bash
+# Merge the feature/add-priority branch (which diverged from main)
+git switch main
+git merge feature/add-priority -m "merge: integrate priority task feature"
+```
+
+If there are no conflicts, Git creates the merge commit automatically:
+
+```
+Merge made by the 'ort' strategy.
+ taskr.sh | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+```
+
+Now the log looks like:
+
+```
+*   d4e5f6a (HEAD -> main) merge: integrate priority task feature
+|\
+| * 8f9a0b1 (feature/add-priority) feat: add list-by-priority command
+| * 2c3d4e5 feat: add priority levels to tasks
+* | b3c4d5e fix: improve usage message formatting
+* | f1a2b3c feat: add help command
+|/
+* 9a1b2c3 chore: add .gitignore
+```
+
+The merge commit `d4e5f6a` has two parents, shown by the branching lines in the graph.
+
+### Forcing a Merge Commit (No Fast-Forward)
+
+Sometimes you want a merge commit even when a fast-forward is possible, to preserve the evidence that a feature branch existed:
+
+```bash
+git merge --no-ff feature/add-help -m "merge: add help command feature"
+```
+
+This is common in teams that want to see feature branch history clearly in the log.
+
+---
+
+## Deleting Branches
+
+After merging a branch, you typically delete it:
+
+```bash
+# Delete a fully merged branch (safe — will not delete unmerged branches)
+git branch -d feature/add-priority
+
+# Force delete even if not merged (use with caution)
+git branch -D feature/add-priority
+```
+
+The `-d` flag is safe: Git will refuse to delete a branch that has not been merged into HEAD, protecting you from accidentally losing work. The `-D` flag bypasses this check.
+
+Deleted branches can be recovered as long as you know their commit hash (or run `git reflog` — covered in lesson 4).
+
+---
+
+## Branch Naming Conventions
+
+Good branch names make it clear what work is happening on a branch. Common conventions:
+
+### Type Prefixes
+
+```
+feature/   Work adding new functionality
+feat/      Shorter alias for feature/
+fix/       Bug fixes
+bugfix/    Longer alias for fix/
+hotfix/    Urgent production fix (merged directly to main and release)
+release/   Release preparation branch
+chore/     Maintenance tasks (dependency updates, config changes)
+docs/      Documentation-only changes
+refactor/  Code restructuring without behavior changes
+test/      Adding or modifying tests
+experiment/ Experimental work, may not be merged
+```
+
+### Full Examples
+
+```
+feature/user-authentication
+fix/null-pointer-in-login
+hotfix/production-crash-rate-limit
+release/v2.1.0
+docs/update-api-reference
+refactor/extract-auth-module
+experiment/graphql-api-prototype
+chore/update-dependencies-q1
+```
+
+### Practical Rules
+
+- Use lowercase with hyphens, not underscores or spaces
+- Include a ticket number if your team uses an issue tracker: `feature/JIRA-123-user-auth`
+- Be descriptive but concise — 3-5 words after the prefix is usually enough
+- Avoid: `my-branch`, `test`, `temp`, `new`, `fix` (too vague)
+- Avoid: `feature/adding-the-new-user-authentication-system-for-the-login-page` (too verbose)
+
+---
+
+## Visualizing Branch Graphs
+
+Understanding branch graphs is a skill you will use constantly when working with teams.
+
+```bash
+git log --oneline --graph --all --decorate
+```
+
+Learn to read the symbols:
+- `*` — a commit on a branch
+- `|` — a vertical line connecting commits on the same branch
+- `/` — a line showing a branch diverging
+- `\` — a line showing branches converging into a merge commit
+- `|/` — where a branch splits off from another
+- `|\` — where branches merge back together
+
+For more elaborate visualization, there are GUI tools:
+- **gitk** — built into Git, launches a GUI graph viewer
+- **GitHub/GitLab web UI** — shows branch graphs in the repository view
+- **VS Code Source Control** — the GitLens extension provides excellent graph visualization
+- **GitKraken, Sourcetree, Fork** — dedicated Git GUI applications
+
+```bash
+# Launch gitk (requires a display)
+gitk --all &
+```
+
+---
+
+## Common Branching Mistakes and How to Avoid Them
+
+### Mistake 1: Working Directly on main
+
+Always do feature work on a branch. Even if you are working alone. The habit pays dividends immediately when:
+- You need to pause the feature and do a quick bug fix
+- You want to share the code for review before it lands in main
+- The feature turns out to be a dead end and needs to be abandoned
+
+### Mistake 2: Long-Lived Branches
+
+The longer a branch lives without being merged, the harder the merge becomes. Keep branches short-lived: days, not weeks. If a feature is large, break it into smaller slices that can be merged individually.
+
+### Mistake 3: Not Updating Your Branch
+
+If `main` has received changes while you were working on your feature branch, merge or rebase `main` into your branch before merging your branch into main. This resolves conflicts on your branch (where only you are affected) rather than on main (where the whole team is affected).
+
+```bash
+# Update your feature branch with the latest changes from main
+git switch feature/add-priority
+git merge main    # or: git rebase main (covered in lesson 7)
+```
+
+### Mistake 4: Confusing Local and Remote Branches
+
+A local branch and its remote counterpart (e.g., `origin/main`) are separate things. We cover this in lesson 5, but be aware: `git branch` shows only local branches by default. `git branch -a` shows all, including remote-tracking branches.
+
+---
+
+## Practical Exercises
+
+### Exercise 1: Create and Merge Branches
+
+```bash
+cd ~/taskr
+
+# Create a feature branch for adding due dates to tasks
+git switch -c feature/due-dates
+
+# Add a due date feature (modify taskr.sh to support due dates)
+# Make at least 2 commits on this branch
+
+# Switch back to main and make a separate commit there too
+git switch main
+# (make a small change and commit)
+
+# View the diverged graph
+git log --oneline --graph --all
+
+# Merge the feature branch back to main
+git merge feature/due-dates
+
+# View the merged graph
+git log --oneline --graph --all
+
+# Delete the feature branch
+git branch -d feature/due-dates
+```
+
+### Exercise 2: Practice Fast-Forward vs Three-Way Merges
+
+```bash
+# Part A: Fast-forward merge
+git switch -c feature/fast-forward-test
+# Make 2 commits on main first... wait, that would cause divergence
+# For a clean fast-forward: make sure main does NOT advance while on branch
+git switch main
+git switch -c feature/clean-ff
+# Make a commit on feature/clean-ff
+git switch main
+git merge feature/clean-ff   # Should say "Fast-forward"
+git branch -d feature/clean-ff
+
+# Part B: Three-way merge
+git switch -c feature/three-way-test
+# Make a commit on this branch
+git switch main
+# Make a different commit on main
+git merge feature/three-way-test   # Should create a merge commit
+git log --oneline --graph
+```
+
+### Exercise 3: Branch Naming Practice
+
+Look at these vague branch names and rename them according to good conventions:
+- `test` → ?
+- `my-stuff` → ?
+- `fix2` → ?
+- `new-feature` → ?
+- `johns-work` → ?
+
+Write what you would rename each to, given the context that: you are fixing a bug where tasks with apostrophes in the title crash the app.
+
+### Challenge: Simulate a Team Workflow
+
+Create three branches:
+1. `feature/search-tasks` — add a search command to taskr
+2. `fix/empty-file-crash` — fix a crash when the tasks file is empty
+3. `docs/improve-readme` — update README with all commands
+
+Make commits on each. Then merge them into `main` in order: fix first, docs second, feature third. Observe how the graph evolves with each merge.
+
+---
+
+## Summary
+
+- A Git branch is simply a pointer to a commit stored as a 41-byte file in `.git/refs/heads/`. Creating a branch is instantaneous and costs essentially nothing.
+- `HEAD` points to the currently checked-out branch (or commit in detached HEAD state). When you commit, HEAD's branch advances to the new commit.
+- `git branch <name>` creates a branch. `git switch <name>` (or `git checkout <name>`) switches to it. `git switch -c <name>` creates and switches in one step.
+- A fast-forward merge simply moves the branch pointer forward when there is no divergence. A three-way merge creates a new merge commit when both branches have diverged.
+- `git branch -d` safely deletes a merged branch. `git branch -D` force-deletes regardless of merge status.
+- Use type prefixes (`feature/`, `fix/`, `hotfix/`) in branch names, keep names descriptive, and keep branches short-lived.
+- Visualize your branch history with `git log --oneline --graph --all`.
+
+The next lesson covers one of the most important skills in Git: undoing changes. You will learn how to recover from mistakes at every level — unstaged changes, staged changes, and committed changes.

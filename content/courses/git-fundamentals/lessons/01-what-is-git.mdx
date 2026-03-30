@@ -1,0 +1,453 @@
+---
+title: "What is Git & How Version Control Works"
+description: "Understand why version control exists, how Git's distributed model differs from older systems, how Git stores data as snapshots, the three areas every Git user must know, and how to install and configure Git for the first time."
+duration: 20
+order: 1
+---
+
+## The Problem Git Solves
+
+Before you learn a single Git command, you need to understand the problem it solves — because without that context, the commands feel arbitrary. They are not arbitrary. Every command in Git is a precise response to a real engineering problem.
+
+Imagine you are building a web application alone. You have a folder called `my-app/` on your laptop. You make changes every day. At some point you break something. You wish you could go back to yesterday's version. So you start creating folders:
+
+```
+my-app/
+my-app-backup-jan-10/
+my-app-backup-before-login-feature/
+my-app-backup-working-2/
+my-app-FINAL/
+my-app-FINAL-v2/
+my-app-FINAL-ACTUALLY-FINAL/
+```
+
+This is version control by folder copying. It works, barely, when you are alone. It breaks down immediately when:
+
+- A second developer joins and you both need to edit the same file
+- You want to work on a new feature without affecting the working version
+- A bug is reported in production and you need to know exactly what changed last week
+- You need to understand why a particular decision was made six months ago
+
+Version control systems were invented to solve exactly these problems — systematically and reliably.
+
+---
+
+## A Brief History of Version Control
+
+Understanding where Git came from explains why it works the way it does.
+
+### Generation 1: Local Version Control
+
+The earliest VCS tools operated entirely on a single machine. RCS (Revision Control System, 1982) is the canonical example. It kept a database of patches — the differences between successive versions of a file — on your local disk. You could check out any previous version by replaying the patches.
+
+This solved the "backup folder" problem for individual developers but did nothing for collaboration.
+
+### Generation 2: Centralized Version Control (CVS, SVN)
+
+Centralized VCS introduced a single server that held the complete history of every file. Developers checked out files from that server, modified them, and committed back. The server was the single source of truth.
+
+CVS (Concurrent Versions System) dominated the 1990s. SVN (Subversion) improved on CVS in the 2000s and was widely used until the mid-2010s.
+
+Centralized systems worked, but they had fundamental weaknesses:
+
+- **Single point of failure.** If the central server went down, nobody could commit or even view history. If the server was lost without a backup, all history was gone.
+- **Network dependency.** You needed a network connection to the server to do almost anything — committing, viewing logs, diffing files.
+- **Slow branching.** In SVN, branching was expensive both in time and in disk space. Teams avoided branches as a result, which led to everyone committing directly to trunk and breaking each other constantly.
+- **Lock-based workflows.** CVS required checking out (locking) files before editing them, meaning only one person could edit a file at a time.
+
+### Generation 3: Distributed Version Control (Git, Mercurial)
+
+In 2005, Linus Torvalds — the creator of the Linux kernel — built Git to solve a specific problem: the Linux kernel project could no longer use BitKeeper (the proprietary distributed VCS they had been using) and needed a replacement that was faster and more capable than anything available.
+
+Torvalds built Git in about ten days with a clear set of requirements:
+
+1. Speed — fast enough to handle the Linux kernel's volume of commits
+2. Simple design
+3. Strong support for non-linear development (thousands of parallel branches)
+4. Fully distributed — no single point of failure
+5. Able to handle large projects efficiently
+
+Git launched in 2005. Mercurial, a similar distributed VCS, launched the same year. Both solved the problems of centralized systems. Git won the adoption battle and is now the industry standard, powering GitHub, GitLab, Bitbucket, and virtually every open-source project.
+
+---
+
+## Git's Distributed Model
+
+The word "distributed" is the key insight. In Git, there is no single canonical server that holds the real history. Instead, every developer has a complete copy of the entire repository — all branches, all history, all commits — on their own machine.
+
+```
+Centralized Model (SVN):
+
+  Developer A ──┐
+  Developer B ──┼──── Central Server (single source of truth)
+  Developer C ──┘
+
+Distributed Model (Git):
+
+  Developer A (full repo) ──┐
+  Developer B (full repo) ──┼──── Remote server (just another copy, by convention "origin")
+  Developer C (full repo) ──┘
+```
+
+In practice, most teams designate one copy — usually hosted on GitHub or GitLab — as the canonical remote. But this is a convention, not a technical requirement. Every developer's local copy is a complete, fully functional repository.
+
+The practical benefits:
+
+- **Work offline.** You can commit, branch, merge, view history, and do almost anything without a network connection. You only need network access when you want to share changes with others.
+- **Speed.** Because most operations are local, Git is extremely fast. Viewing history, creating branches, committing changes — all happen at local disk speed, not network speed.
+- **Resilience.** If the central server is lost, any developer's copy can restore it. There is no single point of failure.
+- **Flexible workflows.** Teams can adopt peer-to-peer models, hub-and-spoke models, or hierarchical models depending on their needs.
+
+---
+
+## How Git Stores Data: Snapshots, Not Diffs
+
+This is the single most important conceptual difference between Git and older version control systems, and it affects how you should think about every Git operation.
+
+### The Diff Model (SVN, CVS)
+
+Older VCS tools stored data as a list of file-based changes over time. If you had three versions of `index.html`, the VCS stored the initial version and then the delta (diff) between each successive version. To reconstruct version 3, it would start with version 1 and apply diffs 1→2 and 2→3.
+
+```
+Version 1:  [file A v1]  [file B v1]  [file C v1]
+Version 2:  [   Δ A  ]  [   Δ B  ]  [file C v1]  (C unchanged)
+Version 3:  [file A v1]  [   Δ B  ]  [   Δ C  ]  (A reverted)
+```
+
+This is storage-efficient but can be slow to reconstruct a specific version, especially if the history is long.
+
+### The Snapshot Model (Git)
+
+Git thinks of its data more like a series of snapshots of a miniature filesystem. Every time you commit, Git takes a picture of all your files at that moment and stores a reference to that snapshot. If a file has not changed since the last commit, Git does not store the file again — it just stores a reference to the previous identical file. But conceptually, every commit is a complete snapshot, not a diff.
+
+```
+Commit 1:  [file A v1]  [file B v1]  [file C v1]
+Commit 2:  [file A v2]  [file B v2]  [→ file C v1]   (C links to commit 1's copy)
+Commit 3:  [→ file A v2]  [file B v3]  [file C v2]   (A links to commit 2's copy)
+```
+
+This model makes Git exceptionally fast at certain operations. To switch to any branch or commit, Git does not replay a sequence of diffs — it just loads the snapshot for that commit. Branching, checking out, and diffing are all fast because Git is always working with complete snapshots.
+
+---
+
+## The Three Areas Every Git User Must Know
+
+Git manages your work across three distinct areas. Understanding these three areas is essential — most Git confusion comes from not knowing which area a file is in.
+
+```
+┌─────────────────────┐    git add     ┌─────────────────┐    git commit    ┌──────────────┐
+│                     │ ────────────►  │                 │ ──────────────►  │              │
+│  Working Directory  │                │  Staging Area   │                  │  Repository  │
+│                     │ ◄────────────  │  (Index)        │ ◄──────────────  │  (.git dir)  │
+└─────────────────────┘  git restore   └─────────────────┘  git restore     └──────────────┘
+                                                              --staged
+```
+
+### 1. The Working Directory
+
+The working directory (also called the working tree) is the directory on your filesystem where you edit files. It is just a normal folder — open it in your file manager and you will see your files. Git knows about this directory because it contains a `.git` subdirectory, which is the repository itself.
+
+Files in the working directory can be in one of two states:
+- **Tracked**: Git knows about this file because it was in the last snapshot (commit). Tracked files can be unmodified, modified, or staged.
+- **Untracked**: A new file that Git has never seen before. Git will not include it in commits unless you explicitly add it.
+
+### 2. The Staging Area (Index)
+
+The staging area is a file inside the `.git` directory that stores information about what will go into your next commit. It is also called the "index." Think of it as a draft commit — you are assembling exactly the set of changes you want to record before you actually record them.
+
+The staging area is what makes Git different from simpler VCS tools. Instead of committing "everything that has changed since last time," you have fine-grained control: you can stage some changed files but not others, stage parts of files (with `git add -p`), and build a commit that tells a coherent story even if your working directory is messier.
+
+### 3. The Repository (.git directory)
+
+The repository is the `.git` directory inside your project folder. It contains:
+- The complete history of all commits
+- All branches and tags
+- Configuration files
+- The object database (where Git stores blobs, trees, commits, and tags)
+
+When you run `git commit`, Git takes everything in the staging area and permanently stores it in the repository as a new commit object, linked to its parent commit(s).
+
+The key insight: changes in your working directory are not "in Git" until they are committed. Changes in the staging area are "prepared for Git" but not yet recorded. Changes in the repository are permanent (in the sense that they are stored in the object database and can always be retrieved).
+
+---
+
+## Installing Git
+
+### macOS
+
+The easiest approach is the Xcode Command Line Tools, which installs Git automatically:
+
+```bash
+xcode-select --install
+```
+
+A dialog will appear asking you to install the command line tools. Click "Install". Once complete:
+
+```bash
+git --version
+# git version 2.39.3 (Apple Git-145)
+```
+
+Alternatively, use Homebrew for a more up-to-date version:
+
+```bash
+brew install git
+git --version
+# git version 2.44.0
+```
+
+### Windows
+
+Download Git for Windows from https://git-scm.com/download/win. The installer includes Git Bash (a terminal emulator with a Unix-like environment), Git GUI, and integrates Git into the Windows context menu.
+
+During installation, the key choices:
+- **Default editor**: Choose your preferred editor (VS Code is a good choice)
+- **PATH environment**: Choose "Git from the command line and also from 3rd-party software"
+- **Line endings**: Choose "Checkout Windows-style, commit Unix-style line endings" (the default, recommended)
+
+After installation:
+
+```bash
+git --version
+# git version 2.44.0.windows.1
+```
+
+### Linux (Debian/Ubuntu)
+
+```bash
+sudo apt update
+sudo apt install git
+git --version
+# git version 2.43.0
+```
+
+### Linux (Fedora/RHEL/CentOS)
+
+```bash
+sudo dnf install git
+git --version
+# git version 2.43.0
+```
+
+### Verify the Installation
+
+On any platform, after installing:
+
+```bash
+git --version
+```
+
+If this prints a version number, Git is installed correctly.
+
+---
+
+## First-Time Setup: git config
+
+Before you make your first commit, you need to tell Git who you are. Git attaches your name and email address to every commit you make. This information is embedded in the commit and cannot be changed after the fact without rewriting history, so get it right from the start.
+
+Git has three levels of configuration:
+
+- **System** (`/etc/gitconfig`): Applies to every user on the machine. Rarely used.
+- **Global** (`~/.gitconfig` or `~/.config/git/config`): Applies to all repositories for your user. This is where you set your identity.
+- **Local** (`.git/config` inside a repo): Applies only to that specific repository. Overrides global settings.
+
+### Setting Your Identity
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
+Use the email address associated with your GitHub or GitLab account. This is how platforms link your commits to your profile.
+
+### Setting Your Default Editor
+
+When Git needs you to write a message (commit message, rebase instructions), it opens a text editor. By default on most systems this is Vim, which surprises many new users. Set it to something you are comfortable with:
+
+```bash
+# VS Code
+git config --global core.editor "code --wait"
+
+# Vim (if you are comfortable with it)
+git config --global core.editor "vim"
+
+# Nano (simpler terminal editor)
+git config --global core.editor "nano"
+
+# Notepad++ on Windows
+git config --global core.editor "'C:/Program Files/Notepad++/notepad++.exe' -multiInst -notabbar -nosession -noPlugin"
+```
+
+The `--wait` flag for VS Code is important: it tells Git to wait until you close the tab in VS Code before proceeding, rather than immediately continuing.
+
+### Setting the Default Branch Name
+
+Historically, Git's default branch was called `master`. The industry has largely moved to `main`. Set this now to match modern conventions:
+
+```bash
+git config --global init.defaultBranch main
+```
+
+### Setting Up Line Ending Handling
+
+Line endings differ between operating systems (CRLF on Windows, LF on Unix/macOS). Git can automatically handle conversions:
+
+```bash
+# macOS/Linux: convert CRLF to LF on commit
+git config --global core.autocrlf input
+
+# Windows: convert LF to CRLF on checkout, CRLF to LF on commit
+git config --global core.autocrlf true
+```
+
+### Checking Your Configuration
+
+```bash
+git config --list
+```
+
+This prints all configuration values that apply to the current context (system + global + local). To see where each value is set:
+
+```bash
+git config --list --show-origin
+```
+
+To check a specific value:
+
+```bash
+git config user.name
+# Your Name
+
+git config user.email
+# you@example.com
+```
+
+To edit the global config file directly:
+
+```bash
+git config --global --edit
+```
+
+This opens your global `.gitconfig` file in your configured editor. The file uses a simple INI-like format:
+
+```ini
+[user]
+    name = Your Name
+    email = you@example.com
+[core]
+    editor = code --wait
+    autocrlf = input
+[init]
+    defaultBranch = main
+```
+
+---
+
+## Getting Help
+
+Git has built-in documentation for every command. There are three ways to access it:
+
+```bash
+# Full manual page (opens in a pager like less)
+git help <command>
+git help commit
+
+# Short summary of options (prints to terminal)
+git <command> --help
+git commit --help
+
+# Quick reference (abbreviated flags and descriptions)
+git <command> -h
+git commit -h
+```
+
+The full man pages are comprehensive and detailed. The `-h` flag gives you a quick reference when you just need to remember a flag name.
+
+For a list of all common Git commands:
+
+```bash
+git help -a       # All available commands
+git help -g       # Concept guides
+```
+
+The concept guides are particularly useful. `git help workflows`, `git help revisions`, and `git help glossary` provide deep background that complements the command reference.
+
+---
+
+## A Mental Model to Carry Forward
+
+Before moving to the next lesson, solidify this mental model:
+
+**Git is a content-addressable filesystem with a version control interface built on top.**
+
+Every object Git stores (file contents, directory trees, commits, tags) gets a unique identifier — a SHA-1 hash — computed from the content itself. If two files have identical content, they get the same hash and Git stores them once. If a single byte changes, the hash changes completely and Git stores it separately.
+
+This is why Git is so reliable. You cannot accidentally modify history without Git detecting it, because every object's identity is derived from its content. You cannot have two different things with the same identifier. The entire history of a repository is a Merkle tree rooted at the most recent commit.
+
+You do not need to fully understand SHA-1 hashes yet — that is lesson 9. But hold onto the intuition: Git stores snapshots, identifies them by content, and chains them together. Everything else is built on top of that foundation.
+
+---
+
+## Practical Exercises
+
+Complete these exercises before moving to lesson 2. They will ensure your environment is correctly set up.
+
+### Exercise 1: Verify and Configure Git
+
+```bash
+# Check Git is installed
+git --version
+
+# Set your identity (replace with your real name and email)
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+
+# Set VS Code as your editor (or substitute your preferred editor)
+git config --global core.editor "code --wait"
+
+# Set the default branch name
+git config --global init.defaultBranch main
+
+# Verify your configuration
+git config --list
+```
+
+### Exercise 2: Explore the Help System
+
+```bash
+# View the short help for the 'log' command
+git log -h
+
+# View the full manual for the 'config' command
+git help config
+# (Press 'q' to exit the pager)
+
+# List all concept guides
+git help -g
+```
+
+### Exercise 3: Understand Distributed vs Centralized
+
+Without running any commands, write answers to these questions in a text file or notebook:
+
+1. In a centralized VCS like SVN, what happens if the central server goes offline?
+2. In Git, if the team's GitHub repository is deleted, what happens to each developer's local copy?
+3. Why does Git store snapshots rather than diffs? What operations does this make faster?
+4. Name the three areas Git uses to manage your work and briefly describe what each one contains.
+
+### Exercise 4: Research Challenge
+
+Look up the history of the Linux kernel's version control crisis in 2005 that led Linus Torvalds to create Git. What VCS were they using before? Why did that relationship end? How long did it take Torvalds to build the first working version of Git?
+
+---
+
+## Summary
+
+- Version control solves the problems of tracking history, collaborating without conflicts, and safely experimenting with changes.
+- Git is a distributed VCS: every developer has a complete copy of the repository, including all history.
+- Unlike SVN's diff model, Git stores data as snapshots of the entire project at each commit.
+- The three areas of Git are the working directory (where you edit files), the staging area (where you prepare commits), and the repository (where history is permanently stored).
+- Set up Git with `git config --global` before making your first commit — your name and email are embedded in every commit you make.
+- Get help with `git help <command>` or `git <command> -h`.
+
+In the next lesson, you will create your first repository, make your first commits, and start building the habits that form the foundation of professional Git use.

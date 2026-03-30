@@ -1,0 +1,417 @@
+---
+title: "Fork, Clone, Push — Your First Contribution"
+description: "Learn the complete open source contribution workflow: forking a repository, cloning your fork, setting up the upstream remote, making changes, keeping your fork in sync, and opening a pull request."
+duration: 22
+order: 2
+---
+
+## The Fork-and-Contribute Model
+
+Most repositories you encounter on GitHub — popular open source projects, company tools you want to improve, documentation sites with errors — are repositories you do not have push access to. You cannot directly create branches, push commits, or open pull requests against the original. The fork-and-contribute model is how collaboration works in this context.
+
+The model has four phases:
+
+1. **Fork** — create your own copy of the repository under your GitHub account.
+2. **Clone** — download your fork to your local machine for development.
+3. **Contribute** — make your changes in a branch on your fork.
+4. **Propose** — open a pull request from your fork's branch to the original repository's main branch.
+
+This model is the foundation of essentially all open source contribution and is also used within organizations for cross-team contributions to repositories you don't own. Understanding it deeply means you can contribute to any project on GitHub.
+
+---
+
+## Forking a Repository
+
+Navigate to any repository on GitHub and click the **Fork** button in the top-right area of the repository header. GitHub will ask you where to fork the repository (your personal account or one of your organizations) and whether to copy all branches or just the default branch.
+
+**What forking creates:**
+
+- A complete copy of the repository under your account: `github.com/yourusername/reponame`
+- A `fork` relationship tracked by GitHub — your fork knows it was forked from the original (called the **upstream**)
+- Your own independent copy of all branches, commits, issues settings, and releases
+- A link back to the original repository displayed on your fork's GitHub page
+
+Importantly, forking is a GitHub concept, not a Git concept. The fork relationship is metadata tracked by GitHub. From Git's perspective, it is just another remote repository.
+
+**What forking does NOT do:**
+
+- It does not automatically keep your fork in sync with the upstream as it receives new commits.
+- It does not give you write access to the original repository.
+- It does not affect the original repository in any way.
+
+### Forking with the gh CLI
+
+```bash
+# Fork the repository and clone it in one step
+gh repo fork cli/cli --clone
+
+# Fork without cloning
+gh repo fork vercel/next.js
+
+# Fork to a specific organization
+gh repo fork some-org/some-repo --org your-org
+```
+
+---
+
+## Cloning Your Fork vs Cloning the Original
+
+After forking, you have two options for cloning:
+
+### Cloning Your Fork (Correct Approach for Contributing)
+
+```bash
+# Clone your fork (SSH — recommended)
+git clone git@github.com:yourusername/reponame.git
+
+# Clone your fork (HTTPS)
+git clone https://github.com/yourusername/reponame.git
+
+# Clone to a specific directory name
+git clone git@github.com:yourusername/reponame.git my-local-name
+```
+
+After cloning your fork, the `origin` remote points to your fork. This is correct — you push your branches to your fork, not directly to the upstream.
+
+### Cloning the Original Directly
+
+If you clone the original repository directly, you have read access but cannot push branches to it. This is appropriate for tools you use but don't intend to contribute to. For contributions, always clone your fork.
+
+```bash
+# Cloning the original gives you read-only remote
+git clone git@github.com:original-org/reponame.git
+# origin = git@github.com:original-org/reponame.git
+# You can pull from this, but cannot push (unless you have write access)
+```
+
+---
+
+## Setting Up the Upstream Remote
+
+After cloning your fork, you have one remote: `origin` pointing to your fork. To keep your fork in sync with the original repository, you need to add a second remote called `upstream` pointing to the original.
+
+```bash
+# Navigate into the cloned directory
+cd reponame
+
+# Check current remotes
+git remote -v
+# origin  git@github.com:yourusername/reponame.git (fetch)
+# origin  git@github.com:yourusername/reponame.git (push)
+
+# Add the upstream remote
+git remote add upstream git@github.com:original-org/reponame.git
+
+# Verify
+git remote -v
+# origin   git@github.com:yourusername/reponame.git (fetch)
+# origin   git@github.com:yourusername/reponame.git (push)
+# upstream git@github.com:original-org/reponame.git (fetch)
+# upstream git@github.com:original-org/reponame.git (push)
+```
+
+The naming convention `upstream` is not enforced by Git — it is just a convention followed by essentially every developer. Use it consistently.
+
+If you forked with `gh repo fork --clone`, the CLI sets up the upstream remote automatically.
+
+---
+
+## Making Changes and Pushing to Your Fork
+
+The workflow for making a contribution:
+
+### Step 1: Create a Branch
+
+Never commit directly to `main` on your fork. Create a descriptive feature branch for each contribution:
+
+```bash
+# Make sure your main is up to date first (covered in the next section)
+git checkout main
+git pull upstream main
+
+# Create and switch to a new branch
+git checkout -b fix/typo-in-readme
+# or
+git switch -c feat/add-dark-mode
+```
+
+Branch naming conventions vary by project. Many projects document their conventions in `CONTRIBUTING.md`. Common patterns:
+
+- `fix/description` — bug fixes
+- `feat/description` — new features
+- `docs/description` — documentation changes
+- `chore/description` — maintenance tasks (dependency updates, CI changes)
+- `refactor/description` — code restructuring without behavior changes
+
+### Step 2: Make Your Changes
+
+Edit files, write code, run tests. Follow the project's code style. Many projects have a `CONTRIBUTING.md` that explains how to set up a development environment, run tests, and format code.
+
+```bash
+# Example: fixing a bug
+# Edit the relevant file
+vim src/utils/parse.js
+
+# Stage your changes
+git add src/utils/parse.js
+
+# Commit with a clear message
+git commit -m "fix: handle empty string in parse() without throwing"
+```
+
+### Step 3: Push Your Branch to Your Fork
+
+```bash
+# Push the branch to origin (your fork)
+git push origin fix/typo-in-readme
+
+# On your first push of a new branch, set the upstream tracking
+git push -u origin fix/typo-in-readme
+# After this, subsequent pushes on this branch only need: git push
+```
+
+After pushing, GitHub will usually display a banner in the repository page offering to create a pull request for the recently pushed branch.
+
+---
+
+## Keeping Your Fork in Sync
+
+The upstream repository continues receiving commits after you fork it. If you work on a branch over several days or weeks, your fork's `main` can fall significantly behind the upstream's `main`. Keeping your fork in sync prevents painful merge conflicts later.
+
+### The Sync Workflow
+
+```bash
+# 1. Fetch all changes from upstream (does not modify local branches)
+git fetch upstream
+
+# 2. Switch to your main branch
+git checkout main
+
+# 3a. Merge the upstream changes into your local main
+git merge upstream/main
+# This is equivalent to: git pull upstream main
+
+# 3b. Alternative: rebase your main on upstream's main
+# (keeps a cleaner linear history)
+git rebase upstream/main
+
+# 4. Push your updated main to your fork on GitHub
+git push origin main
+```
+
+### Syncing via GitHub's UI
+
+GitHub provides a **Sync fork** button on your fork's main page. Click it to bring your fork's default branch up to date with the upstream. This is a convenient shortcut but does not update your local clone — you still need to `git pull` afterwards.
+
+```bash
+# After clicking "Sync fork" on GitHub:
+git checkout main
+git pull origin main
+```
+
+### Rebasing Your Feature Branch on Updated Main
+
+If you synced `main` after you created your feature branch, you may want to rebase your branch on the updated `main` to incorporate new changes and reduce merge conflicts:
+
+```bash
+git checkout fix/my-feature
+git rebase main
+# Git replays your commits on top of the updated main
+# Resolve any conflicts, then: git rebase --continue
+```
+
+---
+
+## Opening a Pull Request from a Fork
+
+Once your branch is pushed to your fork, you can open a pull request proposing to merge your changes into the upstream repository.
+
+### Via GitHub UI
+
+1. Go to the upstream repository (not your fork) on GitHub.
+2. GitHub will often show a banner: "Your branch `fix/my-feature` in `yourusername/reponame` had recent pushes. Compare & pull request." Click it.
+3. If no banner appears, click the **Pull requests** tab, then **New pull request**, then click **compare across forks**.
+4. Set:
+   - **base repository**: the original (upstream) repository
+   - **base branch**: the branch you want to merge into (usually `main`)
+   - **head repository**: your fork
+   - **compare branch**: your feature branch
+
+### Via gh CLI
+
+```bash
+# Open a PR from your current branch
+gh pr create
+
+# The CLI prompts for title, body, and target repository
+# Or provide them inline:
+gh pr create \
+  --title "fix: handle empty string in parse()" \
+  --body "Fixes #42. Empty strings now return null instead of throwing TypeError." \
+  --base main
+```
+
+Pull requests are covered in full detail in lesson 3. For now, know that the PR sends your proposed changes to the upstream maintainers for review.
+
+---
+
+## The First Open Source Contribution Workflow — End to End
+
+Here is the complete workflow from zero to merged contribution, using a real example: fixing a documentation typo in an open source project.
+
+```bash
+# 1. Fork the repository on GitHub (click Fork button)
+
+# 2. Clone your fork
+git clone git@github.com:yourusername/awesome-project.git
+cd awesome-project
+
+# 3. Add upstream remote
+git remote add upstream git@github.com:original-org/awesome-project.git
+
+# 4. Fetch upstream to make sure you're starting from the latest
+git fetch upstream
+git checkout main
+git merge upstream/main
+
+# 5. Create a feature branch
+git checkout -b docs/fix-installation-typo
+
+# 6. Make your change
+# (edit README.md to fix the typo)
+vim README.md
+
+# 7. Review what you changed
+git diff
+
+# 8. Stage and commit
+git add README.md
+git commit -m "docs: fix typo in installation section (recieve -> receive)"
+
+# 9. Push your branch to your fork
+git push -u origin docs/fix-installation-typo
+
+# 10. Open a pull request
+gh pr create \
+  --title "docs: fix typo in installation section" \
+  --body "Fixed spelling error: 'recieve' -> 'receive' in step 3 of installation guide."
+```
+
+At this point the maintainers will receive a notification. They may:
+- Approve and merge immediately (for trivial fixes)
+- Ask for changes (respond to their comments, push new commits to your branch — the PR updates automatically)
+- Close without merging (if they disagree with the change — read their feedback carefully)
+
+### Reading the CONTRIBUTING.md
+
+Before submitting your first contribution to any project, read the `CONTRIBUTING.md` file in the root of the repository. It typically covers:
+
+- How to set up the development environment
+- Code style requirements (linters, formatters)
+- Test requirements (all PRs must include tests)
+- PR title and description format (some projects use Conventional Commits)
+- How to get help (Discord, Slack, Discussions)
+
+Ignoring the CONTRIBUTING.md and submitting a PR that violates project conventions wastes everyone's time. Read it first.
+
+---
+
+## gh CLI Shortcuts for the Fork/Clone/PR Workflow
+
+The `gh` CLI makes the fork-clone-upstream setup a single command:
+
+```bash
+# Fork AND clone AND set up upstream remote in one step
+gh repo fork original-org/reponame --clone --remote
+
+# After forking, check remotes — both origin and upstream are set up
+git remote -v
+
+# Create a PR from current branch with interactive prompts
+gh pr create
+
+# List open PRs in the upstream repository
+gh pr list --repo original-org/reponame
+
+# View a specific PR
+gh pr view 42
+
+# Check out a PR to test it locally
+gh pr checkout 42
+```
+
+### Listing and Managing Your Forks
+
+```bash
+# List all your forks
+gh repo list --fork
+
+# View the relationship between your fork and upstream
+gh repo view yourusername/reponame --json parent
+```
+
+---
+
+## Common Mistakes and How to Avoid Them
+
+### Committing Directly to main on Your Fork
+
+Always work in branches. If you commit to `main` on your fork, synchronizing with upstream becomes complicated because your `main` now has commits that don't exist upstream.
+
+```bash
+# If you accidentally committed to main on your fork:
+# 1. Create a branch from your current position
+git checkout -b fix/my-accidental-commits
+
+# 2. Reset main to upstream's main
+git checkout main
+git reset --hard upstream/main
+
+# 3. Push the reset to your fork (force required because history diverged)
+git push origin main --force
+
+# 4. Continue working from your new branch
+git checkout fix/my-accidental-commits
+```
+
+### Opening a PR Against the Wrong Base
+
+When opening a PR from a fork, double-check that the base repository and base branch are what you intend. GitHub sometimes auto-populates the wrong base — especially if the upstream has a development branch.
+
+### Forgetting to Sync Before Starting New Work
+
+Always run `git fetch upstream && git merge upstream/main` before starting a new feature branch. Starting from stale main means your eventual PR will have more conflicts.
+
+---
+
+## Practical Exercises
+
+### Exercise 1 — Fork and Clone
+
+1. Navigate to `github.com/firstcontributions/first-contributions` — a repository designed specifically for first-time contributors.
+2. Fork the repository.
+3. Clone your fork.
+4. Add the upstream remote.
+5. Verify both remotes with `git remote -v`.
+
+### Exercise 2 — Make a Contribution
+
+1. Follow the contribution instructions in `first-contributions`' README.
+2. Create a branch named `add-yourname`.
+3. Add your name to the `Contributors.md` file.
+4. Commit and push to your fork.
+5. Open a pull request.
+
+### Exercise 3 — Sync Your Fork
+
+1. Find a repository that has been recently updated (check the commit history).
+2. Fork it.
+3. Wait a day and then practice the sync workflow: `git fetch upstream`, `git merge upstream/main`, `git push origin main`.
+4. Use the GitHub UI's **Sync fork** button and then `git pull` to bring your local clone up to date.
+
+### Exercise 4 — Using gh for the Full Workflow
+
+1. Pick a repository on GitHub with a simple `good first issue` label.
+2. Use `gh repo fork --clone --remote` to set up your fork in one command.
+3. Create a branch, make a change, push it.
+4. Use `gh pr create` to open the pull request from the terminal.

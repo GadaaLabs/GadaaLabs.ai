@@ -1,0 +1,378 @@
+---
+title: "Code Review — Comments, Suggestions & Approval"
+description: "Learn to give and receive effective code review: inline comments, one-click suggestions, formal review submissions, CODEOWNERS for automatic assignment, and the tools that make review efficient."
+duration: 22
+order: 4
+---
+
+## Why Code Review Matters
+
+Code review is the most valuable quality gate in the software development process. It is not bureaucracy or gatekeeping — it is the practice by which teams catch bugs before they reach production, share knowledge across the team, maintain architectural consistency, and build collective ownership of the codebase.
+
+Studies of large-scale software development consistently find that code review catches a substantial percentage of defects that automated testing misses, because reviewers can reason about correctness, maintainability, performance implications, and business logic in ways that automated tools cannot. A reviewer asking "what happens if this list is empty?" has prevented more production incidents than most testing frameworks.
+
+Beyond defect detection, code review serves a second purpose that is equally important: knowledge transfer. The reviewer learns what changed and why. The author receives feedback that improves their craft. Both develop shared understanding of the codebase that prevents knowledge silos and makes the team more resilient.
+
+Effective code review is a skill. This lesson covers both the mechanics of GitHub's review tools and the practices that make review genuinely useful rather than just a rubber-stamp or an adversarial hurdle.
+
+---
+
+## The GitHub Review Interface
+
+When you navigate to a PR, the default view shows the **Conversation** tab with the PR description, status checks, and comments. The key tabs are:
+
+- **Commits** — individual commits in the PR, each clickable to see that commit's diff in isolation
+- **Checks** — CI/CD status checks and their output
+- **Files changed** — the complete diff for the PR, line by line
+
+The **Files changed** tab is where code review happens.
+
+### The Diff View
+
+The diff shows each file changed, with lines removed in red (prefixed with `-`) and lines added in green (prefixed with `+`). Context lines (unchanged lines around the change) appear in white.
+
+**View options:**
+
+- **Unified** — a single column showing both old and new, interleaved
+- **Split** — two columns showing old on the left, new on the right (often easier to read for complex changes)
+
+Toggle between views with the buttons at the top of the Files changed tab.
+
+**Expand context:** By default, only a few lines of context are shown around each change. Click the `...` expander arrows to show more lines above or below a hunk.
+
+**View the full file:** Click the file name to open it in GitHub's file viewer at the PR's branch version. This is helpful for understanding the change in the full context of the surrounding code.
+
+---
+
+## Leaving Inline Comments
+
+The most common form of code review feedback is an inline comment on a specific line.
+
+### Commenting on a Single Line
+
+Hover over any line in the diff. A blue `+` button appears at the left edge of the line number. Click it to open a comment box for that specific line.
+
+### Commenting on a Range of Lines
+
+Click and drag to select multiple lines, then click the blue `+` button that appears. The comment will be anchored to the entire selection. This is useful when your feedback applies to a block of code rather than a single line.
+
+### What to Write in Inline Comments
+
+A good inline comment:
+- Identifies a specific issue or asks a specific question
+- Explains the reasoning, not just the conclusion
+- Suggests an alternative when possible
+- Is kind in tone, even when the feedback is critical
+
+Bad comment: "This is wrong."
+Good comment: "This will throw a TypeError if `items` is null. Consider adding a null check: `if (!items) return [];`"
+
+Bad comment: "Why did you do it this way?"
+Good comment: "I'm curious why this uses a linear scan here — is there a reason we can't use the `Map` lookup we have in `cache.js`? That would be O(1) instead of O(n)."
+
+---
+
+## Suggestions
+
+GitHub's **Suggestion** feature is one of the most powerful tools in the code review interface. It lets a reviewer propose a specific code change that the PR author can apply with a single click — no need to check out the branch, make the edit, commit, and push.
+
+### Creating a Suggestion
+
+In an inline comment, click the **Add a suggestion** button (the icon with a plus and minus in the toolbar), or manually wrap your proposed code in suggestion fencing:
+
+````markdown
+```suggestion
+const items = data?.items ?? [];
+```
+````
+
+GitHub renders this as a visual diff showing the old line in red and your suggested replacement in green, with an **Apply suggestion** button.
+
+### Applying a Suggestion
+
+When you receive a suggestion on your PR, click **Apply suggestion** directly in the comment. GitHub creates a commit on your PR branch with the reviewer's change applied. The commit message is automatically generated as "Apply suggestions from code review."
+
+### Batching Multiple Suggestions
+
+If a reviewer leaves multiple suggestions, they can be batched and applied in a single commit:
+
+1. For each suggestion you want to apply, click **Add suggestion to batch**.
+2. After reviewing all suggestions, click **Commit suggestions** to apply them all in one commit.
+
+This keeps the commit history clean instead of generating a separate commit for each suggestion.
+
+### What Suggestions Are Good For
+
+- Fixing typos
+- Correcting small syntax errors
+- Proposing a simpler implementation of the same logic
+- Applying consistent formatting
+- Adding missing edge case handling
+
+Suggestions are NOT a good tool for large refactors or architectural changes — those are better discussed in comments and implemented by the author.
+
+---
+
+## Starting a Formal Review vs Commenting Immediately
+
+There are two ways to leave feedback on a PR:
+
+### Single Comment (Immediate)
+
+When you click **Add single comment** in the comment box, the comment is posted immediately and notifications are sent. Use this for isolated questions or observations that stand alone.
+
+### Formal Review (Batched)
+
+When you click **Start a review**, GitHub queues your comments without sending notifications. You continue reviewing the diff, adding more comments to the queue. At the end, you submit the entire review at once with a summary and a verdict.
+
+**Why use a formal review:**
+
+- The PR author receives one notification with all feedback, not dozens of separate notifications as you work through the diff.
+- You provide a clear verdict (Approve / Request Changes / Comment) rather than just leaving floating comments.
+- The overall review comment gives you space to explain the big picture of your feedback.
+- It prevents the PR author from starting to respond to early comments while you are still reading.
+
+For any PR with more than a few comments, use a formal review rather than single comments.
+
+### Starting a Review
+
+Begin a formal review by hovering over a line and clicking the `+` icon to open the comment box. The button at the bottom reads **Start a review** instead of **Add single comment**. Click it to begin your review.
+
+As you add more comments, they are shown in a pending state (visible only to you). At any point you can click the **Finish your review** button that appears at the top of the page to submit.
+
+---
+
+## Approve, Request Changes, Comment
+
+When submitting a formal review, you choose one of three verdicts:
+
+### Approve
+
+You have reviewed the changes and believe they are ready to merge. An approval is a positive signal and, depending on branch protection rules, may be required before the PR can be merged.
+
+Use Approve when:
+- The code is correct and handles edge cases appropriately
+- The implementation is consistent with the codebase's patterns
+- Tests are adequate
+- Documentation is updated if needed
+- Any concerns you raised have been addressed
+
+### Request Changes
+
+You have reviewed the changes and found issues that must be addressed before merging. The PR is blocked — it cannot be merged (if branch protection requires reviews) until the reviewer who requested changes either re-reviews and approves or dismisses their own review.
+
+Use Request Changes when:
+- There are correctness bugs
+- Security vulnerabilities are present
+- The implementation has significant maintainability problems
+- Required tests are missing
+- The PR does something it shouldn't
+
+### Comment
+
+You submit general feedback without explicitly approving or blocking. Useful for:
+- Observational feedback that doesn't require changes
+- Questions that need answers before you can form a final verdict
+- Early-stage draft PR feedback
+
+---
+
+## Code Review Best Practices
+
+### On Tone and Framing
+
+Code review is done by humans on code written by humans. The goal is to improve the code, not to criticize the person. Small choices in how you phrase feedback have large effects on how it is received.
+
+**Use questions, not directives:**
+- "Have you considered using `Promise.allSettled` here to handle partial failures?" is better than "Use `Promise.allSettled` here."
+
+**Explain the why:**
+- "This can cause a data race if two requests arrive within the same millisecond" gives the author enough information to understand and agree with the concern. "This is a bug" does not.
+
+**Distinguish must-fix from nice-to-have:**
+Many teams prefix comments with labels:
+- `nit:` — minor cosmetic preference, take it or leave it
+- `optional:` — a suggestion the reviewer thinks would improve things but won't block
+- `blocking:` or no prefix — something that must be addressed before merge
+
+**Acknowledge good work:**
+If the author did something clever, handled a tricky edge case well, or found a clean solution to a hard problem, say so. Code review is not only for finding problems.
+
+### On Specificity
+
+Vague feedback is unhelpful and frustrating. Be specific:
+- "This function is too long" → "This function has four distinct responsibilities. Consider extracting the validation logic into a separate function `validateInput()` for testability."
+- "I don't like this pattern" → "This pattern (nesting callbacks three levels deep) makes it harder to trace errors. Would you be open to converting this to async/await?"
+
+### Reviewing the Right Things
+
+Focus your attention on:
+1. **Correctness** — does the code do what it's supposed to do? Does it handle error cases?
+2. **Security** — are there injection risks, unvalidated inputs, or secrets in the diff?
+3. **Performance** — are there N+1 queries, unnecessary loops, or large memory allocations in hot paths?
+4. **Maintainability** — is the code understandable? Are abstractions appropriate?
+5. **Test coverage** — are the right things tested?
+
+Lower priority (but still valid): naming preferences, style inconsistencies (let your linter handle these), and minor refactoring suggestions.
+
+---
+
+## Responding to Review Feedback
+
+As the PR author receiving feedback, your job is to take the feedback seriously, respond clearly, and address it.
+
+### Responding to Comments
+
+Reply to each comment, even if briefly. Options:
+
+- "Fixed in the latest commit." — for comments you addressed.
+- "Good catch — fixed." — for bugs the reviewer found.
+- "I agree this is cleaner — refactored." — for style/pattern feedback you accepted.
+- "I see the concern, but I think X is better here because Y. Happy to discuss further." — for cases where you disagree.
+
+Never leave comments unanswered. Unresponsive PR authors are frustrating and their PRs get closed.
+
+### Pushing Fixes After Review
+
+When you push new commits to address review feedback, the PR diff updates automatically. The reviewer can compare the new commits to what they reviewed previously.
+
+Best practice: push one commit per logical set of feedback addressed (or at minimum, one commit for the entire review round). Avoid dozens of tiny fixup commits — squash them before pushing if needed.
+
+### Dismissing Stale Reviews
+
+If a reviewer has requested changes but then goes on vacation or becomes unresponsive, a repository admin can dismiss the stale review:
+
+1. On the PR page, find the review in the conversation thread.
+2. Click the three-dot menu → **Dismiss review**.
+3. Provide a reason.
+
+This removes the blocking "Changes requested" state and allows the PR to be merged if other conditions are met. Use this sparingly — it exists for genuine cases of reviewer unavailability, not as a way to bypass legitimate feedback.
+
+---
+
+## Re-Requesting Review After Changes
+
+After you push changes to address review feedback, re-request review from the reviewers. This sends them a notification that the PR is updated and ready for another look.
+
+### Via UI
+
+On the PR page, in the Reviewers section on the right sidebar, find the reviewer who requested changes and click the cycle (refresh) icon next to their name.
+
+### Via gh CLI
+
+```bash
+gh pr review --request --reviewer alice
+```
+
+---
+
+## The CODEOWNERS File
+
+The `CODEOWNERS` file allows you to define which team members are automatically assigned as reviewers for changes to specific files or directories. When a PR touches those files, the designated owners are automatically added as required reviewers.
+
+### Creating a CODEOWNERS File
+
+Create `.github/CODEOWNERS` (or `CODEOWNERS` at the root, or `docs/CODEOWNERS`):
+
+```
+# Each line is a pattern followed by one or more owners
+# Owners can be @username, @org/team-name, or email addresses
+
+# Default owners for all files
+*                   @org/core-team
+
+# Frontend files — assigned to the frontend team
+/src/frontend/      @org/frontend-team
+*.css               @org/design-team
+*.scss              @org/design-team
+
+# Backend API — assigned to specific individuals
+/src/api/           @alice @bob
+
+# Infrastructure and CI
+/.github/           @org/devops-team
+/terraform/         @org/devops-team
+Dockerfile          @org/devops-team
+
+# Documentation — anyone can review but at least one tech writer
+/docs/              @carol @org/tech-writers
+
+# Security-sensitive files — always requires a security review
+/src/auth/          @org/security-team
+/src/crypto/        @org/security-team
+```
+
+### Pattern Syntax
+
+CODEOWNERS uses gitignore-style patterns:
+
+- `*` — matches any file
+- `**` — matches any file in any subdirectory
+- `/path/` — matches a directory and all files within it
+- `*.ext` — matches any file with that extension
+- `/path/to/file.js` — matches a specific file exactly
+
+Later rules take precedence over earlier rules.
+
+### Enabling Required CODEOWNER Review
+
+For CODEOWNERS to actually block merging, you must enable "Require review from Code Owners" in branch protection rules (Settings → Branches → Branch protection rules → edit rule → check the option). Without this, CODEOWNERS only auto-assigns reviewers but doesn't require their approval.
+
+---
+
+## Review Tools: File Filter and Viewed Checkbox
+
+### The File Filter
+
+When a PR has dozens of changed files, the file filter at the top of the Files changed tab helps you focus. You can filter by:
+
+- File name/path (type to search)
+- File type
+- File status (added, modified, deleted, renamed)
+
+This is especially useful in large refactoring PRs where you want to review specific areas.
+
+### The Viewed Checkbox
+
+Each file in the diff has a **Viewed** checkbox in the file header (top-right corner of each file). Checking it collapses the file and marks it as reviewed. Your progress is saved even if you navigate away.
+
+This is essential for reviewing large PRs across multiple sessions — you know exactly where you left off.
+
+### The Review Summary
+
+At the top of the Files changed tab, a summary shows "X files changed, Y additions, Z deletions." Individual files show their line counts. This helps you gauge the scope of the review before diving in.
+
+---
+
+## Practical Exercises
+
+### Exercise 1 — Leave Inline Comments
+
+1. Find a PR in a practice repository or create one with a deliberate bug.
+2. Navigate to Files changed.
+3. Leave at least three inline comments: one on a single line, one on a range, one that includes a suggestion.
+4. Practice switching between Unified and Split diff views.
+
+### Exercise 2 — Submit a Formal Review
+
+1. On a PR, start a formal review (not single comments).
+2. Add 3-5 comments as you go through the diff.
+3. Write an overall summary comment.
+4. Submit with "Request Changes."
+5. As the PR author, address each comment and push the fixes.
+6. Re-request review.
+7. As the reviewer, approve the PR.
+
+### Exercise 3 — Apply Suggestions
+
+1. Leave a suggestion on a PR (changing a line of code to something slightly different).
+2. As the PR author, apply the suggestion using the Apply suggestion button.
+3. Verify the resulting commit and its message.
+
+### Exercise 4 — Set Up CODEOWNERS
+
+1. In a repository you own, create `.github/CODEOWNERS`.
+2. Add a rule that assigns yourself as owner of all `.md` files.
+3. Create a branch, modify a `.md` file, and open a PR.
+4. Verify that you are automatically added as a reviewer.
+5. Enable "Require review from Code Owners" in the branch protection rules.

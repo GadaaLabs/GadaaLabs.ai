@@ -1,0 +1,508 @@
+---
+title: "Git Internals — Objects, Trees & the .git Directory"
+description: "Peer under the hood of Git: explore the object database, understand blobs, trees, commits, and tag objects, see how branches are just files, explore the index, and understand how Git achieves reliability through content-addressable storage."
+duration: 22
+order: 9
+---
+
+## Why Internals Matter
+
+You can use Git effectively without understanding its internals. But understanding the internals makes you dramatically more effective when:
+
+- A merge conflict seems inexplicable
+- A rebase produces unexpected results
+- You need to recover from an unusual situation
+- You want to understand what a complex command is actually doing
+
+More fundamentally, Git is elegant. Once you see the object model, all the commands stop being a collection of memorized incantations and become obvious extensions of a simple, coherent design. The internals are worth understanding for their own sake.
+
+---
+
+## Content-Addressable Storage
+
+Git's entire object system is built on a simple principle: **objects are identified by their content**.
+
+Every object Git stores gets a SHA-1 hash computed from its content. The hash is 40 hexadecimal characters. Git uses the first 2 characters as a directory name and the remaining 38 as the filename inside `.git/objects/`.
+
+This system is called **content-addressable storage**. Its properties:
+
+1. **Deterministic**: The same content always produces the same hash. Two identical files are stored once.
+2. **Tamper-evident**: Changing even a single byte changes the hash completely. You cannot quietly modify stored objects.
+3. **Efficient**: Duplicate content (across commits, across files) is stored exactly once.
+4. **Self-verifying**: Git can detect corruption by recomputing hashes and comparing.
+
+Let's verify this ourselves:
+
+```bash
+cd ~/taskr
+
+# Hash the content of a file without storing it
+git hash-object README.md
+# e.g., 7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b
+
+# The hash-object command computes what the hash WOULD be
+# -w stores the object in the object database
+echo "Hello, Git!" | git hash-object --stdin
+# Compute hash of this string
+```
+
+---
+
+## The Four Object Types
+
+Git stores exactly four types of objects in its database:
+
+1. **Blob** — file content
+2. **Tree** — directory listing (references to blobs and other trees)
+3. **Commit** — a snapshot with metadata and a pointer to a tree
+4. **Tag** — an annotated tag object pointing to another object
+
+Every object has the same basic structure:
+- A header: `<type> <size>\0`
+- The content
+
+The SHA-1 hash is computed from this entire string (header + content).
+
+---
+
+## Blobs: Storing File Content
+
+A blob stores the raw content of a file. Nothing else — no filename, no permissions, no metadata. Just the bytes.
+
+```bash
+# Find a blob in the object database
+git cat-file -t HEAD:taskr.sh   # -t: show the type
+# blob
+
+git cat-file -p HEAD:taskr.sh   # -p: pretty-print the content
+# (shows the content of taskr.sh at HEAD)
+```
+
+Because blobs store only content (no filename), two files with identical content in different locations or with different names share the same blob. This is how Git achieves space efficiency.
+
+```bash
+# Manually create a blob object
+echo "Hello, Git internals!" | git hash-object -w --stdin
+# Returns: b0395d7f2dcb5d4c4ba95a6a45f9d3c8e3e1f2a3
+# This blob is now stored in .git/objects/b0/395d7f2dcb5...
+```
+
+---
+
+## Trees: Storing Directory Structure
+
+A tree is the Git equivalent of a directory. It is a list of entries, where each entry contains:
+- The mode (file permissions: `100644` for regular file, `100755` for executable, `040000` for directory, `120000` for symlink)
+- The object type (`blob` or `tree`)
+- The SHA-1 hash of the referenced object
+- The filename
+
+```bash
+# View the tree object for the current commit
+git cat-file -p HEAD^{tree}
+
+# Output:
+# 100644 blob 7a8b9c0d...  .gitignore
+# 100644 blob 3d4e5f6a...  .taskr.conf
+# 100644 blob 9a1b2c3d...  README.md
+# 100755 blob 1f2a3b4c...  taskr.sh
+```
+
+A tree can reference other trees (subdirectories):
+
+```bash
+# If there's a src/ directory:
+# 040000 tree e5f6a7b8...  src
+
+# Explore the nested tree:
+git cat-file -p e5f6a7b8
+# 100644 blob ...  main.sh
+# 100644 blob ...  utils.sh
+```
+
+Because tree objects reference other objects by their SHA-1 hash, the tree hash changes if any file in the directory (or any subdirectory) changes. This creates a cascading integrity guarantee: the commit hash depends on the root tree hash, which depends on all the file and subdirectory hashes, all the way down.
+
+---
+
+## Commit Objects: The Full Picture
+
+A commit object is what you create when you run `git commit`. It contains:
+- A pointer to the root tree (the snapshot)
+- Pointers to parent commit(s) (zero for root commit, one for normal commit, two or more for merge commit)
+- Author (name, email, timestamp)
+- Committer (name, email, timestamp — can differ from author, e.g., when applying a patch)
+- The commit message
+
+```bash
+# View a commit object
+git cat-file -p HEAD
+
+# Output:
+# tree 9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9
+# parent 4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3
+# author Your Name <you@example.com> 1705344645 -0800
+# committer Your Name <you@example.com> 1705344645 -0800
+#
+# feat: add task priority system
+```
+
+The `parent` field is what creates the linked list of commits that forms the history. For a merge commit, there are two `parent` lines.
+
+Because the commit hash includes the tree hash and the parent hash(es), changing anything in history (any file content, any commit message, any parent pointer) produces a completely different hash for that commit and all its descendants. This is why "rewriting history" with rebase produces new commit hashes.
+
+### The Directed Acyclic Graph (DAG)
+
+The commit history forms a **directed acyclic graph** (DAG): directed (parent pointers go one way: child to parent), acyclic (you can never follow parent pointers and return to your starting commit).
+
+```
+[E] → [D] → [B] → [A]
+              ↑
+      [C] ────┘
+```
+
+Commit `D` has two parents (`B` and `C`) — it is a merge commit. You can follow the arrows from any commit back to the root, but you cannot cycle.
+
+---
+
+## Tag Objects
+
+Annotated tag objects (from `git tag -a`) are the fourth object type:
+
+```bash
+git cat-file -p v1.0.0
+
+# Output:
+# object 7a8b9c0d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9
+# type commit
+# tag v1.0.0
+# tagger Your Name <you@example.com> 1705344645 -0800
+#
+# Release version 1.0.0
+```
+
+A tag object points to another object (usually a commit, but tags can technically point to any object). The `object` field contains the SHA-1 of the tagged commit.
+
+Lightweight tags do not create tag objects — they are just reference files (like branches) that point directly to a commit.
+
+---
+
+## How Branches Are Files
+
+Branches are implemented as plain text files in `.git/refs/heads/`. Each file contains exactly one thing: the SHA-1 hash of the commit that branch points to.
+
+```bash
+# Look at the branch files
+ls .git/refs/heads/
+# main
+# feature/add-priority
+
+cat .git/refs/heads/main
+# 9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9
+
+# When you commit, this file is updated:
+git commit -m "test commit"
+cat .git/refs/heads/main
+# (different hash now)
+```
+
+This is why branching is free in Git. Creating a branch is literally creating a 41-byte file. Deleting a branch is deleting that file. Switching branches is updating `HEAD` to point to a different file.
+
+```bash
+cat .git/HEAD
+# ref: refs/heads/main
+
+# In detached HEAD state:
+# 9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9
+```
+
+---
+
+## Remote-Tracking Branches as Files
+
+Remote-tracking branches follow the same pattern, stored in `.git/refs/remotes/`:
+
+```bash
+ls .git/refs/remotes/
+# origin/
+
+ls .git/refs/remotes/origin/
+# HEAD
+# main
+
+cat .git/refs/remotes/origin/main
+# (SHA-1 of origin/main at last fetch)
+```
+
+---
+
+## The Index: Staging Area Internals
+
+The staging area (index) is stored in `.git/index`. It is a binary file that lists every tracked file with its:
+- SHA-1 hash (blob hash of the staged content)
+- File mode (permissions)
+- File name
+- Timestamps and stat information (for performance: comparing mtime to detect changes without reading content)
+
+```bash
+# Read the index (requires git ls-files)
+git ls-files --stage
+
+# Output shows all staged files with their modes and hashes:
+# 100644 7a8b9c0d... 0    .gitignore
+# 100644 3d4e5f6a... 0    .taskr.conf
+# 100644 9a1b2c3d... 0    README.md
+# 100755 1f2a3b4c... 0    taskr.sh
+```
+
+The third column (0) is the "stage number." During a merge conflict:
+- Stage 0: normal, no conflict
+- Stage 1: the common ancestor (base) version
+- Stage 2: the HEAD (current branch) version
+- Stage 3: the MERGE_HEAD (incoming branch) version
+
+```bash
+# During a conflict, git ls-files --stage shows all three versions:
+# 100644 abc... 1    taskr.sh   (ancestor)
+# 100644 def... 2    taskr.sh   (ours)
+# 100644 ghi... 3    taskr.sh   (theirs)
+```
+
+This is why you can do `git checkout --ours taskr.sh` and `git checkout --theirs taskr.sh` — Git reads the blob from stage 2 or stage 3 respectively.
+
+---
+
+## The .git Directory: Complete Layout
+
+```bash
+.git/
+├── HEAD              # Current branch or commit
+├── config            # Repository-specific configuration
+├── description       # Used by GitWeb (mostly irrelevant for day-to-day use)
+├── COMMIT_EDITMSG    # Message from the last commit
+├── MERGE_HEAD        # During a merge: the commit being merged in
+├── MERGE_MSG         # Default message for the merge commit
+├── ORIG_HEAD         # Previous HEAD before a merge/rebase/reset
+├── REBASE_HEAD       # During a rebase: the commit being replayed
+│
+├── objects/          # The object database
+│   ├── pack/         # Packed object files (for efficiency)
+│   ├── info/         # Pack index info
+│   ├── ab/           # Loose objects (directory = first 2 hex chars)
+│   ├── 3f/           # Loose objects
+│   └── ...
+│
+├── refs/
+│   ├── heads/        # Local branches
+│   │   ├── main
+│   │   └── feature/add-priority
+│   ├── tags/         # Tags
+│   │   └── v1.0.0
+│   └── remotes/      # Remote-tracking branches
+│       └── origin/
+│           ├── HEAD
+│           └── main
+│
+├── logs/
+│   ├── HEAD          # Reflog for HEAD
+│   └── refs/
+│       ├── heads/
+│       │   └── main  # Reflog for main branch
+│       └── remotes/
+│           └── origin/
+│               └── main
+│
+├── hooks/            # Hook scripts (pre-commit, post-commit, etc.)
+│   ├── pre-commit.sample
+│   ├── commit-msg.sample
+│   └── ...
+│
+├── info/
+│   └── exclude       # Per-repo gitignore (not committed)
+│
+└── index             # The staging area (binary file)
+```
+
+---
+
+## Packfiles and Garbage Collection
+
+Initially, every object Git creates is stored as a separate compressed file in `.git/objects/` (called a "loose object"). This works fine for small repositories but becomes inefficient as the repository grows.
+
+Git periodically (or when you run `git gc`) packs loose objects into **packfiles** — single large files that store many objects together, often with delta compression. Delta compression stores similar objects as a base object plus a diff (similar to the old SVN model, but applied to stored objects rather than the conceptual model of commits).
+
+```bash
+# Manually trigger garbage collection and repacking
+git gc
+
+# Count loose objects and packfiles
+git count-objects -v
+```
+
+After `git gc`:
+```bash
+# count-objects output:
+count: 0          # Loose objects: all packed
+size: 0
+in-pack: 247      # Objects in packfiles
+packs: 1          # Number of packfiles
+size-pack: 48     # Packfile size in KB
+prune-packable: 0
+garbage: 0
+size-garbage: 0
+```
+
+Packfiles are stored in `.git/objects/pack/` with a `.pack` extension and an accompanying `.idx` index file.
+
+Garbage collection also removes objects that are unreachable from any reference (branch, tag, or reflog entry). This is how `git reset --hard` can theoretically result in data loss — the reset commits become unreachable and will eventually be deleted by `git gc`. In practice, the reflog keeps them accessible for 90 days.
+
+---
+
+## Exploring the Object Database
+
+Let's do a complete walkthrough, tracing from a branch reference all the way to file content:
+
+```bash
+# Start: what commit does main point to?
+cat .git/refs/heads/main
+# Let's call this COMMIT_HASH
+
+# What is in that commit?
+git cat-file -p COMMIT_HASH
+# tree TREE_HASH
+# parent PARENT_HASH
+# author ...
+# committer ...
+#
+# <commit message>
+
+# What is in the tree?
+git cat-file -p TREE_HASH
+# 100644 blob BLOB_HASH_1   .gitignore
+# 100755 blob BLOB_HASH_2   taskr.sh
+# ...
+
+# What is the content of taskr.sh?
+git cat-file -p BLOB_HASH_2
+# #!/usr/bin/env bash
+# ... (full content of taskr.sh)
+```
+
+You have traced the entire chain from branch name → commit object → tree object → blob object → file content. This is what Git does internally every time you check out a branch.
+
+---
+
+## git ls-tree — Exploring Trees
+
+```bash
+# View the tree for the current commit
+git ls-tree HEAD
+
+# View recursively (show all files in all subdirectories)
+git ls-tree -r HEAD
+
+# View with sizes
+git ls-tree --long HEAD
+
+# View a specific subdirectory's tree
+git ls-tree HEAD src/
+```
+
+---
+
+## Practical Exercises
+
+### Exercise 1: Explore Your Object Database
+
+```bash
+cd ~/taskr
+
+# Find the SHA-1 of a file in the current commit
+git ls-tree HEAD
+
+# Pick a blob hash and view its content
+git cat-file -p <BLOB_HASH>
+
+# View the type of each object
+git cat-file -t HEAD
+git cat-file -t HEAD^{tree}
+```
+
+### Exercise 2: Trace the Commit Chain
+
+```bash
+# Start from HEAD and follow the parent chain manually
+git cat-file -p HEAD            # See parent hash
+git cat-file -p HEAD^           # Parent commit
+git cat-file -p HEAD^^          # Grandparent
+git cat-file -p HEAD~3          # 3 levels up
+
+# Count how many commits you can follow before reaching the root
+# (no parent line)
+```
+
+### Exercise 3: Understand Branches as Files
+
+```bash
+# Read the branch file directly
+cat .git/HEAD
+cat .git/refs/heads/main
+
+# Create a new branch and observe the file being created
+git branch test-internals
+ls .git/refs/heads/
+cat .git/refs/heads/test-internals   # Same hash as main
+
+# Make a commit and observe main's file change
+echo "test" >> test-file.txt
+git add test-file.txt
+git commit -m "test: internal exploration"
+cat .git/refs/heads/main   # New hash
+cat .git/refs/heads/test-internals   # Still the old hash
+
+# Clean up
+git reset --hard HEAD~1
+rm test-file.txt
+git branch -d test-internals
+```
+
+### Exercise 4: The Index During a Conflict
+
+```bash
+# Create a conflict
+git switch -c branch-a
+echo "version A" > conflict-test.txt
+git add conflict-test.txt && git commit -m "A: add file"
+
+git switch main
+echo "version B" > conflict-test.txt
+git add conflict-test.txt && git commit -m "B: add file"
+
+git merge branch-a
+# (Conflict!)
+
+# Examine the staged conflict
+git ls-files --stage
+# Should show stages 1, 2, 3 for conflict-test.txt
+
+# Resolve and clean up
+git checkout --ours conflict-test.txt
+git add conflict-test.txt
+git commit
+git branch -d branch-a
+rm conflict-test.txt
+```
+
+---
+
+## Summary
+
+- Git's object database is content-addressable: every object is identified by the SHA-1 hash of its content. Same content = same hash, stored once.
+- Four object types: **blob** (file content), **tree** (directory listing), **commit** (snapshot with metadata and parent pointers), **tag** (annotated tag object).
+- Commits form a directed acyclic graph: each commit points to its parent(s), creating an immutable chain of history.
+- Branches are 41-byte files in `.git/refs/heads/` containing a commit hash. This is why branching is nearly free.
+- The index (`.git/index`) is the staging area: a binary file listing all tracked files with their current staged blob hashes.
+- During conflicts, the index holds three versions of each conflicted file (stages 1, 2, 3: ancestor, ours, theirs).
+- Packfiles compress many loose objects into a single file using delta compression, keeping repositories compact over time.
+- Understanding the object model explains why rebase creates new commit hashes, why branch creation is free, and how `git reflog` recovers "deleted" commits.
+
+The final lesson brings everything together: the workflow patterns that teams use to organize branches, integrate changes, and maintain a healthy repository at scale.

@@ -1,0 +1,374 @@
+---
+title: "Branch Protection, Rulesets & Team Permissions"
+description: "Learn to protect important branches with rules and rulesets, require status checks and reviews, restrict push access, and configure team and repository permissions for professional workflows."
+duration: 20
+order: 7
+---
+
+## Why Protect Branches
+
+In a repository with multiple contributors, nothing stops someone from pushing directly to `main` and bypassing code review, or deleting the `main` branch accidentally, or force-pushing over a colleague's commits. Branch protection rules are the guardrails that prevent these accidents and enforce the workflow policies your team has agreed on.
+
+Protection rules enforce:
+
+- Changes to `main` must go through a pull request (no direct pushes)
+- PRs require at least N approving reviews before merging
+- Required status checks (CI must pass) must be green before merging
+- Conversations on the PR must be resolved before merging
+- History cannot be rewritten (no force pushes)
+- The branch cannot be deleted
+
+These aren't just bureaucratic controls — they are the technical encoding of your team's quality standards. A developer can't accidentally skip code review because the platform won't let them.
+
+---
+
+## Branch Protection Rules
+
+Branch protection rules are configured per-branch (or branch pattern) in **Settings** → **Branches** → **Add branch protection rule**.
+
+### Matching Branches
+
+The rule applies to branches matching a pattern:
+
+- `main` — exact match, only the `main` branch
+- `release/*` — all branches starting with `release/`
+- `v*` — all branches starting with `v` (e.g., `v1`, `v2.0`)
+- `*` — all branches (use with care)
+
+### Require a Pull Request Before Merging
+
+The most important protection: no direct pushes to the protected branch. All changes must come through a pull request.
+
+When enabled:
+
+```
+Settings:
+☑ Require a pull request before merging
+  Required number of approvals: 1   (or 2 for critical repositories)
+  ☑ Dismiss stale pull request approvals when new commits are pushed
+  ☑ Require review from Code Owners
+  ☐ Restrict who can dismiss pull request reviews
+```
+
+**Dismiss stale pull request approvals:** If someone approves a PR and then new commits are pushed, the approval is automatically dismissed. This prevents the anti-pattern of getting approval early and then pushing significant changes after.
+
+**Require review from Code Owners:** Uses the CODEOWNERS file (covered in lesson 4) to determine which reviewers are required. If a PR touches files owned by a team, someone from that team must approve.
+
+### Require Status Checks to Pass Before Merging
+
+Prevents merging when CI is red. You must specify which status checks are required:
+
+```
+Settings:
+☑ Require status checks to pass before merging
+  ☑ Require branches to be up to date before merging
+  Required status checks:
+    + ci / test (ubuntu-latest)
+    + ci / lint
+    + security / dependency-scan
+```
+
+**Require branches to be up to date:** The PR's branch must be current with the base branch before merging. This ensures the CI ran against the latest state, not a state that may have diverged.
+
+To add a status check to the required list, the check must have run at least once in the repository so GitHub knows the check name. Run the CI workflow at least once on a branch, then add the check name to the required list.
+
+### Require Conversation Resolution Before Merging
+
+```
+Settings:
+☑ Require conversation resolution before merging
+```
+
+All review comment threads must be marked resolved before the PR can be merged. Prevents issues from being merged while reviewers have outstanding concerns.
+
+### Require Signed Commits
+
+```
+Settings:
+☑ Require signed commits
+```
+
+Every commit on the protected branch must be GPG-signed or SSH-signed, verifying the commit's author identity. Protects against commit author spoofing. Requires contributors to set up commit signing.
+
+### Do Not Allow Bypassing the Above Settings
+
+```
+Settings:
+☑ Do not allow bypassing the above settings
+```
+
+By default, repository administrators can bypass branch protection rules. Checking this option removes that bypass — even admins must go through PRs. Use this for the most critical repositories where even admin humans should not skip review.
+
+### Restrict Who Can Push to Matching Branches
+
+```
+Settings:
+☑ Restrict who can push to matching branches
+  Restrict pushes that create matching branches
+  Add actors: @alice, @bob, @org/release-managers
+```
+
+Even with PR requirements, this setting limits who can create and merge into the protected branch. Useful for release branches where only release managers should have merge access.
+
+### Allow Force Pushes and Allow Deletions
+
+```
+Settings:
+☐ Allow force pushes
+☐ Allow deletions
+```
+
+These are disabled by default. Force pushes rewrite history, which can cause problems for anyone who has based work on the rewritten commits. Allowing deletions lets people delete the protected branch, which is usually catastrophic for the default branch.
+
+Keep both disabled for `main` and all release branches.
+
+---
+
+## Rulesets: The Modern Approach
+
+Rulesets were introduced as a more flexible, scalable replacement for branch protection rules. Key advantages over classic branch protection:
+
+- Can be applied to multiple repositories across an organization simultaneously
+- Support more granular "bypass actors" (specific users, teams, or apps that can bypass specific rules)
+- Have an **Evaluate** mode for testing rules before enforcing them
+- Are versioned and exportable as JSON
+- Can be applied to tag patterns as well as branch patterns
+
+### Creating a Ruleset
+
+Go to **Settings** → **Rules** → **Rulesets** → **New ruleset** → **New branch ruleset**.
+
+**Enforcement status options:**
+- **Active** — rules are enforced
+- **Evaluate** — rules are logged but not enforced (useful for testing impact)
+- **Disabled** — ruleset exists but does nothing
+
+**Target branches:** Use patterns to target branches:
+```
+main
+release/**
+hotfix/**
+```
+
+**Bypass list:** Actors who can bypass the ruleset:
+- Organization admin
+- Repository admin
+- Specific users or teams
+- Specific GitHub Apps (e.g., Dependabot or your deploy bot)
+
+### Rules Available in Rulesets
+
+```
+☑ Restrict creations           (who can create matching branches)
+☑ Restrict updates             (who can push to matching branches)
+☑ Restrict deletions           (who can delete matching branches)
+☑ Require linear history       (no merge commits — squash or rebase only)
+☑ Require deployments to succeed before merging
+  Required environments: production, staging
+☑ Require signed commits
+☑ Require a pull request before merging
+  Required approving review count: 1
+  ☑ Dismiss stale reviews on push
+  ☑ Require review from code owners
+☑ Require status checks to pass
+  Status checks:
+    ci / test
+    ci / lint
+☑ Block force pushes
+☑ Require code scanning results
+```
+
+### Require Linear History
+
+Enforces that all PRs must use squash merge or rebase merge — no merge commits allowed. This maintains a perfectly linear `main` branch history, which is easier to read with `git log --oneline` and makes `git bisect` more reliable.
+
+### Require Deployments to Succeed
+
+Links the merge gate to actual deployments. Before a PR can merge, a deployment to the specified environments must succeed. Useful for workflows where every PR is deployed to a preview environment that must pass health checks.
+
+---
+
+## Required Status Checks in Practice
+
+Setting up required status checks works as follows:
+
+### Step 1: Create the CI Workflow
+
+```yaml
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+```
+
+### Step 2: Run the Workflow at Least Once
+
+Push this workflow to `main` or open a PR to trigger it. The check names `CI / Test` and `CI / Lint` (format: `workflow-name / job-name`) now appear in the repository.
+
+### Step 3: Add to Required Checks
+
+In **Settings** → **Branches** → edit the protection rule → under **Require status checks to pass** → search for and add `CI / Test` and `CI / Lint`.
+
+Now every PR to `main` must have both checks pass before merging is enabled.
+
+---
+
+## Team Permissions
+
+GitHub has a five-level permission system for repository access:
+
+### Repository Permission Levels
+
+| Level | Can Do |
+|-------|--------|
+| **Read** | View and clone the repository, create issues, comment on issues/PRs |
+| **Triage** | Everything in Read, plus manage issues/PRs (apply labels, close, reopen) — cannot push code |
+| **Write** | Everything in Triage, plus push to non-protected branches, manage releases |
+| **Maintain** | Everything in Write, plus manage repository settings (except destructive actions), manage topics, pages |
+| **Admin** | Full access including dangerous operations: transfer, delete, manage secrets, manage webhooks |
+
+### Assigning Collaborators
+
+For personal repositories, go to **Settings** → **Collaborators** → **Add people**.
+
+For organization repositories, permissions are managed through **teams** rather than individual collaborators (though both are possible).
+
+### Organization Teams
+
+Teams are groups of organization members with shared permissions. Benefits:
+
+- Assign one team to multiple repositories instead of adding individuals one by one
+- Team membership changes propagate automatically to all repositories the team has access to
+- CODEOWNERS can reference teams: `@org/frontend-team`
+
+**Creating a team:**
+1. Go to your organization → **Teams** → **New team**
+2. Give the team a name (e.g., `frontend`, `backend`, `devops`)
+3. Set visibility: Visible (members can see the team) or Secret (only members and org owners can see it)
+4. Add members
+
+**Assigning a team to a repository:**
+1. Go to the repository → **Settings** → **Collaborators and teams** → **Add teams**
+2. Search for the team and set the permission level
+
+### Nested Teams
+
+Teams can be nested: a parent team whose sub-teams inherit access. Example:
+
+```
+engineering (Write on all repositories)
+├── frontend (Write on frontend-specific repos)
+│   ├── web-app
+│   └── design-system
+└── backend (Write on backend-specific repos)
+    ├── api-service
+    └── data-pipeline
+```
+
+### Base Permissions
+
+Organization owners can set a base permission level that applies to all members on all repositories:
+
+**Settings** → **Member privileges** → **Base permissions**
+
+Options: No permission, Read, Write, Admin. Setting this to Read means all organization members can view all repositories by default (but not push).
+
+---
+
+## Restricting Who Can Push to Protected Branches
+
+Even with PR requirements, you may want to restrict who can merge PRs into critical branches:
+
+### Release Branch Workflow
+
+A common pattern: `main` is protected so only PRs can be merged into it, but only the `release-managers` team can approve merges into `release/*` branches:
+
+```
+Branch pattern: release/*
+☑ Require a pull request before merging
+  Required approvals: 1
+☑ Restrict who can push to matching branches
+  Teams: @org/release-managers
+```
+
+Regular developers can open PRs targeting release branches, but only release managers can approve and merge them.
+
+### Hotfix Workflow
+
+For emergency hotfixes that must bypass the normal review process:
+
+```
+Bypass list in ruleset:
+  @org/on-call-engineers (can bypass during incidents)
+  @alice (CTO, can bypass in emergencies)
+```
+
+The bypass is logged — you can see who bypassed the rules and when in the repository's audit log.
+
+---
+
+## Practical Exercises
+
+### Exercise 1 — Add Basic Branch Protection
+
+1. Create a repository with a `main` branch and at least one commit.
+2. Add a branch protection rule for `main`:
+   - Require a pull request before merging (1 required review)
+   - Dismiss stale reviews on push
+3. Create a new branch and try to push directly to `main` — observe the rejection.
+4. Open a PR from your branch to `main` — observe the merge button is disabled until approved.
+
+### Exercise 2 — Required Status Checks
+
+1. Create a `.github/workflows/ci.yml` workflow that runs tests.
+2. Open a PR and let the workflow run.
+3. Add the workflow's job as a required status check in the branch protection rule.
+4. Deliberately break a test, push, and observe that the PR cannot be merged.
+5. Fix the test, push, and observe the merge button becomes available after CI passes.
+
+### Exercise 3 — Create a Ruleset
+
+1. Go to **Settings** → **Rules** → **Rulesets** → **New branch ruleset**.
+2. Create a ruleset targeting `main` that:
+   - Blocks force pushes
+   - Requires a pull request
+   - Requires status checks to pass
+3. Set the enforcement to **Evaluate** mode first, then switch to **Active**.
+
+### Exercise 4 — Team Permissions (Requires Organization)
+
+If you have or can create a GitHub Organization:
+1. Create two teams: `developers` and `maintainers`.
+2. Assign `developers` Write access to a repository.
+3. Assign `maintainers` Maintain access.
+4. Create a branch protection rule that restricts merging to the `maintainers` team.
+5. As a member of `developers`, verify you can open a PR but not merge without a `maintainers` review.

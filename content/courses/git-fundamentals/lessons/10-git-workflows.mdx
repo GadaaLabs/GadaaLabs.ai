@@ -1,0 +1,734 @@
+---
+title: "Git Workflows — Gitflow, Trunk-based & Team Patterns"
+description: "Compare Gitflow, GitHub Flow, and trunk-based development; learn Conventional Commits for structured history; understand Git hooks for automation; explore monorepo vs polyrepo tradeoffs; and build your team's Git policy from first principles."
+duration: 24
+order: 10
+---
+
+## Why Workflows Matter
+
+By now you know every Git command you need. But knowing commands is not the same as knowing how to use them effectively in a team. A workflow defines:
+
+- What branches exist and what their purpose is
+- Where completed work lands (and through what process)
+- When and how to tag releases
+- What rules govern commit messages
+- How to handle hotfixes, releases, and long-running features
+
+A good workflow reduces the cognitive overhead of collaboration, keeps the `main` branch deployable, and makes your history readable to humans and automated tools alike.
+
+This lesson covers the three workflows used by the majority of professional engineering teams, then covers the supporting practices that make any workflow healthier.
+
+---
+
+## Workflow 1: Gitflow
+
+Gitflow was described by Vincent Driessen in 2010 and became widely adopted over the following decade. It is most appropriate for projects with scheduled releases and the need to maintain multiple active versions.
+
+### The Branch Structure
+
+Gitflow defines five types of branches:
+
+**`main` (or `master`)** — Contains production-ready code. Every commit on `main` is a release. Tagged with version numbers.
+
+**`develop`** — The integration branch. Features are merged here and tested together. Reflects the next release in development.
+
+**`feature/*`** — One branch per feature. Branched from `develop`, merged back to `develop`. Named `feature/user-auth`, `feature/payment-api`, etc.
+
+**`release/*`** — Created from `develop` when a release is being prepared. Only bug fixes go here (no new features). When ready, merged to both `main` (tagged) and `develop`.
+
+**`hotfix/*`** — Created from `main` to fix critical production bugs. Merged to both `main` (tagged with a patch version) and `develop` (or current release branch).
+
+```
+main:    ────●──────────────────────────────●────────────●──────
+             │ v1.0                          │ v1.1        │ v1.1.1
+             │                              │             │
+develop: ────●────●────●────●──────────────●─────────────●──────
+                  │    │    │             ↗ ↘
+feature/A:   ─────●────●────┘
+feature/B:        ─────●──────────────────
+
+release/1.1:                         ─●──●──┘ (merged to main and develop)
+
+hotfix/v1.1.1:                                       ─●──┘ (from main)
+```
+
+### Gitflow in Practice
+
+```bash
+# Install the git-flow extension (optional but convenient)
+# macOS: brew install git-flow-avh
+# Linux: apt install git-flow
+
+# Initialize Gitflow in a repo
+git flow init
+# (Answer the prompts to configure branch names)
+
+# Start a new feature
+git flow feature start user-authentication
+# Equivalent to: git switch -c feature/user-authentication develop
+
+# Finish a feature (merges to develop, deletes feature branch)
+git flow feature finish user-authentication
+# Equivalent to:
+# git switch develop
+# git merge --no-ff feature/user-authentication
+# git branch -d feature/user-authentication
+
+# Start a release
+git flow release start v1.1.0
+# Equivalent to: git switch -c release/v1.1.0 develop
+
+# Finish a release (merges to main and develop, tags main)
+git flow release finish v1.1.0
+# Equivalent to:
+# git switch main && git merge --no-ff release/v1.1.0 && git tag -a v1.1.0
+# git switch develop && git merge --no-ff release/v1.1.0
+# git branch -d release/v1.1.0
+
+# Start a hotfix
+git flow hotfix start v1.0.1
+# Equivalent to: git switch -c hotfix/v1.0.1 main
+
+# Finish a hotfix (merges to main and develop, tags main)
+git flow hotfix finish v1.0.1
+```
+
+### When to Use Gitflow
+
+Gitflow works well when:
+- You have scheduled, versioned releases (e.g., quarterly releases, mobile apps)
+- You need to maintain multiple active versions simultaneously
+- You have a QA or release stabilization phase before shipping
+
+Gitflow works poorly when:
+- You deploy continuously (multiple times per day)
+- Your team is small (2-5 developers) — the overhead of `develop` and `release` branches adds complexity without proportional value
+- You do not maintain multiple versions — the release branch machinery becomes pointless
+
+---
+
+## Workflow 2: GitHub Flow
+
+GitHub Flow was described by Scott Chacon in 2011 and is the default workflow for most teams using GitHub. It is intentionally simple.
+
+### The Rules
+
+1. **`main` is always deployable.** Every commit on `main` works and can be shipped.
+2. **Create a descriptively named branch** for every feature, fix, or change.
+3. **Push to the branch regularly.** Create a Pull Request early (even as a "draft" PR for work in progress).
+4. **Ask for review and discuss.** The PR is the code review mechanism.
+5. **Merge after CI passes and the PR is approved.**
+6. **Deploy immediately after merging.** (Or: merging to main triggers automatic deployment.)
+
+```
+main:    ─────●──────────────────────────●────────────●──────
+              │                          │            │
+              │                          │            │
+feature/A:    ●────●────●────────PR→────┘            │
+                                                      │
+fix/crash:                               ●────PR→────┘
+```
+
+### The Pull Request Workflow
+
+```bash
+# 1. Create a branch
+git switch -c feature/task-search
+
+# 2. Make commits (push early and often)
+git add . && git commit -m "feat: add search command skeleton"
+git push -u origin feature/task-search
+
+# 3. Open a Pull Request on GitHub
+# (Can be draft if still in progress)
+gh pr create --title "feat: task search" --body "Adds search functionality"
+
+# 4. Push more commits as review feedback comes in
+git add . && git commit -m "fix: handle empty search query"
+git push
+
+# 5. After approval and CI green, merge (on GitHub or CLI)
+gh pr merge --squash   # or --merge or --rebase
+
+# 6. Clean up local branch
+git switch main
+git pull
+git branch -d feature/task-search
+```
+
+### Merge Strategies for PRs
+
+When merging a PR, you have three options on GitHub/GitLab:
+
+**Merge commit** (`git merge --no-ff`): Preserves the full branch history and creates a merge commit. Every commit from the feature branch appears in `main`'s history. Best when the individual commits on the branch are meaningful.
+
+**Squash and merge**: Combines all commits from the branch into a single commit on `main`. Produces the cleanest `main` history. Individual "WIP" and "fix typo" commits disappear — only the final, curated commit lands on `main`. Best for teams that want `main` to read as a clean changelog.
+
+**Rebase and merge**: Replays the branch's commits linearly onto `main` without a merge commit. Produces a linear history. Each commit from the branch lands individually on `main` (unlike squash).
+
+Most teams using GitHub Flow use **squash and merge**: they encourage messy commits during development (no pressure to keep every WIP commit clean) and end up with a clean, readable `main` history.
+
+### When to Use GitHub Flow
+
+GitHub Flow works well when:
+- You deploy continuously or frequently
+- You have a single production version at any time
+- Your team values simplicity over ceremony
+- You use a CI/CD pipeline (GitHub Actions, CircleCI, etc.)
+
+GitHub Flow is the recommended starting point for new teams. You can always add complexity (release branches, etc.) if you genuinely need it.
+
+---
+
+## Workflow 3: Trunk-Based Development
+
+Trunk-based development (TBD) is the practice of merging to `main` (the "trunk") as frequently as possible — ideally multiple times per day per developer. It is the approach used by large tech companies (Google, Facebook, Netflix) for their core codebases.
+
+### Core Principles
+
+1. **One main branch** (the trunk). No long-lived feature branches.
+2. **Commit to trunk at least once per day** (or multiple times).
+3. **Feature flags** hide incomplete features from users until they are ready.
+4. **Short-lived branches** (if used at all) exist for hours or a day, not weeks.
+
+```
+main:    ●──●──●──●──●──●──●──●──●──●──●──●──●──●──●──●──
+         │  │  │  │  │  │  │  │  │  │  │  │  │  │  │  │
+         ↑ dev1 dev2 dev1 dev3 dev2 dev1 dev3 dev1 ... etc.
+```
+
+### Feature Flags
+
+The key enabler for TBD is feature flags (also called feature toggles). Incomplete or experimental code is committed to `main` behind a flag that is off in production:
+
+```bash
+# Example in a shell script (simplified)
+if [ "$ENABLE_PRIORITY_TASKS" = "true" ]; then
+    # New priority feature code
+    add_priority_task "$1" "$2"
+else
+    # Old code still active
+    add_task "$2"
+fi
+```
+
+The flag is in configuration (an environment variable, a config file, or a feature flag service). Developers can test with the flag enabled; users see the old behavior. When the feature is ready, flip the flag in production. No deployment needed for the feature itself.
+
+### Short-Lived Feature Branches in TBD
+
+Some teams practicing TBD use very short-lived feature branches (sometimes called "branch for review") — they branch, develop for at most a day, open a PR, get it reviewed, and merge. The key difference from GitHub Flow is the timescale: hours or one day, not days or weeks.
+
+```bash
+# Branch, develop, and merge within 24 hours
+git switch -c feature/quick-fix-$(date +%Y%m%d)
+# Make focused changes
+git add . && git commit -m "fix: handle edge case in task deletion"
+git push -u origin feature/quick-fix-20240115
+gh pr create --title "Fix task deletion edge case"
+# Merge after review (often same day)
+```
+
+### When to Use Trunk-Based Development
+
+TBD is best when:
+- You have a strong CI/CD pipeline that gates merges on tests passing
+- Your team is disciplined about small, focused commits
+- You have or can build a feature flagging system
+- You deploy to production multiple times per day
+
+TBD is hard when:
+- Your tests are slow (a 45-minute test suite makes frequent integration painful)
+- You do not have a feature flag system and features take weeks to build
+- Your team is not yet disciplined about keeping `main` green
+
+---
+
+## Commit Message Conventions: Conventional Commits
+
+Conventional Commits is a specification for human- and machine-readable commit messages. It enables automated changelog generation, automatic semantic version bumping, and better `git log` readability.
+
+### The Format
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+### Commit Types
+
+| Type | When to Use |
+|------|-------------|
+| `feat` | A new feature (triggers MINOR version bump) |
+| `fix` | A bug fix (triggers PATCH version bump) |
+| `docs` | Documentation changes only |
+| `style` | Code formatting, no logic changes |
+| `refactor` | Code restructuring, no behavior change |
+| `perf` | Performance improvements |
+| `test` | Adding or fixing tests |
+| `build` | Build system or dependency changes |
+| `ci` | CI/CD configuration changes |
+| `chore` | Maintenance tasks, dependency updates |
+| `revert` | Reverts a previous commit |
+
+Breaking changes are denoted with a `!` after the type/scope or with a `BREAKING CHANGE:` footer (triggers MAJOR version bump):
+
+```
+feat!: change tasks file format to JSON
+```
+
+or:
+
+```
+feat: change tasks file format to JSON
+
+BREAKING CHANGE: The tasks file is now stored as JSON instead of
+plain text. Existing task files must be migrated using the
+`taskr migrate` command.
+```
+
+### Examples
+
+```
+feat(tasks): add priority system for task ordering
+
+Adds HIGH, MED, and LOW priority levels to tasks.
+Priority is stored as a prefix: [HIGH], [MED], [LOW].
+Default priority is MED when not specified.
+
+Closes #42
+```
+
+```
+fix: prevent crash when tasks file does not exist
+
+Previously, running `taskr list` with no tasks file would crash
+with "No such file or directory". Now returns a friendly message.
+
+Fixes #31
+```
+
+```
+chore(deps): update bash minimum version to 4.0
+
+Bash 3.x (the default on macOS) lacks associative arrays used
+in the priority feature. Updated docs to note the requirement.
+```
+
+### Tools That Use Conventional Commits
+
+- **semantic-release**: Automatically determines the next version number and generates changelogs
+- **commitlint**: Lints commit messages in CI to enforce the convention
+- **standard-version**: Automates version bumping and changelog generation
+- **Changelog generators**: Many CI/CD tools can auto-generate changelogs from Conventional Commits
+
+---
+
+## Git Hooks: Automating Quality Gates
+
+Git hooks are scripts that run automatically at specific points in Git's workflow. They live in `.git/hooks/` and are executed by Git when the triggering event occurs.
+
+Hooks are local to each developer's machine and are not committed to the repository by default (since `.git/` is not tracked). To share hooks with your team, use a tool like Husky (for Node.js projects) or store hook scripts in a directory and ask developers to symlink them.
+
+### Client-Side Hooks
+
+**`pre-commit`**: Runs before the commit message is entered. Common uses: run tests, run linting, check for sensitive data.
+
+```bash
+# .git/hooks/pre-commit
+#!/usr/bin/env bash
+set -e
+
+echo "Running pre-commit checks..."
+
+# Run shellcheck on shell scripts
+if command -v shellcheck &>/dev/null; then
+    git diff --cached --name-only --diff-filter=ACM | \
+        grep '\.sh$' | \
+        xargs -r shellcheck
+fi
+
+# Check for TODO comments that were staged
+if git diff --cached | grep -q "TODO"; then
+    echo "Warning: staged changes contain TODO comments"
+    # Remove the next line to make this a hard error
+    # exit 1
+fi
+
+echo "Pre-commit checks passed."
+```
+
+Make it executable: `chmod +x .git/hooks/pre-commit`
+
+**`commit-msg`**: Runs after the commit message is written. Used to validate commit message format.
+
+```bash
+# .git/hooks/commit-msg
+#!/usr/bin/env bash
+# Validate Conventional Commits format
+
+MSG_FILE="$1"
+MSG=$(cat "$MSG_FILE")
+
+# Pattern: type(scope?): description
+PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?(!)?: .{1,72}'
+
+if ! echo "$MSG" | grep -qE "$PATTERN"; then
+    echo "ERROR: Commit message does not follow Conventional Commits format."
+    echo ""
+    echo "Expected: <type>[optional scope]: <description>"
+    echo "Example:  feat(tasks): add priority system"
+    echo ""
+    echo "Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+    exit 1
+fi
+```
+
+**`pre-push`**: Runs before `git push`. Common uses: run the full test suite, prevent pushing to certain branches.
+
+```bash
+# .git/hooks/pre-push
+#!/usr/bin/env bash
+# Prevent accidental direct push to main
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+REMOTE="$1"
+
+if [ "$REMOTE" = "origin" ] && [ "$BRANCH" = "main" ]; then
+    echo "ERROR: Direct push to main is not allowed."
+    echo "Create a feature branch and open a Pull Request."
+    exit 1
+fi
+```
+
+**`prepare-commit-msg`**: Runs before the commit message editor opens. Common use: pre-fill the commit message template.
+
+```bash
+# .git/hooks/prepare-commit-msg
+#!/usr/bin/env bash
+# Pre-fill commit message with branch name as type hint
+
+MSG_FILE="$1"
+BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+# Extract type from branch name (feature/X → feat, fix/X → fix)
+TYPE=$(echo "$BRANCH" | sed 's/\/.*//')
+case "$TYPE" in
+    feature|feat) TYPE="feat" ;;
+    fix|bugfix|hotfix) TYPE="fix" ;;
+    docs) TYPE="docs" ;;
+    chore) TYPE="chore" ;;
+    refactor) TYPE="refactor" ;;
+    *) TYPE="" ;;
+esac
+
+if [ -n "$TYPE" ]; then
+    sed -i.bak "1s/^/$TYPE: /" "$MSG_FILE"
+fi
+```
+
+### Sharing Hooks with Your Team
+
+Since `.git/hooks/` is not committed, use one of these approaches:
+
+```bash
+# Option 1: Store hooks in a committed directory
+mkdir .githooks
+cp .git/hooks/pre-commit .githooks/
+git add .githooks/
+git commit -m "chore: add shared Git hooks"
+
+# Configure Git to look in .githooks/ for hooks
+git config core.hooksPath .githooks
+
+# Team members run: git config core.hooksPath .githooks
+# Or add it to onboarding documentation
+
+# Option 2: Use Husky (Node.js projects)
+npm install --save-dev husky
+npx husky install
+npx husky add .husky/pre-commit "npm test"
+```
+
+---
+
+## Monorepo vs Polyrepo
+
+How you organize code across repositories is an architectural decision with Git implications.
+
+### Polyrepo (Multiple Repositories)
+
+Each project, service, or library has its own repository.
+
+```
+my-org/
+├── taskr-cli          (separate repo)
+├── taskr-web          (separate repo)
+├── taskr-api          (separate repo)
+└── taskr-docs         (separate repo)
+```
+
+**Advantages:**
+- Clear ownership and access control per team
+- Simpler Git history per repository
+- Teams can move independently
+- Smaller repositories are faster to clone
+
+**Disadvantages:**
+- Cross-repository changes require coordinated PRs
+- Dependency management between packages is complex
+- Harder to see the impact of changes across the system
+- Code sharing requires publishing packages
+
+### Monorepo (Single Repository)
+
+All related projects live in one repository.
+
+```
+taskr/
+├── packages/
+│   ├── cli/         (taskr CLI tool)
+│   ├── web/         (web frontend)
+│   └── api/         (backend API)
+├── docs/
+└── scripts/
+```
+
+**Advantages:**
+- Atomic cross-package changes in a single commit
+- Unified CI/CD pipeline and tooling
+- Easier code sharing (no publishing overhead)
+- Single source of truth for all related code
+
+**Disadvantages:**
+- Requires tooling (Turborepo, Nx, Bazel) for selective builds/tests
+- Git operations can be slow on very large monorepos (thousands of files)
+- Access control is coarser (harder to restrict access to specific parts)
+
+### Practical Guidance
+
+For small teams (1-10 developers) building a cohesive system: **monorepo is simpler**. The coordination overhead of polyrepo often outweighs the benefits at small scale.
+
+For large organizations with independent teams: **polyrepo per team/service** often works better, with a shared internal package registry for common libraries.
+
+Many companies have separate strategies for different concerns: a monorepo for all services (backend, frontend, infrastructure), plus separate repos for open-source components they maintain publicly.
+
+---
+
+## Team Rules for a Healthy Git History
+
+Here are the rules that most successful engineering teams converge on:
+
+### Protected Branches
+
+```bash
+# On GitHub: Settings → Branches → Add branch protection rule
+# Protections for main:
+# - Require pull request reviews before merging
+# - Require status checks to pass before merging
+# - Do not allow force pushes
+# - Do not allow deletions
+```
+
+### Mandatory Code Review
+
+Every commit to `main` goes through a PR with at least one approval. This is not about distrust — it is about catching mistakes, sharing knowledge, and maintaining consistent standards.
+
+### CI Must Pass Before Merge
+
+Tests, linting, type checking — all must pass on the feature branch before merge. This keeps `main` green. A broken `main` is the number one productivity killer in collaborative development.
+
+### Small PRs
+
+PRs under 400 lines of diff get reviewed faster and more thoroughly. Large PRs (1000+ lines) get rubber-stamped because reviewers cannot process them. Break large changes into a sequence of smaller, logically independent PRs.
+
+### Descriptive PR Descriptions
+
+Every PR should have:
+- A summary of what it does (and why — not just what, which is visible in the diff)
+- A link to the issue or ticket it addresses
+- Test instructions if manual testing is needed
+- Screenshots for UI changes
+
+---
+
+## Choosing the Right Workflow
+
+Use this decision guide:
+
+```
+How often do you deploy?
+
+Multiple times per day?
+└── Trunk-based development (possibly with very short branches)
+
+Multiple times per week?
+└── GitHub Flow (feature branches + PRs)
+
+Scheduled releases (weekly, monthly, quarterly)?
+└── Gitflow
+
+Do you maintain multiple active versions?
+└── Gitflow (or a modified variant)
+
+Are you a small team (1-5 devs)?
+└── GitHub Flow — start simple, add complexity only when needed
+
+Does your team have strong CI/CD?
+└── Trunk-based development or GitHub Flow with squash merges
+
+Does your team have weak CI/CD or long test suites?
+└── GitHub Flow or Gitflow — the overhead buys you stability
+```
+
+---
+
+## A Practical Git Policy Template
+
+Here is a starting policy you can adapt for your team:
+
+```
+Git Policy for [Team Name]
+
+BRANCHES
+- main: protected, always deployable. No direct pushes.
+- All work goes through Pull Requests.
+- Feature branches: feature/<description>
+- Bug fixes: fix/<description>
+- Hotfixes: hotfix/<description>
+- Releases: release/<version> (if using Gitflow)
+
+COMMITS
+- Follow Conventional Commits format
+- Each commit should do exactly one thing
+- No "WIP" commits on PRs targeting main (squash before merging)
+
+PULL REQUESTS
+- Minimum 1 approval required
+- All CI checks must pass
+- Link to issue/ticket in PR description
+- Keep PRs under 400 lines where possible
+
+MERGING
+- Use "Squash and merge" for feature branches
+- Use "Merge commit" for release branches (to preserve their history)
+- Delete branches after merging
+
+RELEASES
+- Use annotated tags: git tag -a vX.Y.Z -m "..."
+- Follow Semantic Versioning
+- Push tags with: git push origin --follow-tags
+```
+
+---
+
+## Practical Exercises
+
+### Exercise 1: Simulate GitHub Flow
+
+```bash
+cd ~/taskr
+
+# Create a feature branch
+git switch -c feature/task-search
+
+# Make 3 "messy" commits (WIP, fixes, etc.)
+echo "search v1" >> taskr.sh && git add . && git commit -m "WIP: search"
+echo "search v2" >> taskr.sh && git add . && git commit -m "trying another approach"
+echo "search final" >> taskr.sh && git add . && git commit -m "done"
+
+# Use interactive rebase to squash into one clean commit
+git rebase -i HEAD~3
+
+# "Merge" to main with --no-ff (simulating GitHub merge commit)
+git switch main
+git merge --no-ff feature/task-search -m "feat(tasks): add search command (#15)"
+
+git branch -d feature/task-search
+git log --oneline --graph
+```
+
+### Exercise 2: Set Up commit-msg Hook
+
+```bash
+cat > .git/hooks/commit-msg << 'HOOK'
+#!/usr/bin/env bash
+MSG=$(cat "$1")
+PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?(!)?: .+'
+if ! echo "$MSG" | grep -qE "$PATTERN"; then
+    echo "ERROR: Commit message must follow Conventional Commits format."
+    echo "Example: feat(tasks): add search functionality"
+    exit 1
+fi
+HOOK
+chmod +x .git/hooks/commit-msg
+
+# Test it:
+echo "bad commit message" > /tmp/test-msg
+.git/hooks/commit-msg /tmp/test-msg   # Should fail
+
+echo "feat: good commit message" > /tmp/test-msg
+.git/hooks/commit-msg /tmp/test-msg   # Should pass
+```
+
+### Exercise 3: Practice Gitflow
+
+```bash
+# Simulate a Gitflow release
+git switch -c develop main
+
+# Create a feature
+git switch -c feature/final-feature develop
+echo "# final feature" >> taskr.sh
+git add . && git commit -m "feat: add final feature"
+git switch develop
+git merge --no-ff feature/final-feature -m "merge: integrate final feature"
+git branch -d feature/final-feature
+
+# Create a release branch
+git switch -c release/v1.0.0 develop
+echo "1.0.0" > VERSION
+git add VERSION && git commit -m "chore: bump version to 1.0.0"
+
+# Merge release to main
+git switch main
+git merge --no-ff release/v1.0.0 -m "merge: release v1.0.0"
+git tag -a v1.0.0 -m "Release v1.0.0"
+
+# Merge release back to develop
+git switch develop
+git merge --no-ff release/v1.0.0 -m "merge: sync release v1.0.0 back to develop"
+git branch -d release/v1.0.0
+
+git log --oneline --graph --all
+```
+
+### Challenge: Document Your Workflow
+
+Write a `CONTRIBUTING.md` file for the taskr project that documents:
+1. How to set up the development environment
+2. The branching strategy
+3. Commit message conventions
+4. PR process and requirements
+5. How to create a release
+
+This file will serve as the Git policy for anyone contributing to taskr.
+
+---
+
+## Course Summary
+
+You have now covered the complete Git skill stack, from first principles to professional practice.
+
+**Foundation (Lessons 1-3):** You understand what Git is and why it exists, how it stores data as snapshots in a content-addressable object database, how to create repositories and make commits that tell a meaningful story, and how branches are simply lightweight pointers that enable parallel development at no cost.
+
+**Power Tools (Lessons 4-7):** You can confidently undo any kind of mistake — from unstaged changes to shared history — using the right tool for each context. You can collaborate with remote repositories, push and pull changes, and authenticate securely. You can resolve merge conflicts without panic, reading the markers and making informed decisions. You can rewrite history with rebase and interactive rebase to produce clean, professional commits, and apply specific changes with cherry-pick.
+
+**Professional Layer (Lessons 8-10):** You can mark releases with annotated tags and apply semantic versioning. You understand how Git's internals work — the object database, the DAG, branches as files — which makes you a better Git user when things get unusual. And you can design a team workflow, choose between Gitflow, GitHub Flow, and trunk-based development, enforce conventions with hooks, and write a coherent Git policy.
+
+The next step is practice. Take these tools into a real project. Build the habits: descriptive commit messages, short-lived branches, small PRs, regular syncing with main. The theory lives in the lessons; the skill lives in the repetition.
+
+Git is a lifelong tool. The commands you have learned here will serve you for your entire career. Use them well.

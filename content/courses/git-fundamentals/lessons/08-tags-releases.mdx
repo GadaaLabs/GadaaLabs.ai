@@ -1,0 +1,432 @@
+---
+title: "Tags, Releases & Semantic Versioning"
+description: "Mark important milestones with Git tags, understand lightweight vs annotated tags, push tags to remotes, apply semantic versioning to your releases, and build a professional release workflow around Git."
+duration: 18
+order: 8
+---
+
+## What Are Tags?
+
+A Git tag is a named pointer to a specific commit. Unlike a branch (which moves forward as you make new commits), a tag is fixed — it always points to the same commit. Tags are used to mark specific points in history as being important: usually releases.
+
+If you have used any open-source software, you have seen tags in action. When `numpy` releases version `2.0.0`, they create a tag `v2.0.0` pointing to exactly the commit that was released. Anyone who wants that exact version can check out the tag. The tag never moves — `v2.0.0` always means the same commit.
+
+---
+
+## Lightweight vs Annotated Tags
+
+Git has two types of tags with meaningfully different behaviors:
+
+### Lightweight Tags
+
+A lightweight tag is simply a name pointing to a commit — like a branch that never moves. It stores no additional information.
+
+```bash
+# Create a lightweight tag at the current commit
+git tag v1.0-lightweight
+
+# Create a lightweight tag at a specific commit
+git tag v0.9-old-version 4f2a8b1
+```
+
+Lightweight tags are quick and simple. They are appropriate for temporary or private marks — "this is the commit I was testing when I filed this bug report."
+
+### Annotated Tags
+
+An annotated tag is a full Git object in the object database. It contains:
+- The tagger's name and email
+- The date the tag was created
+- A tag message (like a commit message)
+- Optionally, a cryptographic signature (GPG)
+
+```bash
+# Create an annotated tag (-a flag)
+git tag -a v1.0.0 -m "Release version 1.0.0
+
+First stable release of taskr. Includes:
+- Add, list, done, and delete task commands
+- Priority system (HIGH, MED, LOW)
+- Configuration file support
+- Help command"
+
+# Create an annotated tag pointing to a specific commit
+git tag -a v0.9.0 -m "Release v0.9.0 - beta" 4f2a8b1
+```
+
+The key difference: annotated tags have metadata and are treated as first-class objects. `git describe` only uses annotated tags by default. Push operations with `--follow-tags` push annotated tags automatically. For releases, always use annotated tags.
+
+---
+
+## Listing Tags
+
+```bash
+# List all tags alphabetically
+git tag
+
+# List tags matching a pattern
+git tag -l "v1.*"
+git tag --list "v2.0*"
+
+# List tags with their messages (annotated only)
+git tag -n
+
+# List tags with full annotation details
+git tag -n99  # Show up to 99 lines of message per tag
+```
+
+### Viewing a Tag's Details
+
+```bash
+# Show the tag object and the commit it points to
+git show v1.0.0
+```
+
+For an annotated tag, this shows:
+1. The tag object details (tagger, date, message)
+2. The commit object (author, date, commit message)
+3. The diff of that commit
+
+For a lightweight tag, it shows only the commit details.
+
+---
+
+## Checking Out a Tag
+
+```bash
+# Check out the code at a specific tag
+git checkout v1.0.0
+```
+
+This puts you in "detached HEAD" state — HEAD points directly to the commit, not to a branch. You can look at the code and run it, but any commits you make will not be on any branch and may be lost.
+
+If you want to make changes based on a tagged release (e.g., a hotfix to a specific version):
+
+```bash
+# Create a branch from a tag
+git checkout -b hotfix/v1.0.1 v1.0.0
+# Now make your hotfix commits on this branch
+```
+
+---
+
+## Pushing Tags to a Remote
+
+By default, `git push` does **not** push tags. You must push them explicitly:
+
+```bash
+# Push a specific tag
+git push origin v1.0.0
+
+# Push all local tags to the remote
+git push origin --tags
+
+# Push all annotated tags (not lightweight) — preferred for releases
+git push origin --follow-tags
+```
+
+The `--follow-tags` option is the safest approach: it pushes only annotated tags that are reachable from the commits being pushed. Use it when pushing release commits.
+
+### Verifying Tags on the Remote
+
+After pushing:
+
+```bash
+# List tags on the remote
+git ls-remote --tags origin
+
+# Or: fetch tags from remote and list locally
+git fetch --tags
+git tag -l
+```
+
+---
+
+## Deleting Tags
+
+```bash
+# Delete a local tag
+git tag -d v1.0.0-beta
+
+# Delete a tag on the remote (two equivalent syntaxes)
+git push origin --delete v1.0.0-beta
+git push origin :refs/tags/v1.0.0-beta
+```
+
+Deleting tags is uncommon for release tags — it breaks anyone who has a reference to that tag. Reserve deletion for tags created by mistake or for non-release markers.
+
+---
+
+## Semantic Versioning (SemVer)
+
+Semantic Versioning is the standard versioning scheme used by the vast majority of modern software projects. The version number has the format:
+
+```
+MAJOR.MINOR.PATCH
+```
+
+For example: `2.14.3`, `1.0.0`, `0.9.1-beta.1`
+
+### The Three Numbers
+
+**MAJOR version** — incremented when you make incompatible API changes. Signals to users: "things that worked before may not work now." Users must actively review your changelog before upgrading.
+
+Examples:
+- Removing a function from your public API
+- Changing the signature of an existing function
+- Changing the database schema in a way that breaks existing data
+
+**MINOR version** — incremented when you add functionality in a backward-compatible manner. Signals to users: "new things are available, but nothing you relied on changed."
+
+Examples:
+- Adding a new command to taskr
+- Adding a new optional parameter to an existing function
+- Adding a new configuration option
+
+**PATCH version** — incremented when you make backward-compatible bug fixes. Signals to users: "something broken now works; nothing else changed."
+
+Examples:
+- Fixing a crash when tasks file is missing
+- Correcting an off-by-one in task numbering
+- Fixing a typo in output messages
+
+### Pre-release and Build Metadata
+
+SemVer also supports pre-release identifiers and build metadata:
+
+```
+1.0.0-alpha         Alpha release (early testing)
+1.0.0-alpha.1       Numbered alpha
+1.0.0-beta          Beta release
+1.0.0-beta.2        Numbered beta
+1.0.0-rc.1          Release candidate 1
+1.0.0               Final release
+2.0.0-alpha+build.1 Pre-release with build metadata
+```
+
+Pre-release versions have lower precedence than the release version: `1.0.0-rc.1 < 1.0.0`.
+
+### Practical SemVer for Developers
+
+When you are working on a library or API:
+- Start at `0.1.0` if the API is not yet stable
+- Move to `1.0.0` when the API is stable and you are ready to commit to backward compatibility
+- Every release after `1.0.0` follows the MAJOR.MINOR.PATCH rules strictly
+
+When in doubt:
+- Is any existing behavior changing? If yes: at least MINOR, possibly MAJOR
+- Are you only fixing bugs? If yes: PATCH
+- Are you removing or changing anything users depend on? If yes: MAJOR
+
+---
+
+## git describe — Generating Version Strings
+
+`git describe` generates a human-readable name for any commit based on the most recent annotated tag reachable from it:
+
+```bash
+git describe
+```
+
+On an exact tag: `v1.0.0`
+
+Between tags: `v1.0.0-3-g7a8b9c0`
+
+This reads as: "3 commits after tag `v1.0.0`, with commit hash `7a8b9c0`".
+
+```bash
+# Describe the current commit
+git describe
+
+# Describe a specific commit
+git describe 4f2a8b1
+
+# Include lightweight tags
+git describe --tags
+
+# Only use exact tag matches (fail if not on a tag)
+git describe --exact-match
+
+# If no tags exist, use commit count and hash
+git describe --always
+```
+
+`git describe` is commonly used in build systems to embed version information:
+
+```bash
+# In a shell script:
+VERSION=$(git describe --tags --always --dirty)
+echo "Building taskr $VERSION"
+```
+
+The `--dirty` flag appends `-dirty` if there are uncommitted changes, signaling the build is from a modified working tree.
+
+---
+
+## A Release Workflow Using Tags
+
+Here is a practical release workflow that professional teams use:
+
+### Step 1: Prepare the Release
+
+```bash
+# Ensure you are on the main branch with a clean, tested state
+git switch main
+git pull origin main
+git status  # Should be clean
+
+# Review the commits since the last release
+git log v1.0.0..HEAD --oneline
+```
+
+### Step 2: Update the Version Number
+
+If your project has a version file (`package.json`, `pyproject.toml`, `VERSION`, `setup.py`), update it:
+
+```bash
+# For taskr, add a VERSION file
+echo "1.1.0" > VERSION
+git add VERSION
+git commit -m "chore: bump version to 1.1.0"
+```
+
+### Step 3: Create the Annotated Tag
+
+```bash
+git tag -a v1.1.0 -m "Release v1.1.0
+
+Changes in this release:
+- Add due date support for tasks (feat)
+- Add search command (feat)
+- Fix crash when tasks file is missing (fix)
+- Improve help command output (feat)"
+```
+
+### Step 4: Push the Release
+
+```bash
+# Push the commit and the tag together
+git push origin main
+git push origin v1.1.0
+
+# Or use --follow-tags to push both in one command
+git push origin main --follow-tags
+```
+
+### Step 5: Create a GitHub Release (Optional)
+
+If your project is on GitHub:
+
+```bash
+# Using the GitHub CLI (gh)
+gh release create v1.1.0 \
+  --title "taskr v1.1.0" \
+  --notes "Release notes here..." \
+  --target main
+```
+
+Or go to GitHub → Releases → Draft a new release, select the tag, and fill in the release notes.
+
+### Maintaining Multiple Versions
+
+If you need to maintain older versions (provide security fixes for `v1.x` after releasing `v2.0`):
+
+```bash
+# Create a maintenance branch from the v1.0.0 tag
+git checkout -b release/v1.x v1.0.0
+
+# Apply patches to this branch
+git cherry-pick <bugfix-hash>
+
+# Tag the patch release
+git tag -a v1.0.1 -m "Release v1.0.1 — security fix"
+
+# Push the branch and tag
+git push origin release/v1.x --follow-tags
+```
+
+---
+
+## Practical Exercises
+
+### Exercise 1: Tag Your taskr Releases
+
+```bash
+cd ~/taskr
+
+# Look at your commit history and identify logical "release" points
+git log --oneline
+
+# Create an annotated tag for the initial working version
+git tag -a v0.1.0 <first-commit-hash> -m "Release v0.1.0
+
+Initial release of taskr. Basic task management:
+- Add tasks
+- List tasks"
+
+# Create another tag for the current state
+git tag -a v0.2.0 -m "Release v0.2.0
+
+New features:
+- Done command to mark tasks complete
+- Priority system
+- Configuration file
+- Help command"
+
+# List your tags
+git tag -l
+git show v0.1.0
+```
+
+### Exercise 2: Push Tags
+
+```bash
+# Push all tags to origin
+git push origin --tags
+
+# Verify they appear on GitHub
+# (Visit your repository on GitHub → Tags)
+```
+
+### Exercise 3: Practice SemVer Decisions
+
+For each scenario below, decide whether it warrants a PATCH, MINOR, or MAJOR version bump:
+
+1. You fix a bug where `taskr done` crashes if the task number is out of range
+2. You add a new `taskr export` command that exports tasks to CSV
+3. You change the task file format from plain text to JSON (breaking existing task files)
+4. You fix a typo in the help output
+5. You add an optional `--color` flag to the `list` command
+6. You change the `add` command to require a `--text` flag instead of a positional argument
+
+Write your answers and reasoning before checking: 1=PATCH, 2=MINOR, 3=MAJOR, 4=PATCH, 5=MINOR, 6=MAJOR.
+
+### Exercise 4: Use git describe
+
+```bash
+# With tags in place:
+git describe             # Should show nearest tag and offset
+
+# Make 2 more commits
+echo "# post-release" >> README.md
+git add README.md && git commit -m "docs: post-release update"
+echo "# another change" >> README.md
+git add README.md && git commit -m "docs: another update"
+
+# Now describe again
+git describe
+# Should show: v0.2.0-2-g<hash>
+# Meaning: 2 commits after v0.2.0
+```
+
+---
+
+## Summary
+
+- Lightweight tags are simple name→commit pointers. Annotated tags are full objects with tagger info, date, and message. Always use annotated tags for releases.
+- `git tag -a v1.0.0 -m "message"` creates an annotated tag at the current commit. `git tag -d` deletes locally; `git push origin --delete <tag>` deletes remotely.
+- Tags are not pushed by default. Use `git push origin --follow-tags` to push annotated tags along with commits.
+- Semantic Versioning: MAJOR for breaking changes, MINOR for new backward-compatible features, PATCH for bug fixes.
+- `git describe` generates a human-readable version string based on the nearest annotated tag, useful in build scripts.
+- A typical release workflow: update version number → commit → create annotated tag → push with `--follow-tags`.
+
+The next lesson dives into Git's internals: how the object database works, what blobs, trees, and commits actually are, and how this knowledge makes you a more effective Git user.

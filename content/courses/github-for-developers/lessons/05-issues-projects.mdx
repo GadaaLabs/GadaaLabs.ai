@@ -1,0 +1,522 @@
+---
+title: "Issues, Labels & Project Boards"
+description: "Master GitHub's issue tracker and project management tools: issue templates, labels, milestones, GitHub Projects v2 with board and table views, linking issues to PRs, and the difference between Issues and Discussions."
+duration: 20
+order: 5
+---
+
+## Issues as the Unit of Work
+
+A GitHub Issue is the fundamental unit of tracked work. Issues serve multiple purposes depending on context:
+
+- **Bug reports** — "The login button throws a 500 when the email contains a plus sign"
+- **Feature requests** — "Add support for dark mode"
+- **Tasks** — "Update dependencies to address CVE-2024-12345"
+- **Questions** (though GitHub Discussions is better for this)
+- **Proposals** — "RFC: migrate from REST to GraphQL"
+
+Issues are numbered sequentially within a repository (`#1`, `#2`, `#3`...) and the number is permanent — a closed issue's number is never reused. This makes issue numbers stable references in commit messages, PRs, changelogs, and team conversations.
+
+---
+
+## Creating and Formatting Issues
+
+Click **New issue** in the Issues tab. The creation form has:
+
+- **Title** — a concise, specific description of the problem or feature
+- **Body** — markdown-formatted details
+- **Assignees** — who is responsible for this issue
+- **Labels** — categorization
+- **Projects** — link to a project board
+- **Milestone** — link to a version milestone
+
+### Writing Good Issue Bodies
+
+A good issue body for a bug report answers these questions:
+
+1. **What happened?** — the observed behavior
+2. **What was expected?** — the correct behavior
+3. **How to reproduce?** — numbered steps to trigger the bug
+4. **Environment** — OS, browser, version numbers
+5. **Additional context** — screenshots, error messages, logs
+
+```markdown
+## Bug Description
+
+Clicking "Export as CSV" on the Reports page results in a 500 Internal Server
+Error instead of downloading the file.
+
+## Steps to Reproduce
+
+1. Log in as any user
+2. Navigate to Dashboard → Reports
+3. Select the "Monthly Summary" report
+4. Click "Export as CSV"
+
+## Expected Behavior
+
+The browser should download a `monthly-summary.csv` file.
+
+## Actual Behavior
+
+The page shows a "500 Internal Server Error" toast notification.
+The server logs show: `TypeError: Cannot read properties of undefined (reading 'toISOString')`
+
+## Environment
+
+- Browser: Chrome 122 on macOS 14.3
+- App version: 2.4.1
+- User role: Standard (not admin)
+
+## Additional Context
+
+This worked in version 2.3.0. Broken since the 2.4.0 release on 2024-03-15.
+```
+
+---
+
+## Issue Templates
+
+Issue templates pre-fill the issue body with a structured format, guiding reporters toward providing the information you need. Well-designed templates dramatically reduce the back-and-forth of asking "can you provide steps to reproduce?"
+
+### Creating Issue Templates
+
+Create templates in `.github/ISSUE_TEMPLATE/`. Each `.md` file becomes a template option:
+
+```
+.github/
+  ISSUE_TEMPLATE/
+    bug_report.md
+    feature_request.md
+    documentation.md
+```
+
+### Example Bug Report Template
+
+Create `.github/ISSUE_TEMPLATE/bug_report.md`:
+
+```markdown
+---
+name: Bug Report
+about: Report something that isn't working correctly
+title: 'bug: '
+labels: bug, needs-triage
+assignees: ''
+---
+
+## Bug Description
+
+<!-- A clear description of what the bug is -->
+
+## Steps to Reproduce
+
+1.
+2.
+3.
+
+## Expected Behavior
+
+<!-- What should happen -->
+
+## Actual Behavior
+
+<!-- What actually happens. Include error messages and stack traces. -->
+
+## Environment
+
+- OS:
+- Browser/Runtime version:
+- App version:
+
+## Additional Context
+
+<!-- Screenshots, logs, or anything else that helps -->
+```
+
+### Example Feature Request Template
+
+Create `.github/ISSUE_TEMPLATE/feature_request.md`:
+
+```markdown
+---
+name: Feature Request
+about: Suggest a new feature or enhancement
+title: 'feat: '
+labels: enhancement
+assignees: ''
+---
+
+## Problem Statement
+
+<!-- What problem are you trying to solve? What limitation are you hitting? -->
+
+## Proposed Solution
+
+<!-- How would you solve this? What would the feature look like? -->
+
+## Alternatives Considered
+
+<!-- What other approaches did you consider? Why are they insufficient? -->
+
+## Additional Context
+
+<!-- Mockups, references to similar features in other tools, etc. -->
+```
+
+### Using a YAML Configuration File
+
+Create `.github/ISSUE_TEMPLATE/config.yml` to customize the template chooser:
+
+```yaml
+blank_issues_enabled: false
+contact_links:
+  - name: Community Forum
+    url: https://github.com/your-org/your-repo/discussions
+    about: Ask questions and discuss ideas in GitHub Discussions
+  - name: Security Vulnerability
+    url: https://your-project.com/security
+    about: Please report security vulnerabilities privately, not as public issues
+```
+
+Setting `blank_issues_enabled: false` forces all issues to use a template — no blank issues allowed. This maintains consistent issue quality.
+
+---
+
+## Labels — Creating, Applying, and Conventions
+
+Labels are colored tags applied to issues and PRs for categorization and filtering. GitHub creates a default set when you create a repository (`bug`, `documentation`, `enhancement`, `good first issue`, etc.) but you will almost certainly want to customize them.
+
+### Managing Labels
+
+Go to **Issues** → **Labels** (or the Labels page directly at `/labels`). You can:
+
+- Create new labels with custom names, descriptions, and colors
+- Edit existing labels
+- Delete labels
+- Transfer labels between repositories (not built-in — requires scripting or a tool)
+
+### A Practical Label Taxonomy
+
+Many teams use a multi-dimensional label taxonomy where labels fall into categories:
+
+**Type labels** (what kind of work):
+- `bug` — something is broken
+- `enhancement` — new feature or improvement
+- `documentation` — docs-only change
+- `refactor` — code improvement without behavior change
+- `security` — security-related
+
+**Status labels** (where in the workflow):
+- `needs-triage` — newly filed, not yet reviewed
+- `needs-investigation` — requires more context before work can begin
+- `blocked` — waiting on something external
+- `in-progress` — actively being worked on
+- `ready-for-review` — implementation complete, needs review
+
+**Priority labels** (how urgent):
+- `P0: critical` — production is down or data loss is occurring
+- `P1: high` — affects many users, needs fixing soon
+- `P2: medium` — meaningful impact, normal priority
+- `P3: low` — nice to have, tackle when convenient
+
+**Area labels** (which part of the system):
+- `area: frontend`
+- `area: backend`
+- `area: database`
+- `area: infrastructure`
+
+**Community labels**:
+- `good first issue` — suitable for first-time contributors
+- `help wanted` — maintainers welcome external contributions
+
+### Color Conventions
+
+Use consistent colors per category. For example:
+- Red/pink shades for bugs and critical priorities
+- Blue shades for type labels
+- Yellow/orange for status labels
+- Green for good first issues and positive states
+
+Consistent colors let contributors scan the label list and immediately understand the system.
+
+### Applying Labels
+
+Labels can be applied from the issue sidebar, from the issue list (select multiple issues and use the Labels dropdown), or via the API/CLI:
+
+```bash
+# Apply a label to an issue
+gh issue edit 42 --add-label "bug,P1: high"
+
+# Remove a label
+gh issue edit 42 --remove-label "needs-triage"
+
+# Apply a label to a PR
+gh pr edit 15 --add-label "enhancement"
+```
+
+---
+
+## Milestones — Grouping Issues by Version
+
+Milestones group issues and PRs by a shared delivery goal — typically a version number or a date. A milestone has:
+
+- A title (e.g., "v2.5.0", "Q2 2024", "Launch")
+- An optional description
+- An optional due date
+- A progress indicator showing the percentage of associated issues/PRs that are closed
+
+### Creating Milestones
+
+Go to **Issues** → **Milestones** → **New milestone**. Set the title, description, and due date.
+
+### Using Milestones Effectively
+
+- Assign every issue or PR that must be completed for a release to the corresponding milestone.
+- The milestone's progress bar gives you an at-a-glance view of release readiness.
+- If the due date passes with open issues, the milestone turns red — an automatic signal that the timeline is at risk.
+- Issues you decide to postpone to the next release can be moved to the next milestone rather than closed.
+
+```bash
+# Set milestone on an issue via CLI
+gh issue edit 42 --milestone "v2.5.0"
+
+# List all issues in a milestone
+gh issue list --milestone "v2.5.0"
+```
+
+---
+
+## Assignees and Mentions
+
+### Assignees
+
+Any issue or PR can have one or more assignees — the people responsible for it. Assignees:
+
+- Receive notifications for activity on the issue/PR
+- Show up in filtered views (e.g., "Issues assigned to me")
+- Signal ownership and accountability
+
+Convention: a new issue starts unassigned. When someone picks it up, they assign it to themselves. In project-managed teams, issues may be assigned during sprint planning.
+
+### Mentions
+
+Mentioning a GitHub user (`@username`) or team (`@org/team-name`) in an issue, PR, or comment:
+
+- Sends them a notification
+- Creates a link to their profile
+- Creates a "mentioned in" reference visible on their profile
+
+Use mentions to pull in specific people when you need their attention: "cc @alice — this is in your area" or "@org/security-team can you review this for potential implications?"
+
+---
+
+## GitHub Projects (v2)
+
+GitHub Projects (v2, launched 2022) is a flexible project management tool built into GitHub. Unlike the original Projects, it provides:
+
+- Multiple view types: Board, Table, and Roadmap
+- Custom fields with rich types (date, iteration, single-select, number, text)
+- Automation workflows
+- Cross-repository views (a single project can contain issues from multiple repositories)
+- Insights (built-in charts)
+
+### Creating a Project
+
+1. Go to your organization or user profile.
+2. Click **Projects** → **New project**.
+3. Choose a template (Table, Board, Roadmap, Backlog) or start blank.
+4. Give it a name.
+
+### Board View
+
+The Board view shows issues as cards in columns. Columns can represent workflow states: **Backlog**, **In Progress**, **In Review**, **Done**.
+
+Drag cards between columns to update their status. Each move can trigger an automation (e.g., moving to "In Progress" automatically sets the `status` field to `in_progress`).
+
+### Table View
+
+The Table view shows issues as rows in a spreadsheet-like interface. You can:
+
+- Sort by any column
+- Filter by field values
+- Group by field (e.g., group by Assignee, Priority, or Milestone)
+- Show/hide columns
+- Bulk-edit field values
+
+### Roadmap View
+
+The Roadmap view renders issues on a timeline using start and end date fields. This view requires date fields — create them as custom fields or use iteration fields.
+
+### Custom Fields
+
+Projects support custom fields for tracking data beyond what GitHub issues natively support:
+
+- **Text** — freeform text notes
+- **Number** — story points, hours, or any numeric value
+- **Date** — start dates, target dates
+- **Single select** — a dropdown with predefined options (great for Priority, Size, Status)
+- **Iteration** — sprint-style fixed-duration cycles
+
+Add custom fields from the project's **Settings** → **Custom fields** → **New field**.
+
+### Adding Items to a Project
+
+Items can be added to a project in several ways:
+
+- Manually: from the project, click **+ Add item** and search for issues or PRs
+- From an issue/PR sidebar: in the issue's right sidebar, click **Projects** and select the project
+- Via automation: configure workflows to auto-add issues when they are created or labeled
+
+---
+
+## Automating Project Cards with Workflows
+
+Projects support automation rules that move items or update fields based on events.
+
+Navigate to the project → **Settings** → **Workflows**. Built-in automation options include:
+
+- **Item added to project** → set Status to a specified value
+- **Item reopened** → set Status to "In Progress"
+- **Item closed** → set Status to "Done"
+- **Pull request merged** → set Status to "Done"
+- **Auto-add to project** → automatically add new issues from a repository to the project when they match label criteria
+
+### Example: Auto-Triage Setup
+
+```
+Workflow 1: Auto-add issues
+- Trigger: Issue opened in repository "my-org/my-app"
+- Filter: Label is "bug"
+- Action: Add to project, set Status = "Needs Triage"
+
+Workflow 2: Move to In Progress
+- Trigger: Issue assigned
+- Action: Set Status = "In Progress"
+
+Workflow 3: Close completed work
+- Trigger: Issue closed
+- Action: Set Status = "Done"
+```
+
+---
+
+## Linking Issues to PRs
+
+Linking issues to PRs creates a traceable connection between work tracked and work done. Two types of links:
+
+### Closing Links (Auto-Close on Merge)
+
+Using closing keywords in a PR description closes the linked issue when the PR merges into the default branch:
+
+```
+Closes #42
+Fixes #42
+Resolves #42
+```
+
+Multiple issues: `Closes #42, fixes #43`
+
+Cross-repository: `Closes owner/repo#42`
+
+### Reference Links (Without Closing)
+
+Simply mentioning an issue number creates a reference link:
+
+```
+Related to #42
+See also #15
+Part of the work tracked in #78
+```
+
+This shows "mentioned in [PR title]" on the issue, creating a hyperlinked trail without closing the issue.
+
+---
+
+## Issue Closing Keywords in Commit Messages
+
+Closing keywords work in commit messages too, not just PR descriptions. When a commit lands on the default branch (directly or via a squash merge), issues referenced with closing keywords are automatically closed.
+
+```bash
+git commit -m "fix: handle null in export function
+
+The CSV export was failing when the date field was null. Added a null
+check that returns an empty string as the fallback.
+
+Fixes #42"
+```
+
+This is particularly relevant for squash-and-merge workflows where a single squashed commit lands on `main` — that commit's message should include the `Fixes #N` line for the issue to auto-close.
+
+---
+
+## GitHub Discussions vs Issues
+
+**GitHub Discussions** is a forum-style communication tool built into GitHub repositories. It is separate from Issues and serves different use cases.
+
+### When to Use Issues
+
+- Actionable, trackable work items
+- Bug reports that require investigation and a fix
+- Feature requests with a defined scope
+- Tasks that can be assigned, labeled, and closed when done
+
+Issues are designed to be **closed** — they represent a state of incompleteness that resolves.
+
+### When to Use Discussions
+
+- Open-ended questions: "What's the best way to handle auth in this project?"
+- Ideas that aren't ready to become issues: "I've been thinking about a plugin system..."
+- Community Q&A: "How do I configure X for my use case?"
+- Show and tell: "I built a project using this library — want to share!"
+- General announcements
+
+Discussions have categories, upvoting, and the ability to mark an answer as the accepted answer (turning a discussion into a resolved Q&A).
+
+### Enabling Discussions
+
+**Settings** → **General** → check **Discussions** in the Features section.
+
+### The Practical Distinction
+
+A useful heuristic: if a team member would add it to a sprint or assign it to someone, it's an issue. If it's a conversation that might produce an issue later, it's a discussion. Many projects explicitly document this in their CONTRIBUTING.md.
+
+---
+
+## Practical Exercises
+
+### Exercise 1 — Set Up Issue Templates
+
+1. Create `.github/ISSUE_TEMPLATE/bug_report.md` and `feature_request.md` in a repository.
+2. Add `config.yml` to disable blank issues.
+3. Try creating a new issue and observe the template chooser.
+4. Fill out and submit a bug report using the template.
+
+### Exercise 2 — Build a Label Taxonomy
+
+1. Delete the default labels in a practice repository.
+2. Create a consistent set of labels using the taxonomy in this lesson: type labels, status labels, priority labels, and at least two area labels.
+3. Apply appropriate labels to three issues you create.
+
+### Exercise 3 — Set Up a Milestone and Assign Issues
+
+1. Create a milestone called "v1.0.0" with a due date one month from now.
+2. Create five issues representing features or bugs for your v1.0.0 release.
+3. Assign all five issues to the milestone.
+4. Close two of the issues and observe the milestone progress bar.
+
+### Exercise 4 — GitHub Projects Board
+
+1. Create a new GitHub Project.
+2. Add a Board view with columns: Backlog, In Progress, In Review, Done.
+3. Add a Table view with a custom Priority field (single-select: P0, P1, P2, P3).
+4. Add 5-10 issues from your repository.
+5. Set priorities on each, move them across columns.
+6. Set up an automation workflow that moves issues to "Done" when they are closed.
+
+### Exercise 5 — Link an Issue to a PR
+
+1. Create an issue: "Add a greeting message to the homepage."
+2. Create a branch and implement the feature.
+3. Open a PR with "Closes #N" in the description.
+4. Merge the PR.
+5. Verify that the issue was automatically closed and shows "closed by [PR]."

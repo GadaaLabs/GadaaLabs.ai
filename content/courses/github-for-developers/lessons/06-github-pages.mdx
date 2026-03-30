@@ -1,0 +1,481 @@
+---
+title: "GitHub Pages — Deploy a Site for Free"
+description: "Learn to host static websites for free using GitHub Pages: deploy from a branch or the /docs folder, configure a custom domain, use GitHub Actions for deployment, and understand the difference between user and project pages."
+duration: 18
+order: 6
+---
+
+## What GitHub Pages Is
+
+GitHub Pages is a free static site hosting service built into GitHub. You configure which branch and folder to serve, and GitHub automatically builds and publishes your content to a URL under the `github.io` domain. Changes to your repository are reflected on the live site within seconds to minutes.
+
+"Static site" means the server serves HTML, CSS, and JavaScript files directly — there is no server-side processing, no database, and no backend runtime. Every visitor receives the same pre-built files. This is perfectly suitable for:
+
+- Personal portfolios and developer profiles
+- Documentation sites for open source projects
+- Landing pages for apps or products
+- Course materials and tutorials
+- Project showcases
+
+GitHub Pages is free for public repositories. Private repositories require a GitHub Pro or organization plan. There are limits: 1 GB repository size, 1 GB monthly bandwidth, and a soft limit of 10 builds per hour — all generous for typical static sites.
+
+---
+
+## Two Types of GitHub Pages Sites
+
+### User/Organization Sites
+
+A **user site** is published at `https://yourusername.github.io`. It is created from a repository named exactly `yourusername.github.io` (where `yourusername` matches your GitHub username exactly, case-insensitively).
+
+For organizations, an **organization site** is published at `https://yourorgname.github.io` from a repository named `yourorgname.github.io`.
+
+Key characteristics:
+- The site URL is the root domain (no subdirectory)
+- The source must be the `main` or `master` branch (no other branch options)
+- You can only have one user/org site per account
+
+### Project Sites
+
+A **project site** is published at `https://yourusername.github.io/repository-name`. It can be created from any repository and from any branch or folder you choose.
+
+For example, if your username is `alice` and your repository is `my-portfolio`:
+- The site is at `https://alice.github.io/my-portfolio`
+- You can use `main`, `gh-pages`, or any other branch
+- You can serve from the root `/` or from the `/docs` folder
+
+Most developers have one user site and potentially many project sites — one per open source project they maintain.
+
+---
+
+## Enabling GitHub Pages
+
+### From a Branch
+
+1. Go to your repository → **Settings** → **Pages**
+2. Under **Source**, select **Deploy from a branch**
+3. Select the branch (`main`, `gh-pages`, etc.)
+4. Select the folder: **/ (root)** or **/docs**
+5. Click **Save**
+
+GitHub will show "Your site is live at https://username.github.io/repo" within a minute or two. A deployment entry appears in the Actions tab under the "pages build and deployment" workflow.
+
+### From the /docs Folder
+
+Many projects use a `/docs` folder in their `main` branch rather than a separate `gh-pages` branch. This approach keeps documentation colocated with the code that it documents:
+
+```
+my-project/
+  src/            # application code
+  tests/
+  docs/           # published as GitHub Pages
+    index.html
+    guide.html
+    style.css
+  README.md
+  package.json
+```
+
+In **Settings** → **Pages**, select branch `main` and folder `/docs`.
+
+### The gh-pages Branch Approach
+
+Many older tools (and some static site generators) push the built output to a dedicated `gh-pages` branch, keeping the source code on `main` and the build artifacts separate:
+
+```
+main branch:    source code, markdown files, config
+gh-pages branch: compiled HTML, CSS, JS (never edit manually)
+```
+
+The `gh-pages` npm package automates this for Node-based sites:
+
+```bash
+npm install --save-dev gh-pages
+```
+
+Add to `package.json`:
+
+```json
+{
+  "scripts": {
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d build"
+  }
+}
+```
+
+Run `npm run deploy` and the build output is pushed to the `gh-pages` branch and published.
+
+---
+
+## Deploying a Simple HTML/CSS Site
+
+Let us build and deploy a minimal personal portfolio page from scratch.
+
+### Step 1: Create the Repository
+
+Create a new repository on GitHub named `yourusername.github.io` (replace with your actual username). Initialize with a README.
+
+```bash
+# Clone locally
+git clone git@github.com:yourusername/yourusername.github.io.git
+cd yourusername.github.io
+```
+
+### Step 2: Create the HTML and CSS
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Alex Chen — Developer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Alex Chen</h1>
+    <p class="subtitle">Software Engineer · Open Source · Distributed Systems</p>
+    <nav>
+      <a href="https://github.com/alex-chen">GitHub</a>
+      <a href="mailto:alex@example.com">Email</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="about">
+      <h2>About</h2>
+      <p>I build developer tools and distributed systems. Currently at Acme Corp
+      working on observability infrastructure.</p>
+    </section>
+
+    <section class="projects">
+      <h2>Projects</h2>
+      <article>
+        <h3><a href="https://github.com/alex-chen/taskr">taskr</a></h3>
+        <p>Command-line task manager with real-time sync across devices.</p>
+      </article>
+      <article>
+        <h3><a href="https://github.com/alex-chen/grpc-bench">grpc-bench</a></h3>
+        <p>Comprehensive gRPC performance benchmarking toolkit.</p>
+      </article>
+    </section>
+  </main>
+
+  <footer>
+    <p>Built with HTML &amp; CSS · Hosted on GitHub Pages</p>
+  </footer>
+</body>
+</html>
+```
+
+```css
+/* style.css */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 18px;
+  line-height: 1.6;
+  color: #24292f;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+header {
+  margin-bottom: 3rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid #d0d7de;
+}
+
+h1 { font-size: 2rem; }
+
+.subtitle {
+  color: #57606a;
+  margin-top: 0.25rem;
+}
+
+nav {
+  margin-top: 1rem;
+  display: flex;
+  gap: 1.5rem;
+}
+
+nav a {
+  color: #0969da;
+  text-decoration: none;
+}
+
+nav a:hover {
+  text-decoration: underline;
+}
+
+section {
+  margin-bottom: 2.5rem;
+}
+
+h2 {
+  font-size: 1.25rem;
+  margin-bottom: 1rem;
+  color: #57606a;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+h3 { margin-bottom: 0.25rem; }
+h3 a { color: #24292f; }
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 1px solid #d0d7de;
+  font-size: 0.9rem;
+  color: #57606a;
+}
+```
+
+### Step 3: Commit and Push
+
+```bash
+git add index.html style.css
+git commit -m "feat: initial portfolio site"
+git push origin main
+```
+
+### Step 4: Enable Pages
+
+In the repository settings, navigate to **Pages**, select branch `main`, folder `/ (root)`, and save.
+
+Visit `https://yourusername.github.io` in 1-2 minutes.
+
+---
+
+## Custom Domain Setup
+
+GitHub Pages supports custom domains — you can serve your site from `yourdomain.com` instead of `yourusername.github.io`.
+
+### Step 1: Add the Custom Domain in GitHub
+
+In **Settings** → **Pages** → **Custom domain**, enter your domain (e.g., `alexchen.dev`) and click **Save**. GitHub creates a `CNAME` file in your repository root.
+
+### Step 2: Configure DNS
+
+Depending on whether you are using an apex domain (`example.com`) or a subdomain (`www.example.com`):
+
+**For an apex domain**, add A records in your DNS provider pointing to GitHub's IP addresses:
+
+```
+185.199.108.153
+185.199.109.153
+185.199.110.153
+185.199.111.153
+```
+
+Also add an AAAA record for IPv6 (optional but recommended):
+
+```
+2606:50c0:8000::153
+2606:50c0:8001::153
+2606:50c0:8002::153
+2606:50c0:8003::153
+```
+
+**For a subdomain** (e.g., `www.alexchen.dev`), add a CNAME record:
+
+```
+www  CNAME  yourusername.github.io
+```
+
+### Step 3: Enforce HTTPS
+
+After DNS propagates (can take up to 48 hours, usually faster), return to **Settings** → **Pages** and check **Enforce HTTPS**. GitHub automatically provisions a TLS certificate via Let's Encrypt.
+
+### The CNAME File
+
+The `CNAME` file in your repository root contains your custom domain. It must contain exactly one line — your domain name:
+
+```
+alexchen.dev
+```
+
+If you delete this file, the custom domain association is removed. Keep it committed.
+
+---
+
+## Deploying with GitHub Actions
+
+Deploying from a branch is simple but limiting — you cannot run a build step. If your site uses a static site generator (Jekyll, Hugo, Eleventy, Astro, Next.js static export), you need GitHub Actions to build the site first and then deploy the output.
+
+### Setting Up Actions Deployment
+
+In **Settings** → **Pages** → **Source**, select **GitHub Actions** instead of a branch.
+
+GitHub provides starter workflows for popular generators. Here is a complete workflow for deploying a Vite/static build:
+
+```yaml
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist   # your build output directory
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+```
+
+Save this as `.github/workflows/deploy.yml`. Every push to `main` now triggers a build and deployment.
+
+### Key Actions Used
+
+- **actions/upload-pages-artifact** — packages your build output into a GitHub Pages artifact
+- **actions/deploy-pages** — deploys the artifact to GitHub Pages (requires `pages: write` and `id-token: write` permissions)
+
+---
+
+## Jekyll on GitHub Pages
+
+GitHub Pages has native Jekyll support — if your repository contains a Jekyll project (with a `_config.yml`), GitHub builds it automatically without any Actions workflow.
+
+Jekyll is a Ruby-based static site generator that turns Markdown files into HTML. GitHub Pages uses Jekyll by default when no Actions workflow is configured and the source is set to a branch.
+
+### A Minimal Jekyll Site
+
+```yaml
+# _config.yml
+title: My Site
+description: Built with Jekyll
+theme: minima
+```
+
+```markdown
+# index.md
+---
+layout: home
+---
+
+Welcome to my site.
+```
+
+Push these two files to `main` with Pages enabled and GitHub builds the Jekyll site automatically.
+
+### Jekyll Limitations on GitHub Pages
+
+GitHub Pages only supports a specific set of Jekyll plugins (the "github-pages" gem). If you need custom plugins, you must build locally or with GitHub Actions and deploy the output rather than the source.
+
+---
+
+## Checking Deployment Status
+
+### In the Repository
+
+Go to the **Actions** tab. Look for the workflow named "pages build and deployment" (for branch deploys) or your custom workflow name (for Actions deploys). Click a run to see the build logs.
+
+### Via gh CLI
+
+```bash
+# List recent deployments
+gh run list --workflow=deploy.yml
+
+# Watch a running deployment
+gh run watch
+
+# View deployment logs
+gh run view --log
+```
+
+### Troubleshooting Common Issues
+
+**Site not updating after push:**
+- Check the Actions tab for a failed deployment workflow.
+- For branch deploys, ensure the files are in the correct folder (root or `/docs`).
+- Wait 1-2 minutes — propagation takes time.
+
+**Custom domain not working:**
+- Verify the CNAME record is set correctly (use `dig` or an online DNS lookup tool).
+- Ensure the `CNAME` file in the repository contains the correct domain.
+- DNS changes can take up to 48 hours to propagate globally.
+
+**Jekyll build failing:**
+- Check the Pages deployment log in the Actions tab.
+- Common causes: invalid YAML frontmatter, unsupported plugin, syntax error in a Liquid template.
+
+---
+
+## Practical Exercises
+
+### Exercise 1 — Deploy a Personal Site
+
+1. Create a repository named `yourusername.github.io`.
+2. Create an `index.html` and `style.css` using the example in this lesson as a starting point.
+3. Enable GitHub Pages from the `main` branch, root folder.
+4. Verify your site is live at `https://yourusername.github.io`.
+5. Make a change to the HTML, push it, and verify the live site updates.
+
+### Exercise 2 — Project Page for a Repository
+
+1. Pick any existing repository you own.
+2. Create a `/docs` folder with an `index.html` file documenting the project.
+3. Enable Pages from the `main` branch, `/docs` folder.
+4. Verify the project site is live at `https://yourusername.github.io/reponame`.
+
+### Exercise 3 — Deploy with GitHub Actions
+
+1. Create a repository with a simple build step (even just `echo "built" > dist/index.html`).
+2. Write a GitHub Actions workflow that runs the build and deploys using `actions/upload-pages-artifact` and `actions/deploy-pages`.
+3. Push to `main` and watch the workflow run in the Actions tab.
+4. Verify the site is live.
+
+### Exercise 4 — Custom Domain (Optional)
+
+If you own a domain:
+1. Add it as a custom domain in GitHub Pages settings.
+2. Configure the DNS records at your registrar.
+3. Wait for DNS propagation and verify the site loads from your domain.
+4. Enable HTTPS enforcement.

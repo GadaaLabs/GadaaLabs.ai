@@ -1,0 +1,502 @@
+---
+title: "Merge Conflicts — Understand & Resolve Them"
+description: "Demystify merge conflicts: understand exactly why they happen, learn to read conflict markers, resolve conflicts manually and with merge tools, and develop team habits that prevent conflicts in the first place."
+duration: 22
+order: 6
+---
+
+## Why Conflicts Are Not Scary
+
+Merge conflicts are the thing that makes new Git users most anxious. They see a file full of `<<<<<<<` markers and feel like they have broken something. They have not.
+
+A merge conflict is not an error. It is Git saying: "Two branches both changed the same part of the same file in different ways. I cannot automatically decide which change to keep, so I need you to decide."
+
+That is it. The conflict markers are not damage — they are Git's way of presenting the decision to you clearly. Once you understand what they mean and how to resolve them, conflicts become a routine part of collaborative development, not a source of dread.
+
+This lesson teaches you to resolve conflicts confidently, every time.
+
+---
+
+## Why Conflicts Happen
+
+Git is remarkably good at automatically merging changes. Most of the time, when two branches change different files (or different parts of the same file), Git merges them without any conflict. The magic works because Git tracks the common ancestor.
+
+A conflict occurs when:
+
+1. **Two branches modify the same lines of the same file** — Git cannot determine which version to keep
+2. **One branch modifies a file that the other branch deletes** — Git cannot determine what to do with the file
+3. **Two branches rename the same file differently** — Git cannot determine which name to use
+
+The most common case by far is case 1.
+
+### Setting Up a Conflict
+
+Let's deliberately create a merge conflict to work through:
+
+```bash
+cd ~/taskr
+
+# Ensure we're on main with a clean state
+git switch main
+git status  # Should be clean
+
+# Create a feature branch for changing the help text
+git switch -c feature/better-help
+
+# Modify the usage message in taskr.sh
+# Change: echo "Usage: taskr {add|list|done} <task>"
+# To:     echo "Usage: taskr COMMAND [OPTIONS]"
+# (Edit taskr.sh and change this line)
+git add taskr.sh
+git commit -m "feat: improve usage message to show COMMAND [OPTIONS]"
+
+# Switch back to main
+git switch main
+
+# On main, also modify the same usage message line — differently
+# Change: echo "Usage: taskr {add|list|done} <task>"
+# To:     echo "Usage: taskr <command> <args>"
+# (Edit the same line in taskr.sh)
+git add taskr.sh
+git commit -m "fix: correct usage message format"
+
+# Now try to merge the feature branch
+git merge feature/better-help
+```
+
+Git will stop and report:
+
+```
+Auto-merging taskr.sh
+CONFLICT (content): Merge conflict in taskr.sh
+Automatic merge failed; fix conflicts and then commit the result.
+```
+
+---
+
+## Reading Conflict Markers
+
+Open `taskr.sh` and find the conflict. It looks like this:
+
+```
+<<<<<<< HEAD
+    echo "Usage: taskr <command> <args>"
+=======
+    echo "Usage: taskr COMMAND [OPTIONS]"
+>>>>>>> feature/better-help
+```
+
+Let's parse each section:
+
+**`<<<<<<< HEAD`** — This marker starts the conflict block. Everything between this line and the `=======` line is the version from your current branch (HEAD, which is `main`).
+
+**`=======`** — This divider separates the two conflicting versions.
+
+**`>>>>>>> feature/better-help`** — This marker ends the conflict block. Everything between `=======` and this line is the version from the branch being merged in (`feature/better-help`).
+
+So reading the conflict:
+- `main` changed the line to: `echo "Usage: taskr <command> <args>"`
+- `feature/better-help` changed the line to: `echo "Usage: taskr COMMAND [OPTIONS]"`
+
+Git presents both versions and asks: which one do you want? Or do you want a combination of both?
+
+### The Ancestor (Base) Version
+
+Sometimes it helps to know what the line looked like before either branch changed it. You can configure Git to show a three-way view that includes the common ancestor:
+
+```bash
+git config --global merge.conflictstyle diff3
+```
+
+With `diff3`, the conflict looks like:
+
+```
+<<<<<<< HEAD
+    echo "Usage: taskr <command> <args>"
+||||||| merged common ancestors
+    echo "Usage: taskr {add|list|done} <task>"
+=======
+    echo "Usage: taskr COMMAND [OPTIONS]"
+>>>>>>> feature/better-help
+```
+
+The middle section (between `|||||||` and `=======`) shows the original line before either branch touched it. This context is often invaluable for understanding what both sides were trying to change.
+
+The `diff3` style is highly recommended. Enable it globally.
+
+---
+
+## git status During a Conflict
+
+```bash
+git status
+```
+
+```
+On branch main
+You have unmerged paths.
+  (fix conflicts and run "git commit")
+  (use "git merge --abort" to abort the merge)
+
+Unmerged paths:
+  (use "git add <file>..." to mark resolution)
+        both modified:   taskr.sh
+
+no changes added to commit (use "git add" and/or "git commit -a")
+```
+
+Key information:
+- "You have unmerged paths" — a merge is in progress
+- `both modified: taskr.sh` — this file has conflicts that need resolution
+- Instructions: fix the conflicts, then `git add` the resolved files, then `git commit`
+- Or: `git merge --abort` to cancel the merge entirely
+
+---
+
+## Resolving Conflicts Manually
+
+Resolving a conflict means editing the file to contain exactly what you want — neither the raw `<<<<<<<` markers nor both versions unchanged, but your considered decision about the correct final content.
+
+The resolution options:
+
+**Option A: Keep HEAD's version**
+
+```bash
+# Remove the conflict markers and the feature branch's version
+# Result: echo "Usage: taskr <command> <args>"
+```
+
+**Option B: Keep the feature branch's version**
+
+```bash
+# Remove the conflict markers and main's version
+# Result: echo "Usage: taskr COMMAND [OPTIONS]"
+```
+
+**Option C: Combine both (create a new version)**
+
+```bash
+# Create a version that incorporates both ideas
+# Result: echo "Usage: taskr COMMAND [OPTIONS]  (e.g., add 'Buy milk')"
+```
+
+**Option D: Write something completely different**
+
+```bash
+# If neither version is right, write what the line should actually be
+# Result: echo "Usage: taskr {add|list|done|priority|help} [args]"
+```
+
+After editing, the file should contain no conflict markers at all. Just the correct final content.
+
+### Step-by-Step Resolution
+
+```bash
+# 1. Open the conflicted file in your editor
+code taskr.sh
+
+# 2. Find all conflict markers (search for "<<<<<<")
+# 3. For each conflict, decide what the resolution should be
+# 4. Edit the file to contain the resolution — remove ALL conflict markers
+# 5. Save the file
+
+# 6. Mark the conflict as resolved by staging the file
+git add taskr.sh
+
+# 7. If there are other conflicted files, resolve them too
+# 8. Once all conflicts are resolved and staged, commit
+git commit
+```
+
+Git will open your editor with a pre-filled merge commit message:
+
+```
+Merge branch 'feature/better-help'
+
+# Conflicts:
+#       taskr.sh
+```
+
+You can edit this message or keep it as-is. Save and close to complete the merge.
+
+---
+
+## Multiple Conflicts in One Merge
+
+Real merges often have more than one conflict. The workflow is the same, applied to each file:
+
+```bash
+git status
+# Unmerged paths:
+#   both modified:   taskr.sh
+#   both modified:   README.md
+#   deleted by us:   .taskr.conf
+
+# Work through each file:
+code taskr.sh   # Resolve, save
+git add taskr.sh
+
+code README.md  # Resolve, save
+git add README.md
+
+# For "deleted by us" conflict — choose to keep or delete:
+# Keep the file (undo our deletion):
+git checkout --theirs .taskr.conf
+git add .taskr.conf
+
+# Or confirm the deletion:
+git rm .taskr.conf
+```
+
+The `--ours` and `--theirs` flags on `git checkout` (or `git restore --source`) let you wholesale accept one side:
+
+```bash
+# Accept everything from HEAD (current branch)
+git checkout --ours taskr.sh
+
+# Accept everything from the branch being merged in
+git checkout --theirs taskr.sh
+```
+
+After using `--ours` or `--theirs`, you still need to `git add` the file to mark it as resolved.
+
+---
+
+## Using a Merge Tool: git mergetool
+
+Visual merge tools show conflicts in a three-pane or four-pane interface: the original (base), your version (ours), their version (theirs), and the output. They are much more comfortable than editing raw conflict markers for complex conflicts.
+
+### Configure a Merge Tool
+
+```bash
+# Use VS Code as the merge tool
+git config --global merge.tool vscode
+git config --global mergetool.vscode.cmd 'code --wait $MERGED'
+
+# Use vimdiff (built into most systems)
+git config --global merge.tool vimdiff
+
+# Other popular tools:
+git config --global merge.tool meld        # Meld (Linux)
+git config --global merge.tool kdiff3      # KDiff3 (cross-platform)
+git config --global merge.tool p4merge     # P4Merge (cross-platform)
+```
+
+### Running the Merge Tool
+
+```bash
+git mergetool
+```
+
+Git opens each conflicted file in the configured tool. You resolve each conflict, save, and close the tool. Git marks the file as resolved and moves to the next.
+
+Merge tools often create `.orig` backup files. Clean them up:
+
+```bash
+git clean -f *.orig
+# or configure Git to not create them:
+git config --global mergetool.keepBackup false
+```
+
+### VS Code's Built-in Conflict Resolution
+
+VS Code has excellent built-in conflict resolution. When you open a file with conflicts, VS Code shows color-coded inline buttons above each conflict:
+
+- **Accept Current Change** — keep HEAD's version
+- **Accept Incoming Change** — keep the merging branch's version
+- **Accept Both Changes** — insert both versions sequentially
+- **Compare Changes** — open a side-by-side diff
+
+These are convenient for simple conflicts. For complex ones, the full merge tool view is better.
+
+---
+
+## git merge --abort
+
+If you get into a conflict and decide you are not ready to resolve it right now, abort the merge:
+
+```bash
+git merge --abort
+```
+
+This returns your working directory and staging area to the state they were in before you ran `git merge`. All conflict markers are removed, your files are restored to their pre-merge state, and you are back on your branch as if the merge never happened.
+
+Use this when:
+- You want to prepare better before attempting the merge
+- You realize you need more information about the intent of the conflicting changes
+- You want to take a different approach (e.g., rebase instead of merge)
+
+---
+
+## Conflict Prevention Strategies
+
+The best conflict is one that never happens. These practices reduce conflict frequency and severity:
+
+### 1. Keep Feature Branches Short-Lived
+
+The longer a branch lives, the more it diverges from `main`, and the bigger the eventual merge conflict. Aim to merge feature branches within a day or two. Break large features into smaller, independently merge-able slices.
+
+### 2. Sync Your Branch Frequently
+
+Regularly merge or rebase `main` into your feature branch:
+
+```bash
+# While on your feature branch
+git fetch origin
+git merge origin/main    # or: git rebase origin/main
+```
+
+By pulling changes from main into your branch often, you resolve small conflicts early (when the context is fresh) rather than one huge conflict at merge time.
+
+### 3. Communicate With Your Team
+
+Before refactoring a file, changing a core API, or moving code around, announce it in your team's communication channel. "I'm about to rename all the auth functions — anyone touching auth right now?" A five-second Slack message can save an hour of conflict resolution.
+
+### 4. Small, Focused Commits
+
+Commits that change one thing at a time are easier to merge automatically. A commit that touches 15 files across the codebase is much more likely to conflict than a commit that changes 3 closely related files.
+
+### 5. Use .gitattributes for Line Endings
+
+Line ending differences (CRLF vs LF) can cause false conflicts. Add a `.gitattributes` file to normalize line endings:
+
+```
+* text=auto
+*.sh text eol=lf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
+```
+
+### 6. Structure Code to Minimize Coupling
+
+High coupling between files means more simultaneous edits. Good software architecture — clear module boundaries, separation of concerns, dependency injection — naturally reduces merge conflicts because developers work in separate, well-defined areas of the codebase.
+
+---
+
+## Understanding Common Conflict Scenarios
+
+### Scenario 1: Both Branches Edited the Same Line
+
+The most common case, shown throughout this lesson. The resolution is always a human decision: which version is correct, or what combination of both?
+
+### Scenario 2: One Branch Deleted a File, the Other Modified It
+
+```
+CONFLICT (modify/delete): config.json deleted in feature/cleanup
+and modified in HEAD. Version HEAD of config.json left in tree.
+```
+
+You must decide: keep the file (by `git add config.json`) or confirm the deletion (by `git rm config.json`). Look at the modification to understand if it was important.
+
+### Scenario 3: Both Branches Added the Same File
+
+```
+CONFLICT (add/add): Merge conflict in utils.js
+```
+
+Both branches created a file with the same name but different content. Open the file, resolve the conflict markers as usual.
+
+### Scenario 4: Rename Conflicts
+
+One branch renamed `auth.js` to `authentication.js`; another renamed it to `auth-service.js`. Git reports:
+
+```
+CONFLICT (rename/rename): renamed in HEAD as auth-service.js,
+but renamed in feature/refactor as authentication.js
+```
+
+You need to delete one of the renamed files and keep the one with the name you want:
+
+```bash
+git rm authentication.js   # or git rm auth-service.js
+git add auth-service.js    # Stage the keeper
+```
+
+---
+
+## Practical Exercises
+
+### Exercise 1: Create and Resolve a Text Conflict
+
+```bash
+cd ~/taskr
+git switch main
+
+# Create a branch that changes the help text
+git switch -c feature/help-v1
+# Edit taskr.sh: change "show_help" to print a colorful banner
+git add taskr.sh && git commit -m "feat: colorize help output"
+
+git switch main
+# Edit taskr.sh: change "show_help" to add version info to help
+git add taskr.sh && git commit -m "feat: add version to help output"
+
+# Merge and resolve the conflict
+git merge feature/help-v1
+# (Resolve the conflict markers in taskr.sh)
+git add taskr.sh
+git commit
+```
+
+### Exercise 2: Use diff3 Style
+
+```bash
+git config --global merge.conflictstyle diff3
+
+# Create another conflict (similar to Exercise 1)
+# This time, note the ancestor section between ||||||| and =======
+# Does seeing the ancestor help you make a better decision?
+```
+
+### Exercise 3: Practice --ours and --theirs
+
+```bash
+# Create a conflict where you are confident one side is entirely correct
+# Use git checkout --ours or --theirs to accept one side wholesale
+# Then git add and commit
+```
+
+### Exercise 4: Abort and Retry
+
+```bash
+# Start a merge that creates a conflict
+git merge feature/help-v1
+
+# Instead of resolving, abort
+git merge --abort
+
+# Verify you are back to the clean state
+git status
+git log --oneline
+
+# Now prepare better (e.g., merge main into the feature branch first)
+git switch feature/help-v1
+git merge main
+# (Resolve any conflicts here — on the feature branch, not main)
+git switch main
+git merge feature/help-v1   # Should now be cleaner
+```
+
+### Challenge: Three-Branch Merge Conflict
+
+Create a scenario where three branches all modify the same file:
+1. `feature/a` changes lines 10-15 of taskr.sh
+2. `feature/b` changes lines 12-18 of taskr.sh (overlapping range)
+3. Merge `feature/a` into main
+4. Merge `feature/b` into main (conflict!)
+5. Resolve carefully so the final version is correct and logical
+
+---
+
+## Summary
+
+- Merge conflicts happen when two branches change the same lines of the same file. Git cannot automatically decide which change wins, so it presents the conflict to you.
+- Conflict markers: `<<<<<<< HEAD` begins the current branch's version; `=======` separates the two versions; `>>>>>>> branch-name` ends the incoming branch's version.
+- Configure `merge.conflictstyle diff3` to also see the common ancestor version in conflicts — this provides valuable context.
+- Resolution: edit the file to contain exactly the correct final content (no markers), then `git add` the file, and `git commit` to complete the merge.
+- `git mergetool` opens a visual merge interface; VS Code has built-in conflict resolution.
+- `git merge --abort` cancels a merge in progress and returns you to the pre-merge state.
+- Prevention: keep branches short-lived, sync often with the base branch, communicate with teammates about major refactoring, and use `.gitattributes` to handle line endings.
+
+The next lesson covers rebase and cherry-pick — two powerful operations for rewriting and reorganizing history.

@@ -1,0 +1,591 @@
+---
+title: "Remote Repositories — clone, fetch, pull, push"
+description: "Connect your local repository to the world: understand remotes, clone repositories, fetch and pull updates, push your work, set up SSH authentication, and understand tracking branches."
+duration: 24
+order: 5
+---
+
+## What Is a Remote?
+
+In lesson 1 we established that Git is distributed: every developer has a full copy of the repository. But in practice, teams need a shared rendezvous point — a copy that everyone agrees is authoritative. This shared copy is a **remote repository**.
+
+A remote is just a Git repository hosted somewhere else — on a server (GitHub, GitLab, Bitbucket, a company's own server) or even another path on your local machine. From your local repository's perspective, a remote is an alias (a name) pointing to a URL.
+
+The convention is to name the primary remote `origin`. This is just a convention — you could name it anything — but every tutorial, documentation page, and colleague will assume your main remote is called `origin`. Stick with it.
+
+---
+
+## git remote — Managing Remote Connections
+
+### Viewing Remotes
+
+```bash
+# List all remotes (just names)
+git remote
+
+# List remotes with their URLs
+git remote -v
+```
+
+In a freshly cloned repository:
+
+```
+origin  https://github.com/yourusername/taskr.git (fetch)
+origin  https://github.com/yourusername/taskr.git (push)
+```
+
+Each remote shows two URLs: one for fetch (downloading) and one for push (uploading). They are usually the same URL, but you can configure them differently.
+
+### Adding a Remote
+
+If you initialized a local repo with `git init` and want to connect it to a remote:
+
+```bash
+git remote add origin https://github.com/yourusername/taskr.git
+
+# Or with SSH:
+git remote add origin git@github.com:yourusername/taskr.git
+```
+
+The syntax is: `git remote add <name> <url>`
+
+### Renaming and Removing Remotes
+
+```bash
+# Rename a remote
+git remote rename origin upstream
+
+# Remove a remote connection (does not delete anything on the server)
+git remote remove upstream
+
+# Show detailed information about a remote
+git remote show origin
+```
+
+`git remote show origin` gives you a lot of useful information:
+
+```
+* remote origin
+  Fetch URL: https://github.com/yourusername/taskr.git
+  Push  URL: https://github.com/yourusername/taskr.git
+  HEAD branch: main
+  Remote branches:
+    main                    tracked
+    feature/add-priority    tracked
+  Local branches configured for 'git pull':
+    main merges with remote main
+  Local refs configured for 'git push':
+    main pushes to main (up to date)
+```
+
+### Changing a Remote URL
+
+Useful when you migrate from HTTPS to SSH, or when a repository is renamed or moved:
+
+```bash
+git remote set-url origin git@github.com:yourusername/taskr.git
+```
+
+---
+
+## git clone — Copying an Existing Repository
+
+`git clone` downloads a complete copy of a repository — all commits, all branches, all history — and sets up the remote for you automatically.
+
+```bash
+# Clone via HTTPS
+git clone https://github.com/yourusername/taskr.git
+
+# Clone via SSH
+git clone git@github.com:yourusername/taskr.git
+
+# Clone into a specific directory name
+git clone https://github.com/yourusername/taskr.git my-taskr
+
+# Clone only the last N commits (shallow clone — faster for large repos)
+git clone --depth 1 https://github.com/yourusername/taskr.git
+
+# Clone a specific branch
+git clone --branch feature/add-priority https://github.com/yourusername/taskr.git
+```
+
+After cloning, Git automatically:
+- Creates the remote `origin` pointing to the URL you cloned from
+- Checks out the default branch (usually `main` or `master`)
+- Creates remote-tracking branches for all remote branches (`origin/main`, etc.)
+
+```bash
+cd taskr
+git remote -v
+# origin  https://github.com/yourusername/taskr.git (fetch)
+# origin  https://github.com/yourusername/taskr.git (push)
+
+git branch -a
+# * main
+#   remotes/origin/HEAD -> origin/main
+#   remotes/origin/main
+#   remotes/origin/feature/add-priority
+```
+
+---
+
+## Remote-Tracking Branches: Understanding origin/main
+
+This is one of the most important concepts in Git collaboration, and also one of the most commonly misunderstood.
+
+When you clone a repository or run `git fetch`, Git creates **remote-tracking branches** — local references that represent the state of branches on the remote **at the time of the last fetch**.
+
+```
+Your local repository contains:
+
+Local branches:       main, feature/add-priority
+Remote-tracking:      origin/main, origin/feature/add-priority
+```
+
+`origin/main` is NOT your local `main`. It is a read-only snapshot of what `main` looked like on `origin` the last time you fetched. It lives in `.git/refs/remotes/origin/main`.
+
+You cannot commit directly to `origin/main`. You commit to your local `main`, and then push that to the remote.
+
+Think of remote-tracking branches as bookmarks: they record the position of remote branches at last contact. Running `git fetch` updates these bookmarks to the current state of the remote.
+
+```bash
+# See remote-tracking branches
+git branch -r
+
+# See local AND remote-tracking branches
+git branch -a
+```
+
+---
+
+## git fetch — Downloading Changes Without Merging
+
+`git fetch` downloads all new commits, branches, and tags from the remote and updates your remote-tracking branches. It **does not** modify your working directory or local branches.
+
+```bash
+# Fetch all branches from origin
+git fetch origin
+
+# Fetch all remotes
+git fetch --all
+
+# Fetch a specific branch
+git fetch origin feature/new-feature
+
+# Fetch and prune remote-tracking branches that no longer exist on the remote
+git fetch --prune
+# (or: git fetch -p)
+```
+
+After `git fetch`:
+- `origin/main` is updated to the latest state of the remote's `main`
+- Your local `main` is unchanged
+- New remote branches appear as `origin/feature-name`
+
+To see what changed on the remote since your last fetch:
+
+```bash
+git fetch origin
+git log origin/main..main --oneline    # Commits you have locally but remote doesn't
+git log main..origin/main --oneline    # Commits the remote has that you don't
+git diff main origin/main              # Diff between your local and remote
+```
+
+---
+
+## git pull — Fetch and Merge in One Step
+
+`git pull` is shorthand for `git fetch` followed by `git merge` (or `git rebase`, depending on configuration).
+
+```bash
+# Pull changes from origin/main into current branch
+git pull
+
+# Explicitly specify remote and branch
+git pull origin main
+
+# Pull with rebase instead of merge (produces cleaner history)
+git pull --rebase
+
+# Pull and rebase is often configured globally
+git config --global pull.rebase true
+```
+
+What `git pull` does internally:
+
+```bash
+# These two commands are equivalent to git pull
+git fetch origin
+git merge origin/main
+```
+
+### git pull Strategies
+
+When you run `git pull`, Git needs to integrate the remote commits with your local commits. There are three strategies:
+
+**Merge (default):** Creates a merge commit. Preserves the fact that a pull happened. History shows the divergence and reconciliation.
+
+```bash
+git pull          # Uses merge by default
+git pull --merge  # Explicit
+```
+
+**Rebase:** Replays your local commits on top of the fetched commits. Results in a linear history. Preferred by many teams for cleaner logs.
+
+```bash
+git pull --rebase
+```
+
+**Fast-forward only:** Fails if a merge commit would be needed. Forces you to explicitly rebase if there is divergence.
+
+```bash
+git pull --ff-only
+```
+
+Set your preferred default:
+
+```bash
+# Always rebase when pulling
+git config --global pull.rebase true
+
+# Always use fast-forward only (fail rather than merge)
+git config --global pull.ff only
+```
+
+The rebase approach is popular in teams that value a clean linear history. The merge approach preserves more historical information about when pulls happened. Both are valid.
+
+### The Golden Rule of Pulling
+
+Before starting work each day, pull the latest changes:
+
+```bash
+git switch main
+git pull
+git switch feature/my-feature
+```
+
+And before merging a feature branch:
+
+```bash
+git switch feature/my-feature
+git pull origin main   # or: git fetch && git rebase origin/main
+```
+
+This ensures you are integrating with the latest state of the base branch.
+
+---
+
+## git push — Uploading Your Commits
+
+`git push` uploads your local commits to the remote.
+
+```bash
+# Push the current branch to its upstream
+git push
+
+# Push a specific branch to origin
+git push origin main
+
+# Push a local branch to a remote branch with a different name
+git push origin local-branch:remote-branch
+```
+
+### Setting the Upstream
+
+The first time you push a new local branch, you need to tell Git where to push it:
+
+```bash
+# Push and set the upstream (tracking relationship)
+git push -u origin feature/add-priority
+# or:
+git push --set-upstream origin feature/add-priority
+```
+
+After setting the upstream once, subsequent pushes from that branch just need `git push`.
+
+### What Is an Upstream?
+
+A tracking relationship (upstream) connects a local branch to a remote-tracking branch. Once set:
+- `git push` knows where to push without being told
+- `git pull` knows where to pull from without being told
+- `git status` shows how many commits ahead/behind your local branch is relative to the remote
+
+```bash
+# Check tracking relationship
+git branch -vv
+```
+
+```
+* main             9a1b2c3 [origin/main: ahead 2] feat: add priority feature
+  feature/due-dates  4f2a8b1 [origin/feature/due-dates] feat: add due dates
+```
+
+This shows:
+- `main` is 2 commits ahead of `origin/main` (you have 2 local commits not yet pushed)
+- `feature/due-dates` is up to date with its remote counterpart
+
+### Pushing Tags
+
+Tags (covered in lesson 8) are not pushed automatically with `git push`. You must push them explicitly:
+
+```bash
+# Push a specific tag
+git push origin v1.0.0
+
+# Push all tags
+git push origin --tags
+
+# Push annotated tags only (not lightweight tags)
+git push origin --follow-tags
+```
+
+### Deleting Remote Branches
+
+When a feature branch has been merged and you want to clean up the remote:
+
+```bash
+# Delete a remote branch
+git push origin --delete feature/add-priority
+# or the older syntax:
+git push origin :feature/add-priority
+```
+
+After deleting the remote branch, other developers can clean up their stale remote-tracking branches with:
+
+```bash
+git fetch --prune
+```
+
+### Force Push — Use With Extreme Caution
+
+Sometimes you need to push commits that conflict with the remote's history (e.g., after a rebase). This requires a force push:
+
+```bash
+# Force push (DANGEROUS on shared branches)
+git push --force
+git push -f
+
+# Safer: force push only if no one else has pushed in the meantime
+git push --force-with-lease
+```
+
+**Never force-push to `main`, `master`, or any branch shared by your team**, unless everyone has been warned and coordinated. Force-pushing rewrites the remote's history and requires everyone else to reset their local branches. Use `--force-with-lease` instead of `--force` — it fails if someone else has pushed since your last fetch.
+
+Force pushing is legitimate on your own private feature branches, particularly after rebasing.
+
+---
+
+## Authentication: SSH Keys vs HTTPS
+
+To push to a remote, you need to authenticate. There are two main methods: HTTPS (with a personal access token) and SSH keys.
+
+### HTTPS Authentication
+
+GitHub no longer accepts password authentication for HTTPS. You need a personal access token (PAT):
+
+1. Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. Generate a new token with `repo` scope
+3. Copy the token — you will not see it again
+
+When Git prompts for a password, enter your token instead.
+
+To avoid entering credentials every time:
+
+```bash
+# Cache credentials in memory for 1 hour
+git config --global credential.helper cache
+git config --global credential.helper 'cache --timeout=3600'
+
+# Store credentials permanently on disk (macOS Keychain)
+git config --global credential.helper osxkeychain
+
+# Store credentials permanently on disk (Linux)
+git config --global credential.helper store
+```
+
+### SSH Key Authentication
+
+SSH is generally more convenient for developers: you set it up once and never type passwords again.
+
+**Step 1: Generate an SSH key pair**
+
+```bash
+# Modern curve25519 key (recommended)
+ssh-keygen -t ed25519 -C "you@example.com"
+
+# Or RSA if required
+ssh-keygen -t rsa -b 4096 -C "you@example.com"
+```
+
+Accept the default location (`~/.ssh/id_ed25519`). Set a passphrase when prompted (optional but recommended).
+
+**Step 2: Add the public key to GitHub**
+
+```bash
+# Copy the public key to clipboard
+cat ~/.ssh/id_ed25519.pub
+
+# macOS shortcut
+pbcopy < ~/.ssh/id_ed25519.pub
+```
+
+Go to GitHub → Settings → SSH and GPG keys → New SSH key. Paste the public key.
+
+**Step 3: Add the key to your SSH agent**
+
+```bash
+# Start the SSH agent
+eval "$(ssh-agent -s)"
+
+# Add your key
+ssh-add ~/.ssh/id_ed25519
+```
+
+On macOS, add this to `~/.ssh/config` to auto-load the key:
+
+```
+Host github.com
+  AddKeysToAgent yes
+  UseKeychain yes
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+**Step 4: Test the connection**
+
+```bash
+ssh -T git@github.com
+# Hi yourusername! You've successfully authenticated, but GitHub does
+# not provide shell access.
+```
+
+**Step 5: Update your remote URLs to use SSH**
+
+```bash
+git remote set-url origin git@github.com:yourusername/taskr.git
+```
+
+---
+
+## The Forking Model — Contributing to Open Source
+
+Many open-source projects on GitHub use a forking workflow. You cannot push directly to someone else's repository, so the process is:
+
+1. **Fork** the repository on GitHub (creates your own copy under your account)
+2. **Clone** your fork locally
+3. **Add the original as a remote** (convention: call it `upstream`)
+4. **Create a feature branch**, make changes, commit
+5. **Push** the branch to your fork
+6. **Open a Pull Request** from your fork's branch to the original repo
+
+```bash
+# After forking on GitHub:
+git clone git@github.com:yourusername/original-project.git
+cd original-project
+
+# Add the original as "upstream"
+git remote add upstream git@github.com:originalowner/original-project.git
+
+# Verify remotes
+git remote -v
+# origin    git@github.com:yourusername/original-project.git (fetch)
+# origin    git@github.com:yourusername/original-project.git (push)
+# upstream  git@github.com:originalowner/original-project.git (fetch)
+# upstream  git@github.com:originalowner/original-project.git (push)
+
+# Keep your fork in sync with upstream
+git fetch upstream
+git switch main
+git merge upstream/main     # or: git rebase upstream/main
+git push origin main        # Update your fork on GitHub
+```
+
+---
+
+## Practical Exercises
+
+### Exercise 1: Push Your taskr Repository to GitHub
+
+```bash
+# Create a new repository on GitHub called "taskr"
+# Do NOT initialize it with a README (you already have commits)
+
+# Add the remote
+cd ~/taskr
+git remote add origin git@github.com:yourusername/taskr.git
+
+# Push main branch and set upstream
+git push -u origin main
+
+# Verify
+git remote -v
+git branch -vv
+```
+
+### Exercise 2: Simulate a Collaborative Workflow
+
+```bash
+# Clone your own repo to a second directory (simulating a second developer)
+cd ~
+git clone git@github.com:yourusername/taskr.git taskr-colleague
+
+# In the "colleague" copy, make a change and push
+cd ~/taskr-colleague
+git switch -c feature/colleague-feature
+echo "# colleague addition" >> README.md
+git add README.md
+git commit -m "docs: add colleague note"
+git push -u origin feature/colleague-feature
+
+# Back in your main copy, fetch the new branch
+cd ~/taskr
+git fetch origin
+git branch -a   # You should see origin/feature/colleague-feature
+
+# Check out and review the colleague's branch
+git switch feature/colleague-feature  # Git auto-tracks remote branch
+```
+
+### Exercise 3: Practice fetch vs pull
+
+```bash
+# In taskr-colleague, make a commit on main and push it
+cd ~/taskr-colleague
+git switch main
+echo "remote change" >> taskr.sh
+git add taskr.sh
+git commit -m "feat: remote change from colleague"
+git push
+
+# Back in your main copy, just fetch (don't merge yet)
+cd ~/taskr
+git fetch origin
+git log main..origin/main --oneline   # See what the remote has
+git diff main origin/main             # See what changed
+
+# Now pull to integrate
+git pull
+```
+
+### Challenge: Set Up SSH Authentication
+
+If you have been using HTTPS:
+1. Generate an SSH key pair with ed25519
+2. Add the public key to GitHub
+3. Update your remote URL to use SSH
+4. Verify with `ssh -T git@github.com`
+5. Push a commit to confirm SSH auth works
+
+---
+
+## Summary
+
+- A remote is a named reference to a URL of another Git repository. The conventional primary remote name is `origin`.
+- `git clone` creates a local copy of a repository and automatically sets up the `origin` remote and remote-tracking branches.
+- Remote-tracking branches (like `origin/main`) are read-only local bookmarks of the remote's branch state at the time of the last fetch.
+- `git fetch` downloads changes from the remote and updates remote-tracking branches without touching your local branches or working directory.
+- `git pull` = `git fetch` + `git merge` (or rebase). Use `--rebase` for a cleaner linear history.
+- `git push` uploads your local commits to the remote. Use `-u` on the first push to set the tracking relationship.
+- Never force-push to shared branches. Use `--force-with-lease` instead of `--force` when a force push is genuinely necessary.
+- SSH key authentication is the most convenient and secure method for daily use with GitHub/GitLab.
+
+The next lesson tackles merge conflicts — what they are, why they happen, how to read the conflict markers, and how to resolve them confidently.

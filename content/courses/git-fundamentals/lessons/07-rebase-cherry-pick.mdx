@@ -1,0 +1,510 @@
+---
+title: "Rebase & Cherry-pick — Rewriting History"
+description: "Master git rebase to produce clean linear history, use interactive rebase to squash, reorder, and reword commits, learn git cherry-pick to apply specific commits across branches, and understand when to rebase vs merge."
+duration: 24
+order: 7
+---
+
+## Introduction: The Art of History
+
+Every commit you make is a permanent record — but "permanent" in Git means permanently stored in the object database, not permanently fixed in the branch graph. Git gives you powerful tools to reshape how commits are arranged, combined, and described.
+
+This sounds alarming when you first hear it. "Rewriting history" feels dangerous. But used correctly — specifically, on private local branches before sharing them — rebase and interactive rebase are essential tools for producing a commit history that is clear, readable, and genuinely useful as documentation.
+
+This lesson covers two powerful operations:
+- **Rebase**: replaying a series of commits onto a different base
+- **Cherry-pick**: applying a specific commit from one branch onto another
+
+Both operations create **new commits** — the originals still exist in the object database, but the branch pointer now points to the new versions.
+
+---
+
+## git rebase — Replaying Commits on a New Base
+
+### The Core Concept
+
+Imagine you have this history:
+
+```
+main:    [A] - [B] - [C]
+                      |
+feature:              [D] - [E]
+```
+
+`feature` was created from `B`, and you have made two commits: `D` and `E`. Meanwhile, `main` has advanced to `C`.
+
+A **merge** would create a merge commit `M` that has two parents (`C` and `E`):
+
+```
+After merge:
+
+main:    [A] - [B] - [C] - [M]
+                      \   /
+feature:               [D] - [E]
+```
+
+A **rebase** replays your feature branch commits (`D` and `E`) on top of the new base (`C`), producing new commits `D'` and `E'`:
+
+```
+After rebase:
+
+main:    [A] - [B] - [C]
+                          \
+feature (rebased):         [D'] - [E']
+```
+
+Now the feature branch has a linear history starting from `C`. When you merge this into `main`, it will be a fast-forward — no merge commit needed.
+
+```
+After fast-forward merge:
+
+main:    [A] - [B] - [C] - [D'] - [E']
+```
+
+The result is a clean, linear history with no merge commits.
+
+### Performing a Rebase
+
+```bash
+git switch feature/add-priority
+git rebase main
+```
+
+Git will:
+1. Find the common ancestor of `feature/add-priority` and `main` (the commit where they diverged)
+2. Temporarily set aside the commits on `feature/add-priority` since that ancestor
+3. Fast-forward the branch to `main`'s tip
+4. Replay each set-aside commit one at a time on top of the new base
+
+If no conflicts occur, the rebase completes silently. The feature branch now sits cleanly on top of `main`.
+
+```bash
+# After rebasing:
+git log --oneline --graph --all
+# * 7a8b9c0 (feature/add-priority) feat: add list-by-priority command
+# * 3d4e5f6 feat: add priority levels to tasks
+# * b1c2d3e (HEAD -> main) fix: improve usage message formatting
+# ...
+```
+
+### Handling Rebase Conflicts
+
+Just like merging, rebasing can encounter conflicts if both branches changed the same lines. When a conflict occurs during rebase:
+
+```
+CONFLICT (content): Merge conflict in taskr.sh
+error: could not apply 2a3b4c5... feat: add priority levels to tasks
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+```
+
+The workflow:
+
+```bash
+# 1. Resolve the conflict in the file (same process as merge conflicts)
+code taskr.sh   # Edit to remove conflict markers
+
+# 2. Stage the resolved file
+git add taskr.sh
+
+# 3. Continue the rebase (applies the next commit)
+git rebase --continue
+
+# Repeat steps 1-3 for each conflicting commit
+
+# If you want to skip the current commit entirely:
+git rebase --skip
+
+# If you want to abort the entire rebase and return to the original state:
+git rebase --abort
+```
+
+Note: unlike a merge, where you resolve all conflicts at once (since a merge is a single commit), a rebase may present conflicts commit-by-commit — each commit being replayed can introduce its own conflict.
+
+---
+
+## Interactive Rebase: Rewriting Your Commits
+
+Interactive rebase (`git rebase -i`) is one of Git's most powerful features. It lets you:
+- Reorder commits
+- Edit commit messages (reword)
+- Squash multiple commits into one
+- Split one commit into multiple
+- Drop (delete) commits entirely
+- Execute shell commands between commits (exec)
+
+The typical use case: you have been working on a feature and made a messy series of commits:
+
+```
+git log --oneline feature/add-priority
+# 7a8b9c0 fix typo
+# 3d4e5f6 WIP
+# 2a1b2c3 maybe this approach
+# 9d8e7f6 feat: add list-by-priority command
+# 4c5d6e7 feat: add priority levels to tasks
+```
+
+Before merging to `main`, you want to clean this up. Interactive rebase lets you.
+
+### Starting Interactive Rebase
+
+```bash
+# Rebase the last 5 commits interactively
+git rebase -i HEAD~5
+
+# Or specify the base commit (everything after this commit is editable)
+git rebase -i main
+```
+
+Git opens your editor with a list of commits in chronological order (oldest first — opposite of `git log`):
+
+```
+pick 4c5d6e7 feat: add priority levels to tasks
+pick 9d8e7f6 feat: add list-by-priority command
+pick 2a1b2c3 maybe this approach
+pick 3d4e5f6 WIP
+pick 7a8b9c0 fix typo
+```
+
+Each line starts with an **action** keyword and a commit hash and message. You change the action keywords to control what happens.
+
+### Interactive Rebase Action Keywords
+
+**`pick`** (or `p`) — Use this commit as-is (default). No changes.
+
+**`reword`** (or `r`) — Use this commit, but open the editor to edit the commit message.
+
+**`edit`** (or `e`) — Pause at this commit to allow amending (add files, change content, etc.). Use `git rebase --continue` to proceed.
+
+**`squash`** (or `s`) — Merge this commit into the previous commit. Opens editor to combine the commit messages.
+
+**`fixup`** (or `f`) — Like squash, but discard this commit's message (keep only the previous commit's message).
+
+**`drop`** (or `d`) — Delete this commit entirely. The changes disappear.
+
+**`exec`** (or `x`) — Run a shell command after this commit.
+
+**`break`** — Pause the rebase here (like `edit` but without amending).
+
+**Reorder** — Simply move lines up or down to reorder commits.
+
+### Example: Squashing Commits
+
+Let's clean up the messy feature history:
+
+```
+# Change the file to:
+pick 4c5d6e7 feat: add priority levels to tasks
+squash 9d8e7f6 feat: add list-by-priority command
+squash 2a1b2c3 maybe this approach
+fixup  3d4e5f6 WIP
+fixup  7a8b9c0 fix typo
+```
+
+Save and close the editor. For the `squash` commits, Git opens the editor to let you write a combined message:
+
+```
+# This is a combination of 3 commits.
+# This is the 1st commit message:
+
+feat: add priority levels to tasks
+
+# This is the commit message #2:
+
+feat: add list-by-priority command
+
+# This is the commit message #3:
+
+maybe this approach
+```
+
+Edit this to a clean final message:
+
+```
+feat: add task priority system
+
+- Tasks can be created with HIGH, MED, or LOW priority
+- New list-by-priority command sorts output by priority
+- Priority stored as [PRIORITY] prefix in the tasks file
+```
+
+After saving, the result is a single clean commit representing all that work.
+
+### Example: Rewording a Commit Message
+
+```
+# Change "pick" to "reword" for the commit with a bad message:
+reword 4c5d6e7 feat: add priority levels to tasks
+pick   9d8e7f6 feat: add list-by-priority command
+```
+
+When you save, Git pauses at that commit and opens your editor with the current message. Edit it and save.
+
+### Example: Dropping a Commit
+
+```
+# Delete the "WIP" commit entirely:
+pick   4c5d6e7 feat: add priority levels to tasks
+pick   9d8e7f6 feat: add list-by-priority command
+drop   2a1b2c3 maybe this approach
+drop   3d4e5f6 WIP
+pick   7a8b9c0 fix typo
+```
+
+The changes from those commits disappear from the branch. Be careful: if subsequent commits depend on the dropped commit, you may get conflicts or broken code.
+
+### Example: Splitting a Commit
+
+If a commit does too much and you want to split it:
+
+```
+# Mark the commit to edit:
+edit   4c5d6e7 feat: add priority levels and list-by-priority command
+```
+
+When Git pauses at that commit:
+
+```bash
+# The commit has been applied. You are now in "editing" mode.
+# Reset to unstage the committed changes:
+git reset HEAD~1
+
+# Now selectively stage and commit parts separately:
+git add -p taskr.sh   # Stage only the "priority levels" changes
+git commit -m "feat: add priority levels to tasks"
+
+git add taskr.sh      # Stage the rest
+git commit -m "feat: add list-by-priority command"
+
+# Continue the rebase
+git rebase --continue
+```
+
+---
+
+## The Golden Rule of Rebasing
+
+**Never rebase commits that have been pushed to a shared remote branch.**
+
+This is not a style preference — it is a hard rule with technical consequences.
+
+When you rebase, you create new commit objects (with different hashes) to replace the original ones. If you have already pushed those originals to `origin/main` and someone else has pulled them, their local `main` contains the original commits. When you force-push the rebased commits, their history diverges from yours. The next time they pull, Git reports a conflict that looks deeply confusing and requires manual repair.
+
+Safe contexts for rebase:
+- Local feature branches not yet pushed
+- Feature branches on a remote that only you are working on (acceptable to force-push)
+- Running `git pull --rebase` to rebase your local changes onto fetched remote changes (this is always on commits no one else has)
+
+Unsafe contexts:
+- `main`, `master`, `develop`, or any branch shared with teammates
+- Any branch that others have pulled
+
+---
+
+## git cherry-pick — Applying Specific Commits
+
+`git cherry-pick` applies the changes from one or more specific commits to your current branch, creating new commits with the same changes but different hashes.
+
+Use cases:
+- A bug fix on a feature branch needs to also be applied to `main` before the feature is ready to merge
+- You want one specific commit from a colleague's branch without merging the whole branch
+- You accidentally committed to the wrong branch and need to move that commit
+
+```bash
+git log --oneline feature/add-priority
+# 7a8b9c0 feat: add list-by-priority command
+# 3d4e5f6 feat: add priority levels to tasks
+# 9a1b2c3 chore: add .gitignore  (shared with main)
+
+# Apply just the "list-by-priority" commit to main:
+git switch main
+git cherry-pick 7a8b9c0
+```
+
+Output:
+
+```
+[main f2e3d4c] feat: add list-by-priority command
+ 1 file changed, 7 insertions(+)
+```
+
+A new commit `f2e3d4c` appears on `main` with the same changes as `7a8b9c0` (but a different hash, since the parent is different).
+
+### Cherry-picking Multiple Commits
+
+```bash
+# Cherry-pick a range of commits
+git cherry-pick 3d4e5f6..7a8b9c0   # Exclusive of first, inclusive of last
+
+# Cherry-pick specific non-consecutive commits
+git cherry-pick 3d4e5f6 7a8b9c0
+
+# Cherry-pick without committing (stage only)
+git cherry-pick --no-commit 7a8b9c0
+```
+
+### Cherry-pick Conflicts
+
+Cherry-pick can conflict just like merge and rebase. Resolve conflicts the same way:
+
+```bash
+# Conflict during cherry-pick
+git status   # Shows conflicted files
+
+# Resolve the conflicts
+code taskr.sh
+
+# Stage resolved files
+git add taskr.sh
+
+# Continue the cherry-pick
+git cherry-pick --continue
+
+# Or abort
+git cherry-pick --abort
+```
+
+### Cherry-pick Caveats
+
+Cherry-pick duplicates commits — the same change exists in two places in the history with different hashes. This can complicate future merges: if you later merge the original branch, Git may see the cherry-picked commit as a duplicate change and handle it correctly, or it may create subtle conflicts. It depends on how closely the histories have evolved since the cherry-pick.
+
+Use cherry-pick deliberately:
+- For applying critical fixes across branches (hotfix → main and release branches)
+- For recovering accidentally committed-to-wrong-branch situations
+- Avoid it as a long-term substitute for proper branching strategy
+
+---
+
+## Rebase vs Merge: When to Use Which
+
+This is a genuine design choice and teams have strong opinions. Here is a principled framework:
+
+### Use Merge When:
+
+- The branch history itself is meaningful (e.g., "team A worked on this feature over 3 weeks")
+- Multiple developers contributed to the branch and you want to preserve authorship context
+- You are merging a long-lived release branch or develop branch
+- You prefer the principle of "never rewrite shared history" as an absolute rule
+
+### Use Rebase When:
+
+- You want a clean, linear history on `main` that is easy to `git bisect` and `git log`
+- You are updating your local feature branch with the latest `main` (before merging or PR review)
+- You want to clean up a messy sequence of "WIP" and "fix typo" commits before sharing
+- Your team has agreed on a rebase-based workflow
+
+### Use Interactive Rebase When:
+
+- You have made a series of exploratory commits and want to present them as a clean sequence
+- You want to squash fixup commits into their parent commits before merging
+- You need to reorder commits to tell a more logical story
+- You want to split an overly large commit into focused pieces
+
+### A Practical Policy
+
+Many teams adopt this policy:
+- **Rebase** feature branches onto `main` before opening a Pull Request (to keep the branch current and produce a clean base for review)
+- **Squash** the entire feature branch to a single commit (or a small handful) when merging to `main` (GitHub/GitLab have "squash merge" options in their PR UIs)
+- **Merge** release branches and hotfixes with `--no-ff` to preserve their existence in history
+
+---
+
+## Practical Exercises
+
+### Exercise 1: Rebase a Feature Branch
+
+```bash
+cd ~/taskr
+
+# Create a feature branch from an older state of main
+git switch -c feature/rebase-practice HEAD~2
+
+# Make 2 commits
+echo "# rebase test 1" >> rebase-test.txt
+git add rebase-test.txt && git commit -m "test: rebase practice commit 1"
+echo "# rebase test 2" >> rebase-test.txt
+git add rebase-test.txt && git commit -m "test: rebase practice commit 2"
+
+# View the graph before rebase
+git log --oneline --graph --all
+
+# Rebase onto main
+git rebase main
+
+# View the graph after rebase
+git log --oneline --graph --all
+
+# Now merge to main (should be fast-forward)
+git switch main
+git merge feature/rebase-practice
+git branch -d feature/rebase-practice
+```
+
+### Exercise 2: Interactive Rebase — Squash and Reword
+
+```bash
+# Create a branch with 5 messy commits
+git switch -c feature/messy-commits
+
+for i in 1 2 3 4 5; do
+    echo "change $i" >> messy.txt
+    git add messy.txt
+    git commit -m "WIP commit $i"
+done
+
+# Use interactive rebase to squash all 5 into 1 clean commit
+git rebase -i HEAD~5
+
+# In the editor:
+# - Change the first "pick" to "pick"
+# - Change all others to "fixup"
+# - Save, and write a clean commit message when prompted
+
+# Verify
+git log --oneline
+```
+
+### Exercise 3: Cherry-pick a Hotfix
+
+```bash
+# Simulate a bug fix on a feature branch that is needed immediately on main
+git switch feature/add-priority
+
+# Make a "bug fix" commit on the feature branch
+echo "# bugfix" >> taskr.sh
+git add taskr.sh
+git commit -m "fix: prevent crash when tasks file is missing"
+
+# Get the hash of that commit
+HASH=$(git log --format="%H" -1)
+
+# Cherry-pick it to main
+git switch main
+git cherry-pick $HASH
+
+# Verify both branches have the fix
+git log --oneline main | head -3
+git log --oneline feature/add-priority | head -3
+```
+
+### Challenge: Full Cleanup Workflow
+
+1. Create a feature branch with at least 8 commits: some are "WIP", some fix typos in earlier commits, some are real features
+2. Use `git rebase -i` to squash the WIP and typo commits into their related feature commits
+3. Reword the remaining commit messages to follow good conventions
+4. Rebase the cleaned branch onto main
+5. Merge to main with `--no-ff`
+6. Examine the final git log and confirm it reads as clear, professional history
+
+---
+
+## Summary
+
+- `git rebase <base>` replays your branch's commits on top of the specified base, producing a linear history without merge commits. The original commits are replaced with new ones (different hashes, same changes).
+- Interactive rebase (`git rebase -i`) lets you squash, fixup, reword, reorder, drop, or edit commits. It is the tool for cleaning up messy work before sharing.
+- When rebasing encounters conflicts, resolve them file by file, stage the resolved files, and run `git rebase --continue`. Use `git rebase --abort` to cancel.
+- **The golden rule**: never rebase commits that have been pushed to a shared remote branch. Rebasing rewrites history; pushing rewritten history onto a shared branch causes painful conflicts for everyone.
+- `git cherry-pick <hash>` applies the changes from a specific commit to your current branch, creating a new commit with the same diff but a different hash and parent.
+- Use rebase to update feature branches and produce clean history; use merge to integrate long-lived branches; use cherry-pick for targeted application of specific commits.
+
+The next lesson covers tagging and releases — how to mark specific commits as releases, use semantic versioning, and build a release workflow around Git tags.

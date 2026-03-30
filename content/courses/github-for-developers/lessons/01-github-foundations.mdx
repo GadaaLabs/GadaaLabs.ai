@@ -1,0 +1,449 @@
+---
+title: "GitHub Foundations — Repos, Profiles & Navigation"
+description: "Understand what GitHub adds to Git, set up your developer identity, create your first repository, configure SSH keys and Personal Access Tokens, and install the GitHub CLI."
+duration: 20
+order: 1
+---
+
+## What GitHub Is — and What It Is Not
+
+Git is a distributed version control system that runs entirely on your local machine. GitHub is a cloud platform that hosts Git repositories and adds a rich set of collaboration, automation, and social features on top of them. The two are separate things. Git existed for years before GitHub was founded in 2008, and you can use Git without GitHub. But in practice, almost every professional engineering team uses GitHub (or a close alternative like GitLab or Bitbucket) because the features it adds are essential for team-scale development.
+
+The core things GitHub adds to Git:
+
+- **A canonical remote** — a hosted copy of your repository that everyone on the team can access, push to, and pull from.
+- **Pull Requests** — a structured mechanism for proposing, discussing, and merging changes into a branch.
+- **Issues** — a lightweight issue tracker built directly into the repository.
+- **GitHub Actions** — an event-driven automation platform that runs workflows in response to repository events.
+- **Code review tools** — inline comments, suggestions, and approval workflows layered on top of diffs.
+- **Project boards and Discussions** — project management and community communication primitives.
+- **Security features** — secret scanning, Dependabot alerts, code scanning, and advanced security tooling.
+
+When developers say "push to GitHub" or "open a PR," they are talking about this platform. Understanding its concepts deeply will make you significantly more effective as a collaborator and contributor.
+
+---
+
+## Creating Your GitHub Account
+
+Go to [github.com](https://github.com) and sign up for a free account. Choose your username carefully — it becomes part of your public identity (`github.com/yourusername`) and is difficult to change later without breaking links.
+
+When choosing a username:
+
+- Use something professional and consistent with your other developer presence.
+- Lowercase with hyphens is conventional: `alex-chen`, not `AlexChen123`.
+- Your username appears on every commit you author via the web UI, in every PR you open, and in every comment you leave.
+
+After signing up, verify your email address — many GitHub features (including pushing to repositories) require a verified email.
+
+---
+
+## Setting Up Your GitHub Profile
+
+Your GitHub profile is your developer resume. It is the first thing people see when they click your name on a PR, an issue, or a commit. Taking ten minutes to set it up properly signals professionalism.
+
+Navigate to **Settings** (click your avatar, top right) and fill in:
+
+- **Name** — your real name or the name you want to be known by professionally.
+- **Bio** — one or two sentences describing your focus. Keep it current.
+- **Company** — your employer or university.
+- **Location** — city/country. Helps people understand your time zone.
+- **Website** — link to your portfolio, blog, or LinkedIn.
+- **Profile picture** — a real photo or a recognizable avatar. The default identicon is fine but a photo builds more trust in open source contexts.
+
+---
+
+## The Profile README
+
+GitHub has a special feature: if you create a repository with the exact same name as your username, the `README.md` in that repository is rendered directly on your profile page. This is one of the most powerful personal branding tools available to developers.
+
+**How to create it:**
+
+1. Click the **+** icon in the top-right navigation bar and select **New repository**.
+2. Set the repository name to exactly your GitHub username (e.g., if your username is `alex-chen`, name the repo `alex-chen`).
+3. GitHub will show a special banner: "This is a special repository. Its README.md will appear on your profile."
+4. Check **Add a README file** and click **Create repository**.
+5. Edit the README and commit.
+
+A good profile README typically includes:
+
+- A brief introduction about yourself and your focus area.
+- The technologies you work with most.
+- Links to your notable projects.
+- Current status (what you're building, learning, or looking for).
+
+Here is a minimal but clean example:
+
+```markdown
+# Hi, I'm Alex Chen
+
+I build developer tools and distributed systems. Currently working on
+observability infrastructure at Acme Corp.
+
+**Languages:** Go · Python · TypeScript
+**Tools:** Kubernetes · PostgreSQL · Redis · GitHub Actions
+
+## Recent Projects
+
+- [**taskr**](https://github.com/alex-chen/taskr) — CLI task manager with sync
+- [**grpc-bench**](https://github.com/alex-chen/grpc-bench) — gRPC performance benchmarks
+
+Open to interesting problems. Reach me at alex@example.com.
+```
+
+GitHub also supports dynamic content in profile READMEs via third-party services that render GitHub stats cards, contribution graphs, and recent blog post feeds as SVG images — search "GitHub profile README stats" to explore these.
+
+---
+
+## Navigating the GitHub UI
+
+Understanding the GitHub interface saves significant time. Here are the key areas:
+
+### The Repository Page
+
+When you visit any repository (e.g., `github.com/vercel/next.js`), the default view shows:
+
+- **Code tab** — the file tree at the currently selected branch or tag. The README renders below it.
+- **Branch selector** — top-left of the file tree. Lets you switch between branches and tags.
+- **Issues tab** — the issue tracker. Numbered tickets reporting bugs, feature requests, questions.
+- **Pull Requests tab** — open, closed, and merged PRs.
+- **Actions tab** — workflow runs and their status.
+- **Projects tab** — linked project boards.
+- **Security tab** — Dependabot alerts, secret scanning results, security policy.
+- **Insights tab** — contributor graphs, traffic, dependency graphs.
+- **Settings tab** — only visible to collaborators with appropriate permissions.
+
+### The File Viewer
+
+Click any file in the repository to view it. The file viewer shows the raw content with syntax highlighting. Key shortcuts:
+
+- Press `.` (period) on any repository page to open GitHub's built-in VS Code-based web editor.
+- Press `t` to open the file finder fuzzy search.
+- Press `b` to open Git blame view for the current file.
+- Press `y` to convert the URL to a permanent link at the current commit SHA — useful for sharing references that won't break when the file changes.
+
+### Stars, Forks, and Watching
+
+- **Star** — bookmarks a repository and signals appreciation to its maintainers. Your starred repos are visible to others and help curate GitHub's discovery features.
+- **Fork** — creates your own copy of the repository under your account. Used when you want to contribute to a project you don't have push access to. Covered in depth in lesson 2.
+- **Watch** — subscribes you to notifications for repository activity. You can watch for all activity, only releases, or custom event types. Be selective — watching busy repositories floods your inbox.
+
+---
+
+## Creating Your First Repository
+
+Click the **+** icon in the top navigation and select **New repository**. Walk through each option:
+
+### Repository Name
+
+Choose a short, descriptive, lowercase name with hyphens: `my-first-project`, not `MyFirstProject` or `my_first_project`. The name becomes part of the repository's URL.
+
+### Description
+
+One sentence describing what the repository contains. This appears in search results and on your profile. Write it.
+
+### Public vs Private
+
+- **Public** — anyone on the internet can view and clone the repository. Free for all accounts.
+- **Private** — only you and collaborators you invite can access it. Free for all accounts.
+
+Default to public for personal projects, portfolio pieces, and open source work. Use private for client work, proprietary code, or anything containing sensitive information.
+
+### Initialize with README
+
+If you check this, GitHub creates an initial commit with a `README.md`. This is usually the right choice when creating a new project from scratch. If you are pushing an existing local repository, leave this unchecked to avoid the diverged history problem.
+
+### .gitignore Template
+
+GitHub offers a library of `.gitignore` templates for common languages and frameworks. Select the one matching your project (Node, Python, Go, etc.) and GitHub will create a `.gitignore` that excludes the most common generated files for that stack.
+
+### License
+
+Choose a license for open source projects. Common choices:
+
+| License | Use Case |
+|---------|----------|
+| MIT | Maximum permissiveness — anyone can use, modify, and redistribute with minimal restrictions |
+| Apache 2.0 | Like MIT but includes explicit patent grants — preferred for larger projects |
+| GPL v3 | Copyleft — derivative works must also be GPL — ensures the code stays open |
+| No license | All rights reserved by default — no one can legally use, copy, or distribute your code |
+
+For personal and open source projects, MIT is the standard choice unless you have specific reasons for another license.
+
+### After Creation
+
+Once the repository is created you land on the Code tab. If you initialized with a README, you will see the file tree with `README.md` present. GitHub provides the clone URL in the **Code** button dropdown — you can copy the HTTPS or SSH URL to clone locally.
+
+---
+
+## Repository Settings Overview
+
+Click the **Settings** tab in any repository you own or have admin access to. Key sections:
+
+### General
+
+- Rename or delete the repository.
+- Change visibility (public to private or vice versa).
+- Enable or disable features: Issues, Projects, Wiki, Discussions.
+- **Danger Zone** — transfer ownership, archive (make read-only), or delete the repository.
+
+### Branches
+
+Configure the default branch (historically `master`, now conventionally `main`). Configure branch protection rules — covered in lesson 7.
+
+### Collaborators and Teams
+
+Invite other GitHub users as collaborators. Set their permission level: Read, Triage, Write, Maintain, or Admin. For organization repositories, assign teams.
+
+### Webhooks
+
+Configure HTTP callbacks triggered by repository events. Used to integrate GitHub with external services (CI systems, chat bots, deployment hooks).
+
+### Pages
+
+Enable GitHub Pages to publish the repository as a static website. Covered in lesson 6.
+
+---
+
+## SSH Key Setup for GitHub Authentication
+
+HTTPS authentication for Git requires a Personal Access Token (PAT) as the password — you cannot use your GitHub account password. SSH authentication is often cleaner for daily use because you authenticate once per session (or permanently with a keychain integration) rather than entering a token on every push.
+
+### Generating an SSH Key
+
+```bash
+# Generate a new ED25519 key (preferred over RSA for new keys)
+ssh-keygen -t ed25519 -C "your_email@example.com"
+
+# When prompted for a file location, press Enter to accept the default:
+# ~/.ssh/id_ed25519 (private key)
+# ~/.ssh/id_ed25519.pub (public key)
+
+# Set a passphrase — this protects the private key on disk
+# You can leave it empty but a passphrase is strongly recommended
+```
+
+### Adding the Key to Your SSH Agent
+
+```bash
+# Start the SSH agent
+eval "$(ssh-agent -s)"
+
+# Add your key to the agent (so you don't have to re-enter the passphrase every time)
+ssh-add ~/.ssh/id_ed25519
+```
+
+On macOS, add this to `~/.ssh/config` to automatically load the key and store the passphrase in the Keychain:
+
+```
+Host github.com
+  AddKeysToAgent yes
+  UseKeychain yes
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+### Adding the Public Key to GitHub
+
+```bash
+# Copy the public key to your clipboard (macOS)
+pbcopy < ~/.ssh/id_ed25519.pub
+
+# On Linux
+xclip -selection clipboard < ~/.ssh/id_ed25519.pub
+# or just print it and copy manually
+cat ~/.ssh/id_ed25519.pub
+```
+
+Navigate to GitHub **Settings** → **SSH and GPG keys** → **New SSH key**. Paste the public key, give it a descriptive title (e.g., "MacBook Pro 2024"), and click **Add SSH key**.
+
+### Verifying the Connection
+
+```bash
+ssh -T git@github.com
+# Expected output:
+# Hi yourusername! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+Now you can use SSH URLs when cloning:
+
+```bash
+git clone git@github.com:username/repository.git
+```
+
+---
+
+## Personal Access Tokens
+
+If you use HTTPS URLs or work in environments where SSH is blocked, you need a Personal Access Token (PAT) instead of a password.
+
+### Classic Tokens
+
+Classic tokens are long-lived tokens with broad scope permissions. Go to **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)** → **Generate new token**.
+
+Select the scopes you need:
+- `repo` — full control of private repositories (needed to push/pull private repos via HTTPS)
+- `read:org` — read organization membership
+- `workflow` — update GitHub Actions workflows
+- `gist` — create and manage Gists
+
+Copy the token immediately after generation — GitHub only shows it once. Store it in a password manager or use it directly in a credential helper.
+
+### Fine-Grained Tokens (Recommended)
+
+Fine-grained tokens provide much more precise access control. You specify:
+- Which repositories the token can access (all, or a specific list)
+- Exactly which permissions are granted (read vs write for each resource type)
+- An expiration date
+
+Go to **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**.
+
+Fine-grained tokens are the recommended approach for any automation or integration because they follow the principle of least privilege.
+
+### Using a Token with Git
+
+```bash
+# When prompted for username: enter your GitHub username
+# When prompted for password: enter your PAT (not your account password)
+
+# To store credentials so you don't have to re-enter:
+git config --global credential.helper store
+# This stores credentials in plaintext at ~/.git-credentials
+
+# On macOS, use the system keychain instead:
+git config --global credential.helper osxkeychain
+
+# On Linux with GNOME keyring:
+git config --global credential.helper /usr/lib/git-core/git-credential-libsecret
+```
+
+---
+
+## GitHub CLI (gh)
+
+The GitHub CLI (`gh`) brings GitHub's functionality to the terminal. Instead of switching between terminal and browser, you can create issues, open pull requests, merge code, and trigger workflows entirely from the command line.
+
+### Installation
+
+```bash
+# macOS (Homebrew)
+brew install gh
+
+# Windows (winget)
+winget install --id GitHub.cli
+
+# Ubuntu/Debian
+(type -p wget >/dev/null || (sudo apt update && sudo apt-get install wget -y)) \
+&& sudo mkdir -p -m 755 /etc/apt/keyrings \
+&& wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg | \
+   sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+&& sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | \
+   sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+&& sudo apt update && sudo apt install gh -y
+```
+
+### Authenticating
+
+```bash
+gh auth login
+
+# The CLI will walk you through:
+# 1. Choose GitHub.com or GitHub Enterprise Server
+# 2. Choose HTTPS or SSH
+# 3. Authenticate via browser (recommended) or paste a token
+```
+
+After authentication, `gh` uses your credentials for all commands. It configures Git credential helper automatically so HTTPS operations also work without prompting.
+
+### Essential gh Commands
+
+```bash
+# View your authentication status
+gh auth status
+
+# Clone a repository (shorthand — no need for full URL)
+gh repo clone username/repository
+
+# Create a new repository interactively
+gh repo create
+
+# View a repository in the browser
+gh repo view --web
+
+# List your repositories
+gh repo list
+
+# Create an issue
+gh issue create --title "Bug: login fails" --body "Steps to reproduce..."
+
+# List open issues
+gh issue list
+
+# Create a pull request
+gh pr create --title "feat: add login" --body "Closes #42"
+
+# List open PRs
+gh pr list
+
+# View the current branch's PR
+gh pr view
+
+# Check out a PR locally by number
+gh pr checkout 42
+
+# Merge a PR
+gh pr merge 42 --squash
+
+# Run a workflow manually
+gh workflow run deploy.yml
+```
+
+The `gh` CLI becomes indispensable as you work more with GitHub. Throughout this course, each lesson includes the `gh` shortcuts for the operations covered.
+
+---
+
+## GitHub Docs and Learning Resources
+
+GitHub maintains excellent official documentation at [docs.github.com](https://docs.github.com). When in doubt about a feature, the docs are the authoritative reference.
+
+Key sections worth bookmarking:
+
+- **Get started** — account setup, authentication, and first steps
+- **Repositories** — creating, managing, and configuring repositories
+- **Pull requests** — the complete reference for the PR workflow
+- **Actions** — comprehensive reference for GitHub Actions (you will spend a lot of time here in lessons 9 and 10)
+- **Security** — Dependabot, secret scanning, code scanning
+
+GitHub also offers **GitHub Skills** at [skills.github.com](https://skills.github.com) — interactive, repository-based exercises that teach GitHub features by having you actually use them.
+
+---
+
+## Practical Exercises
+
+### Exercise 1 — Profile Setup
+
+1. Create or update your GitHub profile: add a real photo, bio, and website.
+2. Create your profile README repository (username/username) and write a brief introduction.
+3. Star at least three repositories in areas you are interested in.
+
+### Exercise 2 — SSH Key Setup
+
+1. Generate a new ED25519 SSH key pair if you don't have one.
+2. Add the public key to your GitHub account.
+3. Test the connection with `ssh -T git@github.com`.
+4. Clone a repository you created using the SSH URL.
+
+### Exercise 3 — GitHub CLI
+
+1. Install the `gh` CLI and authenticate.
+2. Run `gh auth status` to verify your setup.
+3. Use `gh repo create` to create a new public repository called `gh-practice`.
+4. Clone it with `gh repo clone`.
+5. Run `gh repo view --web` to open it in the browser.
+
+### Exercise 4 — Repository Exploration
+
+1. Visit the repository for a tool you use (e.g., `github.com/vercel/next.js` or `github.com/cli/cli`).
+2. Navigate through the Issues and Pull Requests tabs.
+3. Open a recently merged PR and read through the description, comments, and diff.
+4. Press `.` to open the repository in the web editor and explore a few files.
+5. Press `b` on a file to view the blame view — identify which commit last modified each line.
