@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Zap, Code2, Share2 } from "lucide-react";
+import { Zap, Code2, Share2, Mail } from "lucide-react";
 
 const links = {
   Learn: [
@@ -11,10 +11,12 @@ const links = {
   Tools: [
     { label: "Playground", href: "/playground" },
     { label: "Demos", href: "/demos" },
+    { label: "DataLab", href: "/datalab" },
   ],
   Company: [
     { label: "About", href: "/about" },
     { label: "Donate", href: "/donate" },
+    { label: "Contact", href: "/contact" },
     { label: "Dashboard", href: "/dashboard" },
   ],
 };
@@ -104,8 +106,48 @@ export function Footer() {
           ))}
         </div>
 
+        {/* Contact strip */}
         <div
-          className="mt-10 pt-6 flex flex-col gap-2 md:flex-row md:items-center md:justify-between text-xs"
+          className="mt-10 rounded-2xl px-6 py-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
+          style={{
+            background: "rgba(124,58,237,0.06)",
+            border: "1px solid rgba(124,58,237,0.18)",
+          }}
+        >
+          <div className="flex items-center gap-3">
+            <div
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+              style={{ background: "rgba(124,58,237,0.15)" }}
+            >
+              <Mail className="h-4 w-4" style={{ color: "var(--color-purple-400)" }} />
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider mb-0.5" style={{ color: "var(--color-text-muted)" }}>
+                Contact Us
+              </p>
+              <a
+                href="mailto:support@gadaalabs.com"
+                className="text-sm font-semibold hover:underline"
+                style={{ color: "var(--color-purple-400)" }}
+              >
+                support@gadaalabs.com
+              </a>
+            </div>
+          </div>
+          <Link
+            href="/contact"
+            className="text-sm font-semibold px-4 py-2 rounded-xl transition-all hover:opacity-90 shrink-0"
+            style={{
+              background: "linear-gradient(135deg, var(--color-purple-700), var(--color-purple-600))",
+              color: "#fff",
+            }}
+          >
+            Send a message →
+          </Link>
+        </div>
+
+        <div
+          className="mt-6 pt-6 flex flex-col gap-2 md:flex-row md:items-center md:justify-between text-xs"
           style={{
             borderTop: "1px solid var(--color-border-subtle)",
             color: "var(--color-text-muted)",
