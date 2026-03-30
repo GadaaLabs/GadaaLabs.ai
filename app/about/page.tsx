@@ -4,6 +4,7 @@ import {
   Zap, Brain, Code2, Heart, Target, Globe, Cpu,
   ArrowRight, BookOpen, Rocket, Users, Star,
 } from "lucide-react";
+import { getAllCourses } from "@/lib/courses";
 
 export const metadata: Metadata = {
   title: "About",
@@ -41,14 +42,14 @@ const milestones = [
   { year: "2026", event: "GadaaLabs.com goes live — authentication, progress tracking, notebook playground, and guides." },
 ];
 
-const stats = [
-  { value: "200+", label: "Free lessons" },
-  { value: "6", label: "Expert courses" },
-  { value: "3", label: "Deep-dive guides" },
-  { value: "12", label: "Interactive demos" },
-];
-
 export default function AboutPage() {
+  const courseCount = getAllCourses().length;
+  const stats = [
+    { value: "200+", label: "Free lessons" },
+    { value: `${courseCount}+`, label: "Expert courses" },
+    { value: "3", label: "Deep-dive guides" },
+    { value: "12", label: "Interactive demos" },
+  ];
   return (
     <div className="mx-auto max-w-5xl px-6 py-16">
 

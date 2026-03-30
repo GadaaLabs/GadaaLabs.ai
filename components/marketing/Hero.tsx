@@ -7,12 +7,6 @@ import { ParticleCanvas } from "./ParticleCanvas";
 
 const ROLES = ["AI Engineers", "ML Engineers", "Data Scientists", "RAG Builders", "AI Automation"];
 
-const STATS = [
-  { end: 200, suffix: "+", label: "Free Lessons" },
-  { end: 6, suffix: "", label: "Expert Courses" },
-  { end: 12, suffix: "", label: "Live Demos" },
-  { end: 100, suffix: "%", label: "Free Forever" },
-];
 
 const CODE = `from gadaalabs import RAGPipeline
 from groq import Groq
@@ -43,7 +37,13 @@ const FEATURES = [
   { icon: GitBranch, label: "Notebook Playground", desc: "Interactive multi-cell editor" },
 ];
 
-export function Hero() {
+export function Hero({ courseCount = 9 }: { courseCount?: number }) {
+  const STATS = [
+    { end: 200, suffix: "+", label: "Free Lessons" },
+    { end: courseCount, suffix: "+", label: "Expert Courses" },
+    { end: 12, suffix: "", label: "Live Demos" },
+    { end: 100, suffix: "%", label: "Free Forever" },
+  ];
   const [roleIdx, setRoleIdx] = useState(0);
   const [displayRole, setDisplayRole] = useState("");
   const [typing, setTyping] = useState(true);
