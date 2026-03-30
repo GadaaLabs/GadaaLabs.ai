@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
+import { auth } from "@/auth";
+import { hasDataLabAccess } from "@/lib/datalab-access";
 import { DataLabShell } from "@/components/datalab/DataLabShell";
-import { FlaskConical } from "lucide-react";
+import { FlaskConical, Lock, Mail, GitBranch } from "lucide-react";
 
 export const metadata: Metadata = {
   title: "DataLab",
@@ -8,7 +11,186 @@ export const metadata: Metadata = {
     "AI-powered data analysis agent. Upload a CSV or Excel file and get instant statistics, charts, and AI-driven EDA insights.",
 };
 
-export default function DataLabPage() {
+export default async function DataLabPage() {
+  const session = await auth();
+
+  // 1. Not signed in — redirect to sign-in
+  if (!session?.user?.id) {
+    redirect("/api/auth/signin?callbackUrl=/datalab");
+  }
+
+  const userId = session.user.id;
+  const userName = session.user.name ?? session.user.email ?? userId;
+
+  // 2. Signed in but no DataLab access — show access-required page
+  if (!hasDataLabAccess(userId)) {
+    const mailSubject = encodeURIComponent(`DataLab Access Request - ${userName}`);
+    const mailBody = encodeURIComponent(
+      `Hi GadaaLabs team,\n\nI'd like to request access to DataLab.\n\nGitHub Username: ${userName}\nGitHub User ID: ${userId}\n\nThanks!`
+    );
+    const mailtoHref = `mailto:support@gadaalabs.com?subject=${mailSubject}&body=${mailBody}`;
+
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center px-6 py-16"
+        style={{ background: "var(--color-bg-base)" }}
+      >
+        <div className="w-full max-w-lg">
+          {/* Lock icon */}
+          <div className="flex justify-center mb-6">
+            <div
+              className="flex h-16 w-16 items-center justify-center rounded-2xl"
+              style={{
+                background: "linear-gradient(135deg, var(--color-purple-800), var(--color-purple-600))",
+                boxShadow: "var(--glow-purple)",
+              }}
+            >
+              <Lock className="h-8 w-8 text-white" />
+            </div>
+          </div>
+
+          {/* Title */}
+          <h1
+            className="text-3xl font-bold text-center mb-2"
+            style={{ color: "var(--color-text-primary)" }}
+          >
+            DataLab —{" "}
+            <span className="gradient-text">Premium Access Required</span>
+          </h1>
+          <p
+            className="text-center mb-8"
+            style={{ color: "var(--color-text-secondary)" }}
+          >
+            DataLab is our premier AI data science platform. Access is granted by the GadaaLabs team.
+          </p>
+
+          {/* Signed-in-as card */}
+          <div
+            className="rounded-2xl p-4 mb-6 flex items-center gap-3"
+            style={{
+              background: "var(--color-bg-surface)",
+              border: "1px solid var(--color-border-default)",
+            }}
+          >
+            {session.user.image && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={session.user.image}
+                alt={userName}
+                className="h-10 w-10 rounded-full"
+                style={{ border: "2px solid var(--color-purple-600)" }}
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate" style={{ color: "var(--color-text-primary)" }}>
+                Signed in as <span style={{ color: "var(--color-purple-400)" }}>{userName}</span>
+              </p>
+              {session.user.email && (
+                <p className="text-xs truncate" style={{ color: "var(--color-text-muted)" }}>
+                  {session.user.email}
+                </p>
+              )}
+            </div>
+            <div
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg"
+              style={{
+                background: "var(--color-bg-elevated)",
+                color: "var(--color-text-muted)",
+              }}
+            >
+              <GitBranch className="h-3 w-3" />
+              <span>GitHub</span>
+            </div>
+          </div>
+
+          {/* Request access card */}
+          <div
+            className="rounded-2xl p-6"
+            style={{
+              background: "var(--color-bg-surface)",
+              border: "1px solid var(--color-border-default)",
+            }}
+          >
+            <h2
+              className="text-lg font-semibold mb-1"
+              style={{ color: "var(--color-text-primary)" }}
+            >
+              Request Access
+            </h2>
+            <p className="text-sm mb-5" style={{ color: "var(--color-text-secondary)" }}>
+              Send us a quick email and we&apos;ll grant you access within one business day.
+            </p>
+
+            {/* Pre-filled info */}
+            <div className="space-y-3 mb-5">
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: "var(--color-text-muted)" }}
+                >
+                  GitHub Username (pre-filled)
+                </label>
+                <div
+                  className="rounded-xl px-3 py-2 text-sm font-mono"
+                  style={{
+                    background: "var(--color-bg-elevated)",
+                    border: "1px solid var(--color-border-default)",
+                    color: "var(--color-text-secondary)",
+                  }}
+                >
+                  {userName}
+                </div>
+              </div>
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1"
+                  style={{ color: "var(--color-text-muted)" }}
+                >
+                  GitHub User ID
+                </label>
+                <div
+                  className="rounded-xl px-3 py-2 text-sm font-mono"
+                  style={{
+                    background: "var(--color-bg-elevated)",
+                    border: "1px solid var(--color-border-default)",
+                    color: "var(--color-text-secondary)",
+                  }}
+                >
+                  {userId}
+                </div>
+              </div>
+            </div>
+
+            <a
+              href={mailtoHref}
+              className="flex items-center justify-center gap-2 w-full rounded-xl px-4 py-3 text-sm font-semibold transition-opacity hover:opacity-90"
+              style={{
+                background: "linear-gradient(135deg, var(--color-purple-700), var(--color-purple-600))",
+                color: "#fff",
+              }}
+            >
+              <Mail className="h-4 w-4" />
+              Request Access via Email
+            </a>
+
+            <p className="text-xs text-center mt-4" style={{ color: "var(--color-text-muted)" }}>
+              Or reach out on{" "}
+              <a
+                href="https://github.com/gadaalabs"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "var(--color-purple-400)" }}
+              >
+                GitHub
+              </a>
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 3. Has access — render the full DataLab interface
   return (
     <div className="mx-auto max-w-7xl px-6 py-10">
       {/* Header */}

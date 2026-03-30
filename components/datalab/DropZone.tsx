@@ -15,8 +15,8 @@ export function DropZone({ onData, onError, loading }: Props) {
 
   const process = async (file: File) => {
     const sizeKB = Math.round(file.size / 1024);
-    if (file.size > 50 * 1024 * 1024) {
-      onError("File too large — max 50 MB supported.");
+    if (file.size > 500 * 1024 * 1024) {
+      onError("File too large — max 500 MB supported.");
       return;
     }
 
@@ -87,7 +87,7 @@ export function DropZone({ onData, onError, loading }: Props) {
           {loading ? "Processing file…" : "Drop your dataset here"}
         </p>
         <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-          CSV, XLSX, or XLS · max 50 MB
+          CSV, XLSX, or XLS · max 500 MB
         </p>
       </div>
 

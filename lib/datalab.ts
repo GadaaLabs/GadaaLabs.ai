@@ -78,7 +78,7 @@ export function computeStats(rows: Row[], fileName: string, fileSizeKB: number):
     return { fileName, fileSizeKB, rowCount: 0, columnCount: 0, columns: [] };
   }
 
-  const sample = rows.slice(0, 10_000); // cap at 10k rows for perf
+  const sample = rows.slice(0, 100_000); // cap at 100k rows for perf
   const keys = Object.keys(rows[0]);
 
   const columns: ColumnStats[] = keys.map((name) => {
