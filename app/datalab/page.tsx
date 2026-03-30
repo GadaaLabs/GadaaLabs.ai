@@ -3,7 +3,8 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { hasDataLabAccess } from "@/lib/datalab-access";
 import { DataLabShell } from "@/components/datalab/DataLabShell";
-import { FlaskConical, Lock, Mail, GitBranch } from "lucide-react";
+import { RequestAccessButton } from "@/components/datalab/RequestAccessButton";
+import { FlaskConical, Lock, GitBranch } from "lucide-react";
 
 export const metadata: Metadata = {
   title: "DataLab",
@@ -24,12 +25,6 @@ export default async function DataLabPage() {
 
   // 2. Signed in but no DataLab access — show access-required page
   if (!hasDataLabAccess(userId)) {
-    const mailSubject = encodeURIComponent(`DataLab Access Request - ${userName}`);
-    const mailBody = encodeURIComponent(
-      `Hi GadaaLabs team,\n\nI'd like to request access to DataLab.\n\nGitHub Username: ${userName}\nGitHub User ID: ${userId}\n\nThanks!`
-    );
-    const mailtoHref = `mailto:support@gadaalabs.com?subject=${mailSubject}&body=${mailBody}`;
-
     return (
       <div
         className="min-h-screen flex items-center justify-center px-6 py-16"
@@ -118,7 +113,8 @@ export default async function DataLabPage() {
               Request Access
             </h2>
             <p className="text-sm mb-5" style={{ color: "var(--color-text-secondary)" }}>
-              Send us a quick email and we&apos;ll grant you access within one business day.
+              Send us a quick email — your request will include a one-click approval link so the
+              admin can grant access instantly without any copy-pasting.
             </p>
 
             {/* Pre-filled info */}
@@ -128,7 +124,7 @@ export default async function DataLabPage() {
                   className="block text-xs font-medium mb-1"
                   style={{ color: "var(--color-text-muted)" }}
                 >
-                  GitHub Username (pre-filled)
+                  GitHub Username
                 </label>
                 <div
                   className="rounded-xl px-3 py-2 text-sm font-mono"
@@ -161,17 +157,7 @@ export default async function DataLabPage() {
               </div>
             </div>
 
-            <a
-              href={mailtoHref}
-              className="flex items-center justify-center gap-2 w-full rounded-xl px-4 py-3 text-sm font-semibold transition-opacity hover:opacity-90"
-              style={{
-                background: "linear-gradient(135deg, var(--color-purple-700), var(--color-purple-600))",
-                color: "#fff",
-              }}
-            >
-              <Mail className="h-4 w-4" />
-              Request Access via Email
-            </a>
+            <RequestAccessButton />
 
             <p className="text-xs text-center mt-4" style={{ color: "var(--color-text-muted)" }}>
               Or reach out on{" "}

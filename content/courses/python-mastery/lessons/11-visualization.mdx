@@ -1,71 +1,230 @@
 ---
 title: "Data Visualization — Matplotlib, Seaborn & Interactive Charts"
-description: "Produce publication-quality charts in Python: from basic matplotlib to statistical seaborn plots. Every chart in this lesson runs directly in the browser and renders inline."
-duration: 26
+description: "Master data visualization in Python: matplotlib object model, chart types, styling, seaborn statistical plots, multi-panel layouts, animations, and publication-quality output. Every chart runs in the browser."
+duration: 32
 order: 11
 ---
 
-## Matplotlib Architecture: Understanding the Object Model
+## Why Visualization Matters in Data Science
 
-Matplotlib has two APIs and most tutorials mix them up, creating confusion. Understanding the underlying architecture makes both APIs clear.
+A chart can communicate in seconds what a table of numbers cannot communicate in minutes. But bad charts can also mislead — the same dataset can "show" opposite conclusions depending on axis limits, bin sizes, and color choices. This lesson teaches you to produce honest, clear, and beautiful visualizations.
 
-Every matplotlib plot is a hierarchy of **Artist** objects:
+**The Python visualization ecosystem:**
 
 ```
-Figure              — the entire window/canvas
-└── Axes            — one plot region (has an x and y axis)
-    ├── Axis        — the x-axis or y-axis object (ticks, labels, limits)
-    ├── Line2D      — a line plot
-    ├── PathPatch   — a bar or polygon
-    ├── Text        — any text element
-    └── ...
+matplotlib   — foundational; all other libraries build on it
+seaborn      — statistical graphics on top of matplotlib; integrates with DataFrames
+plotly       — interactive charts for dashboards and web apps
+altair       — declarative grammar-of-graphics (Vega-Lite based)
+bokeh        — interactive plots for the browser, with streaming support
 ```
 
-**pyplot** (`plt.*`) is a state-machine interface that tracks the "current figure" and "current axes" implicitly. It's convenient for interactive work but dangerous in scripts — functions operate on whichever Axes was last created, which can cause subtle bugs.
+We focus on **matplotlib + seaborn**: they cover 95% of production data science needs, and understanding them makes every other library easier to learn.
 
-**The object-oriented API** (`fig, ax = plt.subplots()`) gives you explicit handles. Always use it in production code.
+---
+
+## Matplotlib Architecture: The Artist Hierarchy
+
+Matplotlib has two APIs. Most tutorials mix them up, creating confusion. Understanding the architecture makes both clear.
+
+Every matplotlib plot is a tree of **Artist** objects:
+
+```
+Figure                  — the entire canvas (window, PNG, PDF, SVG)
+├── FigureTitle (Text)
+└── Axes                — one plot region with coordinate system
+    ├── XAxis           — x-axis (spine, ticks, tick labels, axis label)
+    │   ├── Spine
+    │   ├── XTick (×N)
+    │   └── Text (axis label)
+    ├── YAxis           — same structure
+    ├── Title (Text)
+    ├── Line2D (×N)     — line plots
+    ├── PathCollection  — scatter plots (collection of markers)
+    ├── Rectangle (×N)  — bar charts
+    ├── Image           — imshow, heatmaps
+    └── Text (×N)       — annotations, labels
+```
+
+**Two APIs, one hierarchy:**
+
+The **pyplot** interface (`plt.plot(...)`, `plt.title(...)`) is a state machine that tracks the "current figure" and "current axes". It operates implicitly on the most recently created Axes. This is convenient for one-off plots in a Jupyter cell but dangerous in scripts.
+
+The **object-oriented (OO) API** (`fig, ax = plt.subplots()`) gives you explicit handles. `ax.plot()` operates on *that specific Axes*, not whatever happens to be current. Always use this in production code, functions, and any code with more than one subplot.
 
 <PythonPlayground code={String.raw`import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
-# OO API: explicit handles — always prefer this
-fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+# ── Pyplot (state machine) — convenient but fragile ───────────────────────────
+# plt.figure()
+# plt.plot(x, y)        # Implicit: "current axes"
+# plt.title("...")      # Which axes gets this? Whatever was last created.
+# Dangerous in loops and functions.
 
-x = np.linspace(0, 2 * np.pi, 100)
+# ── OO API — explicit handles, always safe ────────────────────────────────────
+fig, axes = plt.subplots(
+    nrows=1, ncols=2,
+    figsize=(11, 4),          # Width x height in inches
+    dpi=100,                  # Pixels per inch
+    facecolor="#0f0f1a",      # Figure background
+)
 
-# Left axes: sine wave
+x = np.linspace(0, 2 * np.pi, 200)
+
+# Left axes: trig functions
 ax1 = axes[0]
-ax1.plot(x, np.sin(x), color="#6366f1", linewidth=2, label="sin(x)")
-ax1.plot(x, np.cos(x), color="#f59e0b", linewidth=2, linestyle="--", label="cos(x)")
-ax1.set_title("Trigonometric Functions", fontweight="bold")
-ax1.set_xlabel("x (radians)")
-ax1.set_ylabel("y")
-ax1.legend()
-ax1.grid(True, alpha=0.3)
-ax1.axhline(0, color="black", linewidth=0.5)
+line_sin, = ax1.plot(x, np.sin(x), color="#6366f1", linewidth=2.5, label="sin(x)")
+line_cos, = ax1.plot(x, np.cos(x), color="#f59e0b", linewidth=2.5,
+                     linestyle="--", label="cos(x)")
+ax1.fill_between(x, np.sin(x), np.cos(x),
+                 where=np.sin(x) > np.cos(x),
+                 alpha=0.12, color="#6366f1", label="sin > cos")
+ax1.set_title("Trigonometric Functions", color="white", fontweight="bold", pad=12)
+ax1.set_xlabel("x (radians)", color="#94a3b8")
+ax1.set_ylabel("y", color="#94a3b8")
+ax1.legend(facecolor="#1e1e2e", edgecolor="#334155", labelcolor="white")
+ax1.grid(True, alpha=0.15, color="white")
+ax1.axhline(0, color="#94a3b8", linewidth=0.8, linestyle=":")
+ax1.set_facecolor("#0f0f1a")
+ax1.tick_params(colors="#94a3b8")
+for spine in ax1.spines.values():
+    spine.set_edgecolor("#334155")
 
-# Right axes: phase space
+# Right axes: parametric curve (phase space)
 ax2 = axes[1]
+# Color each point by its x-value using a colormap
 scatter = ax2.scatter(
     np.sin(x), np.cos(x),
-    c=x, cmap="viridis",
-    s=20, alpha=0.8
+    c=x,                      # color = x value
+    cmap="plasma",            # colormap
+    s=12,                     # marker size
+    alpha=0.85,
 )
-fig.colorbar(scatter, ax=ax2, label="x value")
-ax2.set_title("Phase Space (unit circle)", fontweight="bold")
-ax2.set_xlabel("sin(x)")
-ax2.set_ylabel("cos(x)")
-ax2.set_aspect("equal")
-ax2.grid(True, alpha=0.3)
+cbar = fig.colorbar(scatter, ax=ax2, label="x (radians)")
+cbar.ax.yaxis.set_tick_params(color="#94a3b8")
+ax2.set_title("Phase Space (unit circle)", color="white", fontweight="bold", pad=12)
+ax2.set_xlabel("sin(x)", color="#94a3b8")
+ax2.set_ylabel("cos(x)", color="#94a3b8")
+ax2.set_aspect("equal")       # Force square axes — crucial for circles
+ax2.set_facecolor("#0f0f1a")
+ax2.tick_params(colors="#94a3b8")
+for spine in ax2.spines.values():
+    spine.set_edgecolor("#334155")
 
-fig.suptitle("Matplotlib OO API Demo", fontsize=14, fontweight="bold")
+fig.suptitle("Matplotlib OO API — Artist Hierarchy Demo",
+             fontsize=14, fontweight="bold", color="white", y=1.02)
 plt.tight_layout()
 plt.show()
-`} packages={["numpy", "pandas", "matplotlib"]} />
 
-## Line Plots, Scatter Plots & Styling
+# ── Inspect the artist hierarchy ──────────────────────────────────────────────
+print("Figure type:", type(fig).__name__)
+print("Axes type:  ", type(ax1).__name__)
+print()
+print("Children of ax1 (by type):")
+from collections import Counter
+child_types = Counter(type(child).__name__ for child in ax1.get_children())
+for t, n in sorted(child_types.items()):
+    print(f"  {t}: {n}")
+`} packages={["numpy", "matplotlib"]} height={540} title="Matplotlib Object Model" />
+
+---
+
+## Core Chart Types with Deep Examples
+
+### Line Charts — Trends Over Time
+
+<PythonPlayground code={String.raw`import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import numpy as np
+
+rng = np.random.default_rng(42)
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+# ── Left: Multi-series with confidence intervals ───────────────────────────────
+ax = axes[0]
+
+t = np.linspace(0, 12, 300)
+
+# Simulate 3 model training curves: mean + std across 5 seeds
+def training_curve(base_loss, decay, noise_scale, n_seeds=5):
+    curves = []
+    for s in range(n_seeds):
+        r = np.random.RandomState(s)
+        noise = r.randn(len(t)) * noise_scale * np.exp(-t/3)
+        curves.append(base_loss * np.exp(-decay * t) + 0.1 + noise)
+    curves = np.array(curves)
+    return curves.mean(axis=0), curves.std(axis=0)
+
+models = [
+    ("LSTM",         0.8, 0.3, 0.08, "#6366f1"),
+    ("Transformer",  0.9, 0.35, 0.07, "#10b981"),
+    ("Simple RNN",   0.7, 0.2,  0.10, "#f59e0b"),
+]
+
+for name, base, decay, noise, color in models:
+    mean, std = training_curve(base, decay, noise)
+    ax.plot(t, mean, color=color, linewidth=2.5, label=name)
+    ax.fill_between(t, mean - std, mean + std, color=color, alpha=0.12)
+
+ax.set_title("Training Loss Comparison\n(mean ± std across 5 seeds)",
+             fontweight="bold")
+ax.set_xlabel("Epoch")
+ax.set_ylabel("Cross-entropy Loss")
+ax.legend()
+ax.set_ylim(bottom=0)
+ax.grid(True, alpha=0.3)
+ax.spines[["top","right"]].set_visible(False)
+
+# ── Right: Log scale with twin y-axis ─────────────────────────────────────────
+ax2 = axes[1]
+
+epochs = np.arange(1, 101)
+loss = 2.3 * np.exp(-epochs / 25) + 0.08 + rng.standard_normal(100) * 0.02
+accuracy = 1 - 0.95 * np.exp(-epochs / 20) + rng.standard_normal(100) * 0.01
+accuracy = np.clip(accuracy, 0, 1)
+
+color_loss = "#ef4444"
+color_acc  = "#10b981"
+
+ax2.semilogy(epochs, loss, color=color_loss, linewidth=2.5, label="Loss (log scale)")
+ax2.set_xlabel("Epoch")
+ax2.set_ylabel("Loss", color=color_loss)
+ax2.tick_params(axis="y", labelcolor=color_loss)
+ax2.yaxis.set_major_formatter(ticker.LogFormatterMathtext())
+
+# Twin y-axis shares x-axis
+ax3 = ax2.twinx()
+ax3.plot(epochs, accuracy * 100, color=color_acc, linewidth=2.5,
+         linestyle="--", label="Accuracy (%)")
+ax3.set_ylabel("Accuracy (%)", color=color_acc)
+ax3.tick_params(axis="y", labelcolor=color_acc)
+ax3.set_ylim(0, 105)
+
+# Combine legends from both axes
+lines1, labels1 = ax2.get_legend_handles_labels()
+lines2, labels2 = ax3.get_legend_handles_labels()
+ax2.legend(lines1 + lines2, labels1 + labels2, loc="center right")
+ax2.set_title("Loss + Accuracy with Twin Y-axis", fontweight="bold")
+ax2.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.show()
+
+print("Key API calls demonstrated:")
+print("  ax.fill_between(x, y_low, y_high)  — confidence bands")
+print("  ax.semilogy()                        — log scale y-axis")
+print("  ax.twinx()                           — second y-axis sharing x")
+print("  ax.get_legend_handles_labels()       — combine twin-axis legends")
+`} packages={["numpy", "matplotlib"]} height={480} title="Line Charts — Trends and Confidence Intervals" />
+
+### Distributions: Histograms, KDE, and Violin Plots
+
+Understanding the *shape* of your data is the first step in any analysis. These charts answer: Is the distribution normal? Are there outliers? Are groups different?
 
 <PythonPlayground code={String.raw`import matplotlib
 matplotlib.use('Agg')
@@ -74,146 +233,442 @@ import numpy as np
 
 rng = np.random.default_rng(42)
 
-fig, axes = plt.subplots(2, 2, figsize=(11, 8))
-fig.suptitle("Common Plot Types", fontsize=15, fontweight="bold")
+# Generate 4 distributions with different shapes
+distributions = {
+    "Normal":       rng.standard_normal(500) * 15 + 70,
+    "Skewed Right": np.exp(rng.standard_normal(500) * 0.5 + 3.5),
+    "Bimodal":      np.concatenate([
+                        rng.standard_normal(250) * 5 + 55,
+                        rng.standard_normal(250) * 5 + 80,
+                    ]),
+    "Uniform":      rng.uniform(40, 100, 500),
+}
+colors = ["#6366f1", "#f59e0b", "#10b981", "#ec4899"]
 
-# 1. Line plot with multiple series + fill
-ax = axes[0, 0]
-x = np.linspace(0, 10, 200)
-y1 = np.sin(x) * np.exp(-x * 0.1)
-y2 = np.cos(x) * np.exp(-x * 0.15)
-ax.plot(x, y1, color="#6366f1", linewidth=2, label="Damped sin")
-ax.plot(x, y2, color="#ec4899", linewidth=2, label="Damped cos")
-ax.fill_between(x, y1, y2, alpha=0.15, color="#6366f1")
-ax.set_title("Line Plot with Fill")
-ax.legend()
-ax.grid(True, alpha=0.3)
+fig, axes = plt.subplots(2, 2, figsize=(13, 10))
+fig.suptitle("Distribution Shapes — A Visual Guide", fontsize=14, fontweight="bold")
 
-# 2. Scatter with color encoding
-ax = axes[0, 1]
-n_points = 200
-x_s = rng.standard_normal(n_points)
-y_s = x_s * 0.7 + rng.standard_normal(n_points) * 0.5
-colors = np.sqrt(x_s**2 + y_s**2)  # distance from origin
-sc = ax.scatter(x_s, y_s, c=colors, cmap="plasma", s=30, alpha=0.7, edgecolors="none")
-fig.colorbar(sc, ax=ax, label="Distance from origin")
-ax.set_title("Scatter Plot — Color Encoded")
-ax.set_xlabel("x")
-ax.set_ylabel("y")
+def manual_kde(data, x_grid, bandwidth):
+    """Gaussian KDE without scipy."""
+    return np.mean(
+        np.exp(-0.5 * ((x_grid[:, None] - data[None, :]) / bandwidth) ** 2)
+        / (bandwidth * np.sqrt(2 * np.pi)),
+        axis=1
+    )
 
-# 3. Bar chart with error bars
-ax = axes[1, 0]
-categories = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"]
-values = [42, 61, 55, 38, 72]
-errors = [5, 7, 4, 6, 8]
-colors_bar = ["#6366f1", "#8b5cf6", "#a855f7", "#d946ef", "#ec4899"]
-bars = ax.bar(categories, values, color=colors_bar, alpha=0.85,
-              yerr=errors, capsize=5, ecolor="black", error_kw={"elinewidth": 1.5})
-ax.set_title("Bar Chart with Error Bars")
-ax.set_ylabel("Value")
-# Add value labels on bars
-for bar, val in zip(bars, values):
-    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
-            str(val), ha="center", va="bottom", fontweight="bold", fontsize=9)
+for ax, (name, data), color in zip(axes.flat, distributions.items(), colors):
+    # Histogram (density=True so area=1, comparable with KDE)
+    counts, bin_edges, _ = ax.hist(
+        data, bins=30, density=True,
+        color=color, alpha=0.45,
+        edgecolor="white", linewidth=0.4,
+    )
 
-# 4. Histogram with KDE overlay
-ax = axes[1, 1]
-data = rng.standard_normal(500) * 1.5 + 3
-ax.hist(data, bins=25, density=True, color="#6366f1", alpha=0.6,
-        edgecolor="white", linewidth=0.5, label="Data")
-# Manual KDE
-from_val = data.min() - 1
-to_val = data.max() + 1
-x_kde = np.linspace(from_val, to_val, 200)
-bandwidth = 0.5
-kde = np.array([
-    np.mean(np.exp(-0.5 * ((x_kde[i] - data) / bandwidth)**2) / (bandwidth * np.sqrt(2*np.pi)))
-    for i in range(len(x_kde))
-])
-ax.plot(x_kde, kde, color="#ec4899", linewidth=2.5, label="KDE")
-ax.axvline(data.mean(), color="#f59e0b", linewidth=2, linestyle="--", label=f"Mean={data.mean():.2f}")
-ax.set_title("Histogram with KDE")
-ax.legend()
+    # KDE overlay — bandwidth by Silverman's rule: h = 1.06 * sigma * n^(-1/5)
+    bandwidth = 1.06 * np.std(data) * len(data) ** (-0.2)
+    x_grid = np.linspace(data.min() - 2*bandwidth, data.max() + 2*bandwidth, 300)
+    kde = manual_kde(data, x_grid, bandwidth)
+    ax.plot(x_grid, kde, color=color, linewidth=2.5, label=f"KDE (h={bandwidth:.2f})")
+
+    # Rug plot — one tick per data point, reveals density without binning
+    ax.plot(data, np.full_like(data, -0.002), "|",
+            color=color, alpha=0.15, markersize=4)
+
+    # Statistics
+    mean, median = np.mean(data), np.median(data)
+    skewness = np.mean(((data - mean) / np.std(data)) ** 3)
+    ax.axvline(mean,   color="black",   linewidth=1.5, linestyle="--",
+               label=f"Mean={mean:.1f}")
+    ax.axvline(median, color="#94a3b8", linewidth=1.5, linestyle=":",
+               label=f"Median={median:.1f}")
+
+    ax.set_title(f"{name}\n(skewness={skewness:+.2f})", fontweight="bold")
+    ax.set_ylabel("Density")
+    ax.legend(fontsize=8)
+    ax.spines[["top","right"]].set_visible(False)
+    ax.grid(True, alpha=0.2, axis="y")
 
 plt.tight_layout()
 plt.show()
-`} packages={["numpy", "pandas", "matplotlib"]} />
 
-## Subplots, GridSpec & Annotations
+print("Reading distribution shapes:")
+print("  Normal:       skewness ≈ 0, mean ≈ median")
+print("  Skewed right: long right tail, mean > median (income, prices)")
+print("  Bimodal:      two peaks — possible two sub-populations")
+print("  Uniform:      flat — no central tendency, mean = midpoint")
+`} packages={["numpy", "matplotlib"]} height={500} title="Distribution Shapes — Histograms and KDE" />
+
+### Bar Charts — Categorical Comparisons
+
+<PythonPlayground code={String.raw`import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import numpy as np
+
+rng = np.random.default_rng(42)
+
+fig, axes = plt.subplots(1, 3, figsize=(14, 5))
+fig.suptitle("Bar Chart Variants", fontsize=13, fontweight="bold")
+
+# ── 1. Grouped bar chart ───────────────────────────────────────────────────────
+ax = axes[0]
+categories = ["Q1", "Q2", "Q3", "Q4"]
+products = {
+    "Product A": [42, 55, 49, 67],
+    "Product B": [38, 43, 58, 52],
+    "Product C": [25, 32, 35, 41],
+}
+colors = ["#6366f1", "#f59e0b", "#10b981"]
+x = np.arange(len(categories))
+width = 0.25
+
+for i, (product, values) in enumerate(products.items()):
+    offset = (i - 1) * width
+    bars = ax.bar(x + offset, values, width, label=product,
+                  color=colors[i], alpha=0.85, edgecolor="white", linewidth=0.5)
+    # Value labels inside bars
+    for bar, val in zip(bars, values):
+        ax.text(
+            bar.get_x() + bar.get_width()/2,
+            bar.get_height() - 3,
+            str(val), ha="center", va="top",
+            fontsize=8, color="white", fontweight="bold"
+        )
+
+ax.set_xticks(x)
+ax.set_xticklabels(categories)
+ax.set_title("Grouped Bar Chart", fontweight="bold")
+ax.set_ylabel("Units Sold")
+ax.legend(fontsize=9)
+ax.spines[["top","right"]].set_visible(False)
+ax.grid(True, alpha=0.25, axis="y")
+
+# ── 2. Stacked bar chart ───────────────────────────────────────────────────────
+ax = axes[1]
+bottoms = np.zeros(4)
+for i, (product, values) in enumerate(products.items()):
+    values = np.array(values)
+    ax.bar(categories, values, bottom=bottoms,
+           label=product, color=colors[i], alpha=0.85,
+           edgecolor="white", linewidth=0.8)
+    # Label each segment
+    for j, (val, bot) in enumerate(zip(values, bottoms)):
+        if val > 5:
+            ax.text(j, bot + val/2, str(val),
+                    ha="center", va="center",
+                    fontsize=8, color="white", fontweight="bold")
+    bottoms += values
+
+ax.set_title("Stacked Bar Chart\n(part-to-whole)", fontweight="bold")
+ax.set_ylabel("Total Units")
+ax.legend(fontsize=9)
+ax.spines[["top","right"]].set_visible(False)
+
+# ── 3. Horizontal bar with ranking ────────────────────────────────────────────
+ax = axes[2]
+languages = ["Python", "JavaScript", "TypeScript", "Rust", "Go",
+             "Java", "C++", "C#", "Kotlin", "Swift"]
+usage_pct = [30.3, 62.5, 38.9, 13.1, 14.2, 30.6, 23.4, 27.1, 9.8, 5.3]
+
+# Sort by value (descending)
+paired = sorted(zip(usage_pct, languages), reverse=True)
+usage_sorted, lang_sorted = zip(*paired)
+
+# Color by rank: top 3 are highlighted
+bar_colors = ["#6366f1" if i < 3 else "#334155" for i in range(len(lang_sorted))]
+bars = ax.barh(range(len(lang_sorted)), usage_sorted,
+               color=bar_colors, alpha=0.85, edgecolor="none", height=0.65)
+
+ax.set_yticks(range(len(lang_sorted)))
+ax.set_yticklabels(lang_sorted)
+ax.set_xlabel("Developer Usage (%)")
+ax.set_title("Programming Language Popularity\n(ranked, top 3 highlighted)", fontweight="bold")
+ax.invert_yaxis()    # Highest at top
+
+# Value labels on bars
+for bar, val in zip(bars, usage_sorted):
+    ax.text(val + 0.5, bar.get_y() + bar.get_height()/2,
+            f"{val:.1f}%", va="center", fontsize=8)
+
+ax.spines[["top","right","left"]].set_visible(False)
+ax.grid(True, alpha=0.25, axis="x")
+ax.set_xlim(0, max(usage_sorted) * 1.15)
+
+plt.tight_layout()
+plt.show()
+
+print("When to use each variant:")
+print("  Grouped bars  — compare individual values across categories")
+print("  Stacked bars  — show part-to-whole and total simultaneously")
+print("  Horizontal    — long category labels, ranking 10+ items")
+`} packages={["numpy", "matplotlib"]} height={480} title="Bar Chart Variants" />
+
+---
+
+## Advanced Layout: GridSpec, Inset Axes, and Annotations
 
 <PythonPlayground code={String.raw`import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import numpy as np
 
 rng = np.random.default_rng(7)
 
-# GridSpec gives fine-grained control over subplot layout
-fig = plt.figure(figsize=(12, 8))
-gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.45, wspace=0.35)
+# ── GridSpec: asymmetric layout ───────────────────────────────────────────────
+fig = plt.figure(figsize=(13, 9))
+fig.patch.set_facecolor("#0a0a12")
 
-# Wide top plot
-ax_top = fig.add_subplot(gs[0, :])
-x = np.linspace(0, 4 * np.pi, 300)
-y = np.sin(x) + 0.3 * rng.standard_normal(300)
-ax_top.plot(x, y, alpha=0.5, color="#94a3b8", linewidth=1)
-ax_top.plot(x, np.sin(x), color="#6366f1", linewidth=2.5, label="True signal")
-
-# Annotations
-peak_x = np.pi / 2
-ax_top.annotate(
-    "First peak",
-    xy=(peak_x, 1.0),
-    xytext=(peak_x + 1.5, 1.4),
-    arrowprops=dict(arrowstyle="->", color="#ec4899", lw=1.5),
-    fontsize=10, color="#ec4899", fontweight="bold"
+# 3x3 grid — we'll merge cells for different panels
+gs = gridspec.GridSpec(
+    3, 3,
+    figure=fig,
+    hspace=0.45, wspace=0.35,
+    top=0.92, bottom=0.06, left=0.06, right=0.97
 )
-ax_top.axhline(0, color="black", linewidth=0.8, linestyle=":")
-ax_top.set_title("Noisy Signal with True Underlying Function", fontweight="bold")
-ax_top.legend()
-ax_top.grid(True, alpha=0.2)
 
-# Bottom left: box plot
-ax_bl = fig.add_subplot(gs[1, 0])
-data_groups = [rng.standard_normal(50) + i for i in range(4)]
-bp = ax_bl.boxplot(data_groups, patch_artist=True, notch=True)
-colors_box = ["#6366f1", "#8b5cf6", "#a855f7", "#d946ef"]
-for patch, c in zip(bp["boxes"], colors_box):
-    patch.set_facecolor(c)
-    patch.set_alpha(0.7)
-ax_bl.set_xticklabels(["G1", "G2", "G3", "G4"])
-ax_bl.set_title("Box Plot")
-ax_bl.grid(True, alpha=0.2, axis="y")
+# ── Top row: full-width time series ──────────────────────────────────────────
+ax_top = fig.add_subplot(gs[0, :])
+t = np.linspace(0, 48, 1000)
+signal = 2*np.sin(t/3) + 0.8*np.sin(t) + rng.standard_normal(1000)*0.3
+ax_top.plot(t, signal, color="#6366f1", linewidth=1.5, alpha=0.9, label="Signal")
+ax_top.fill_between(t, signal, where=signal > 0, color="#6366f1", alpha=0.08)
+ax_top.fill_between(t, signal, where=signal < 0, color="#ef4444", alpha=0.08)
+ax_top.axhline(0, color="#94a3b8", linewidth=0.8, linestyle=":")
+ax_top.set_title("Full-Width Time Series (gs[0, :])", color="white", fontweight="bold")
+ax_top.set_xlabel("Time (hours)", color="#94a3b8")
+ax_top.set_ylabel("Amplitude", color="#94a3b8")
+ax_top.set_facecolor("#0f0f1a")
+ax_top.tick_params(colors="#94a3b8")
+for sp in ax_top.spines.values(): sp.set_edgecolor("#334155")
 
-# Bottom middle: pie chart
-ax_bm = fig.add_subplot(gs[1, 1])
-sizes = [35, 25, 20, 15, 5]
-labels = ["Python", "JS", "Java", "Go", "Other"]
-explode = [0.05, 0, 0, 0, 0]
-wedge_colors = ["#6366f1", "#8b5cf6", "#a855f7", "#d946ef", "#ec4899"]
-ax_bm.pie(sizes, labels=labels, explode=explode, autopct="%1.1f%%",
-          colors=wedge_colors, startangle=90)
-ax_bm.set_title("Language Usage")
+# Annotation with arrow
+peak_idx = np.argmax(signal)
+ax_top.annotate(
+    f"Global max: {signal[peak_idx]:.2f}",
+    xy=(t[peak_idx], signal[peak_idx]),
+    xytext=(t[peak_idx] + 4, signal[peak_idx] + 0.7),
+    arrowprops=dict(arrowstyle="->", color="#f59e0b", lw=1.5),
+    color="#f59e0b", fontsize=10, fontweight="bold"
+)
 
-# Bottom right: heatmap (manual)
-ax_br = fig.add_subplot(gs[1, 2])
-matrix = rng.standard_normal((5, 5))
-im = ax_br.imshow(matrix, cmap="RdYlBu_r", aspect="auto")
-fig.colorbar(im, ax=ax_br, shrink=0.8)
-ax_br.set_title("Heatmap")
-ax_br.set_xticks(range(5))
-ax_br.set_yticks(range(5))
-ax_br.set_xticklabels([f"F{i}" for i in range(5)], fontsize=8)
-ax_br.set_yticklabels([f"R{i}" for i in range(5)], fontsize=8)
+# ── Middle left: 2x2 cells merged ─────────────────────────────────────────────
+ax_scatter = fig.add_subplot(gs[1:, :2])  # rows 1-2, cols 0-1
+n = 200
+x_s = rng.standard_normal(n)
+y_s = 0.7 * x_s + rng.standard_normal(n) * 0.6
+colors_s = np.sqrt(x_s**2 + y_s**2)
+sc = ax_scatter.scatter(x_s, y_s, c=colors_s, cmap="plasma", s=30, alpha=0.7)
+cbar = fig.colorbar(sc, ax=ax_scatter, pad=0.02, label="Distance from origin")
+cbar.ax.yaxis.set_tick_params(color="#94a3b8")
+cbar.ax.yaxis.label.set_color("#94a3b8")
 
-fig.suptitle("GridSpec Layout Demo", fontsize=14, fontweight="bold")
+# Regression line
+m, b = np.polyfit(x_s, y_s, 1)
+xl = np.array([x_s.min(), x_s.max()])
+ax_scatter.plot(xl, m*xl + b, color="#10b981", linewidth=2.5,
+                label=f"y = {m:.2f}x + {b:.2f}")
+r2 = np.corrcoef(x_s, y_s)[0,1]**2
+ax_scatter.set_title(f"Scatter (gs[1:, :2])  R²={r2:.2f}", color="white", fontweight="bold")
+ax_scatter.legend(facecolor="#1e1e2e", edgecolor="#334155", labelcolor="white")
+ax_scatter.set_facecolor("#0f0f1a")
+ax_scatter.tick_params(colors="#94a3b8")
+for sp in ax_scatter.spines.values(): sp.set_edgecolor("#334155")
+
+# ── INSET AXES: zoomed view inside scatter ────────────────────────────────────
+# Zoom into the central region [-1, 1] x [-1, 1]
+axins = inset_axes(ax_scatter, width="35%", height="35%", loc="upper left",
+                   bbox_to_anchor=ax_scatter.bbox,
+                   bbox_transform=ax_scatter.transData,
+                   borderpad=0.5)
+mask = (np.abs(x_s) < 1) & (np.abs(y_s) < 1)
+axins.scatter(x_s[mask], y_s[mask], c=colors_s[mask], cmap="plasma", s=20, alpha=0.8)
+axins.set_xlim(-1, 1); axins.set_ylim(-1, 1)
+axins.set_title("Zoom: |x|,|y|<1", fontsize=7, color="#94a3b8", pad=2)
+axins.tick_params(labelsize=6, colors="#94a3b8")
+for sp in axins.spines.values(): sp.set_edgecolor("#6366f1")
+axins.set_facecolor("#0f0f1a")
+ax_scatter.indicate_inset_zoom(axins, edgecolor="#6366f1", alpha=0.5)
+
+# ── Middle/bottom right: two small panels ────────────────────────────────────
+ax_box = fig.add_subplot(gs[1, 2])
+data_groups = [rng.standard_normal(60) + i*0.8 for i in range(3)]
+bp = ax_box.boxplot(data_groups, patch_artist=True, notch=True,
+                    medianprops=dict(color="white", lw=2))
+for patch, c in zip(bp["boxes"], ["#6366f1","#f59e0b","#10b981"]):
+    patch.set_facecolor(c); patch.set_alpha(0.75)
+ax_box.set_xticklabels(["Low","Mid","High"], color="#94a3b8")
+ax_box.set_title("Box (gs[1, 2])", color="white", fontweight="bold")
+ax_box.set_facecolor("#0f0f1a")
+ax_box.tick_params(colors="#94a3b8")
+for sp in ax_box.spines.values(): sp.set_edgecolor("#334155")
+
+ax_hist = fig.add_subplot(gs[2, 2])
+all_data = np.concatenate(data_groups)
+ax_hist.hist(all_data, bins=20, color="#8b5cf6", alpha=0.8, edgecolor="white", lw=0.5)
+ax_hist.set_title("Hist (gs[2, 2])", color="white", fontweight="bold")
+ax_hist.set_facecolor("#0f0f1a")
+ax_hist.tick_params(colors="#94a3b8")
+for sp in ax_hist.spines.values(): sp.set_edgecolor("#334155")
+
+fig.suptitle("Advanced Layout: GridSpec + Inset Axes", color="white",
+             fontsize=14, fontweight="bold")
 plt.show()
-`} packages={["numpy", "pandas", "matplotlib"]} />
+`} packages={["numpy", "matplotlib"]} height={560} title="Advanced GridSpec Layout with Inset Axes" />
 
-## Seaborn: Statistical Visualization
+---
 
-Seaborn is built on top of matplotlib and provides higher-level functions for statistical graphics. It integrates natively with pandas DataFrames.
+## Colormaps, Styling, and Tick Formatting
+
+Choosing the right colormap is not aesthetic — it's scientific. Wrong colormaps misrepresent magnitude:
+
+```
+Sequential:    viridis, plasma, inferno, magma — for ordered data (temperature, count)
+               viridis is perceptually uniform and colorblind-safe — use it by default
+
+Diverging:     coolwarm, RdBu, PiYG — for data with a meaningful center (correlation, z-score)
+               Center the colormap at 0 with vmin=-max, vmax=max
+
+Qualitative:   tab10, Set2, husl — for categorical data (max 8-10 categories)
+               Never use rainbow/jet — not perceptually uniform, misleads magnitude
+
+NEVER USE:     jet, rainbow — these create false visual emphasis at red/blue boundaries
+```
+
+<PythonPlayground code={String.raw`import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import matplotlib.colors as mcolors
+import numpy as np
+
+rng = np.random.default_rng(42)
+
+fig = plt.figure(figsize=(14, 10))
+fig.suptitle("Colormaps, Tick Formatting & Publication Style", fontsize=14, fontweight="bold")
+
+# ── 1. Sequential colormap: correct usage ─────────────────────────────────────
+ax1 = fig.add_subplot(2, 3, 1)
+x = y = np.linspace(-3, 3, 100)
+X, Y = np.meshgrid(x, y)
+Z = np.exp(-(X**2 + Y**2) / 2)  # 2D Gaussian
+
+im = ax1.imshow(Z, cmap="viridis", extent=[-3,3,-3,3], origin="lower", aspect="equal")
+fig.colorbar(im, ax=ax1, label="Density")
+ax1.set_title("Sequential: viridis\n(perceptually uniform)", fontweight="bold")
+ax1.set_xlabel("x"); ax1.set_ylabel("y")
+
+# ── 2. Diverging colormap: centered on 0 ─────────────────────────────────────
+ax2 = fig.add_subplot(2, 3, 2)
+features = ["Score", "Income", "Age", "Hours", "Products"]
+corr = np.array([
+    [1.00,  0.45,  0.12, -0.32,  0.28],
+    [0.45,  1.00, -0.05, -0.18,  0.41],
+    [0.12, -0.05,  1.00,  0.09, -0.11],
+    [-0.32,-0.18,  0.09,  1.00, -0.23],
+    [0.28,  0.41, -0.11, -0.23,  1.00],
+])
+
+im2 = ax2.imshow(corr, cmap="coolwarm", vmin=-1, vmax=1)  # Always center diverging at 0!
+fig.colorbar(im2, ax=ax2, label="Pearson r")
+ax2.set_xticks(range(5)); ax2.set_yticks(range(5))
+ax2.set_xticklabels(features, rotation=30, ha="right", fontsize=8)
+ax2.set_yticklabels(features, fontsize=8)
+for i in range(5):
+    for j in range(5):
+        color = "white" if abs(corr[i,j]) > 0.4 else "black"
+        ax2.text(j, i, f"{corr[i,j]:.2f}", ha="center", va="center",
+                fontsize=8, color=color)
+ax2.set_title("Diverging: coolwarm\n(centered at 0)", fontweight="bold")
+
+# ── 3. Qualitative: categorical data ─────────────────────────────────────────
+ax3 = fig.add_subplot(2, 3, 3)
+categories = ["Engineering", "Marketing", "Sales", "Design", "Legal"]
+q_colors = plt.cm.Set2(np.linspace(0, 1, len(categories)))
+sizes = [35, 20, 25, 12, 8]
+wedges, texts, autotexts = ax3.pie(
+    sizes, labels=categories, colors=q_colors, autopct="%1.0f%%",
+    startangle=90, pctdistance=0.75,
+    wedgeprops={"edgecolor": "white", "linewidth": 2}
+)
+for t in autotexts: t.set_fontsize(9)
+ax3.set_title("Qualitative: Set2\n(categorical data)", fontweight="bold")
+
+# ── 4. Custom tick formatting ─────────────────────────────────────────────────
+ax4 = fig.add_subplot(2, 3, 4)
+months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+revenue = rng.integers(1_200_000, 4_800_000, 12).astype(float)
+bars = ax4.bar(months, revenue, color="#6366f1", alpha=0.8, edgecolor="white", linewidth=0.5)
+
+# Custom formatter: $1.2M instead of 1200000
+def millions_fmt(x, pos):
+    if x >= 1e6:
+        return f"{chr(36)}{x/1e6:.1f}M"
+    return f"{chr(36)}{x/1e3:.0f}K"
+
+ax4.yaxis.set_major_formatter(ticker.FuncFormatter(millions_fmt))
+ax4.set_title("Tick Formatting: $M", fontweight="bold")
+ax4.set_ylabel("Monthly Revenue")
+ax4.tick_params(axis="x", rotation=45)
+ax4.spines[["top","right"]].set_visible(False)
+
+# Horizontal line for target
+target = 3_000_000
+ax4.axhline(target, color="#f59e0b", linewidth=2, linestyle="--")
+ax4.text(11.3, target * 1.03, f"Target: {chr(36)}{target/1e6:.1f}M",
+         color="#f59e0b", fontsize=9, ha="right")
+
+# ── 5. Log scale + percentage ticks ───────────────────────────────────────────
+ax5 = fig.add_subplot(2, 3, 5)
+n_users = np.logspace(3, 8, 50)
+cac = 150 / (1 + np.log10(n_users/1000) * 0.1) + rng.standard_normal(50) * 5
+ax5.semilogx(n_users, cac, color="#10b981", linewidth=2.5, marker="o",
+             markersize=4, alpha=0.8)
+ax5.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, p: f"{x/1e3:.0f}K" if x < 1e6 else f"{x/1e6:.0f}M"))
+ax5.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, p: f"{chr(36)}{x:.0f}"))
+ax5.set_title("Log x-scale + Custom Ticks", fontweight="bold")
+ax5.set_xlabel("Monthly Active Users (log scale)")
+ax5.set_ylabel("Customer Acquisition Cost")
+ax5.grid(True, which="both", alpha=0.2)
+ax5.spines[["top","right"]].set_visible(False)
+
+# ── 6. Publication-quality styling ───────────────────────────────────────────
+ax6 = fig.add_subplot(2, 3, 6)
+x = np.linspace(0, 1, 100)
+models_ci = [
+    ("Baseline",    0.5 + 0.2*x, 0.08, "#94a3b8"),
+    ("Proposed",    0.6 + 0.35*x, 0.05, "#6366f1"),
+]
+for name, mean, ci_half, c in models_ci:
+    ax6.plot(x, mean, color=c, linewidth=2.5, label=name)
+    ax6.fill_between(x, mean-ci_half, mean+ci_half, color=c, alpha=0.15)
+
+ax6.yaxis.set_major_formatter(ticker.PercentFormatter(1.0))
+ax6.set_title("Publication Style\n(no top/right spines, %-axis)", fontweight="bold")
+ax6.set_xlabel("Training Fraction")
+ax6.set_ylabel("Accuracy")
+ax6.legend(frameon=False)
+ax6.spines[["top","right"]].set_visible(False)
+ax6.grid(True, alpha=0.2, axis="y")
+ax6.set_ylim(0, 1.05)
+
+plt.tight_layout()
+plt.show()
+
+print("Quick colormap reference:")
+print("  Sequential data    → viridis, plasma")
+print("  Diverging data     → coolwarm, RdBu (always set vmin=-max, vmax=max)")
+print("  Categorical data   → Set2, tab10 (max 8-10 categories)")
+print("  Avoid always       → jet, rainbow")
+`} packages={["numpy", "matplotlib"]} height={560} title="Colormaps, Formatting & Style" />
+
+---
+
+## Seaborn: Statistical Graphics
+
+Seaborn provides plot types that directly answer statistical questions — not just "what are the values" but "how are the distributions different?" and "are these variables correlated?"
 
 <PythonPlayground code={String.raw`import matplotlib
 matplotlib.use('Agg')
@@ -223,345 +678,520 @@ import pandas as pd
 import numpy as np
 
 rng = np.random.default_rng(42)
-sns.set_theme(style="whitegrid", palette="husl")
+sns.set_theme(style="whitegrid", palette="husl", font_scale=0.95)
 
-# Generate dataset
-n = 300
+# ── Realistic customer dataset ─────────────────────────────────────────────────
+N = 500
+tenure = rng.integers(1, 73, N)
+charges = tenure * 1.2 + rng.standard_normal(N) * 15 + 30
+charges = np.clip(charges, 18, 150)
+churn = (charges > 80) & (tenure < 24) | rng.random(N) < 0.08
+contract = rng.choice(["Month-to-Month", "One Year", "Two Year"],
+                       N, p=[0.55, 0.30, 0.15])
+segment = rng.choice(["SMB", "Enterprise", "Consumer"], N, p=[0.35, 0.25, 0.40])
+
 df = pd.DataFrame({
-    "score":      np.clip(rng.normal(72, 15, n), 0, 100),
-    "hours_study": np.clip(rng.normal(6, 2, n), 0, 12),
-    "department": rng.choice(["Eng", "Science", "Arts", "Business"], n),
-    "year":       rng.choice(["Freshman","Sophomore","Junior","Senior"], n),
+    "tenure": tenure,
+    "monthly_charges": charges,
+    "churn": churn,
+    "contract": contract,
+    "segment": segment,
+    "num_products": rng.integers(1, 6, N),
 })
-# Correlation between score and study hours
-df["score"] = df["score"] * 0.4 + df["hours_study"] * 3.5 + rng.normal(0, 5, n)
-df["score"] = np.clip(df["score"], 0, 100)
+df["churn_label"] = df["churn"].map({True: "Churned", False: "Retained"})
 
-fig, axes = plt.subplots(2, 2, figsize=(12, 9))
-fig.suptitle("Seaborn Statistical Plots", fontsize=15, fontweight="bold")
+fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+fig.suptitle("Customer Churn Analysis — Seaborn Statistical Plots",
+             fontsize=14, fontweight="bold")
 
-# 1. Distribution plot
+# ── 1. violinplot: distribution shape + box in one ───────────────────────────
 ax = axes[0, 0]
-for dept, color in zip(["Eng", "Science", "Arts", "Business"],
-                        ["#6366f1", "#f59e0b", "#10b981", "#ec4899"]):
-    subset = df[df["department"] == dept]["score"]
-    ax.hist(subset, bins=15, alpha=0.5, label=dept, color=color, density=True)
-ax.set_title("Score Distribution by Department")
-ax.set_xlabel("Score")
-ax.set_ylabel("Density")
-ax.legend(fontsize=8)
+contract_order = (df.groupby("contract")["monthly_charges"]
+                    .median().sort_values(ascending=False).index.tolist())
+sns.violinplot(data=df, x="contract", y="monthly_charges",
+               order=contract_order, palette="husl",
+               inner="quartile",    # Show quartiles inside violin
+               cut=0,               # Don't extend beyond data range
+               ax=ax)
+ax.set_title("Monthly Charges by Contract\n(violin = full distribution)", fontweight="bold")
+ax.set_xlabel("Contract Type")
+ax.set_ylabel("Monthly Charges ($)")
+ax.tick_params(axis="x", rotation=15)
 
-# 2. Box/violin plot
+# ── 2. boxplot grouped by two variables ──────────────────────────────────────
 ax = axes[0, 1]
-dept_order = df.groupby("department")["score"].median().sort_values(ascending=False).index.tolist()
-sns.violinplot(data=df, x="department", y="score", order=dept_order,
-               palette="husl", ax=ax, inner="quartile")
-ax.set_title("Score Distribution by Department (Violin)")
-ax.set_xlabel("Department")
-ax.set_ylabel("Score")
+sns.boxplot(data=df, x="segment", y="tenure",
+            hue="churn_label",
+            palette={"Retained": "#10b981", "Churned": "#ef4444"},
+            width=0.6, ax=ax)
+ax.set_title("Tenure by Segment & Churn\n(grouped boxplot)", fontweight="bold")
+ax.set_xlabel("Segment")
+ax.set_ylabel("Tenure (months)")
+ax.legend(title="Status", loc="upper right")
 
-# 3. Regression plot
+# ── 3. countplot + percentage labels ─────────────────────────────────────────
+ax = axes[0, 2]
+order_counts = df["contract"].value_counts().index.tolist()
+sns.countplot(data=df, x="contract", order=order_counts,
+              hue="churn_label",
+              palette={"Retained": "#10b981", "Churned": "#ef4444"},
+              ax=ax)
+# Add churn rate labels
+for contract in order_counts:
+    sub = df[df["contract"] == contract]
+    rate = sub["churn"].mean() * 100
+    ax.text(order_counts.index(contract), sub["churn"].sum() + 5,
+            f"{rate:.0f}%\nchurn", ha="center", fontsize=8, color="#ef4444")
+ax.set_title("Contract Distribution & Churn\n(countplot)", fontweight="bold")
+ax.tick_params(axis="x", rotation=15)
+ax.set_ylabel("Count")
+
+# ── 4. scatterplot with hue, size, style ──────────────────────────────────────
 ax = axes[1, 0]
-for dept, color in zip(["Eng", "Science"],
-                        ["#6366f1", "#ec4899"]):
-    subset = df[df["department"] == dept]
-    ax.scatter(subset["hours_study"], subset["score"],
-               alpha=0.4, s=25, color=color, label=dept)
-    # Add regression line manually
-    coeffs = np.polyfit(subset["hours_study"], subset["score"], 1)
-    x_line = np.linspace(subset["hours_study"].min(), subset["hours_study"].max(), 50)
-    ax.plot(x_line, np.polyval(coeffs, x_line), color=color, linewidth=2)
-ax.set_title("Score vs Hours Studied (with regression)")
-ax.set_xlabel("Hours of Study per Day")
-ax.set_ylabel("Score")
-ax.legend()
+sample = df.sample(200, random_state=42)
+sns.scatterplot(data=sample, x="tenure", y="monthly_charges",
+                hue="churn_label",
+                style="churn_label",
+                palette={"Retained": "#10b981", "Churned": "#ef4444"},
+                size="num_products",
+                sizes=(20, 150),
+                alpha=0.7, ax=ax)
+ax.set_title("Tenure vs Charges\n(hue=churn, size=products)", fontweight="bold")
+ax.set_xlabel("Tenure (months)")
+ax.set_ylabel("Monthly Charges ($)")
 
-# 4. Heatmap of correlations
+# ── 5. heatmap: confusion matrix style ───────────────────────────────────────
 ax = axes[1, 1]
-numeric_df = df[["score", "hours_study"]].copy()
-numeric_df["dept_num"] = pd.Categorical(df["department"]).codes
-numeric_df["year_num"] = pd.Categorical(df["year"]).codes
-corr = numeric_df.corr()
-sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm",
-            ax=ax, square=True, linewidths=0.5,
-            cbar_kws={"shrink": 0.8})
-ax.set_title("Correlation Heatmap")
+# Build a cross-tabulation
+pivot = df.pivot_table(
+    values="monthly_charges",
+    index="segment",
+    columns="contract",
+    aggfunc="mean"
+)
+sns.heatmap(pivot, annot=True, fmt=".0f", cmap="YlOrRd",
+            ax=ax, linewidths=0.5, linecolor="white",
+            cbar_kws={"label": "Avg Monthly Charges ($)"})
+ax.set_title("Avg Monthly Charges\nSegment × Contract Heatmap", fontweight="bold")
+ax.set_xlabel("Contract")
+ax.set_ylabel("Segment")
+
+# ── 6. stripplot + summary stats ─────────────────────────────────────────────
+ax = axes[1, 2]
+palette_seg = {"SMB": "#6366f1", "Enterprise": "#f59e0b", "Consumer": "#10b981"}
+sns.stripplot(data=df.sample(150, random_state=7),
+              x="segment", y="num_products",
+              hue="segment", palette=palette_seg,
+              jitter=0.25, alpha=0.4, size=4, ax=ax,
+              legend=False)
+# Overlay mean markers
+for i, seg in enumerate(["SMB", "Enterprise", "Consumer"]):
+    mean_val = df[df["segment"] == seg]["num_products"].mean()
+    ax.hlines(mean_val, i - 0.3, i + 0.3,
+              colors=palette_seg[seg], linewidth=3, label=f"{seg} mean={mean_val:.1f}")
+ax.set_title("Products per Segment\n(strip + mean overlay)", fontweight="bold")
+ax.set_ylabel("Number of Products")
+ax.legend(fontsize=8)
 
 plt.tight_layout()
 plt.show()
-`} packages={["numpy", "pandas", "matplotlib"]} />
 
-## Tick Formatting, Styling & Saving
+# Summary stats
+print("Churn rate by contract:")
+for c in df["contract"].unique():
+    rate = df[df["contract"] == c]["churn"].mean()
+    n = len(df[df["contract"] == c])
+    print(f"  {c:18s}: {rate:.1%} (n={n})")
+`} packages={["numpy", "pandas", "matplotlib", "seaborn"]} height={560} title="Seaborn Statistical Visualization" />
+
+---
+
+## Real Project: EDA Dashboard
 
 <PythonPlayground code={String.raw`import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import matplotlib.ticker as ticker
 import numpy as np
 
-# Publication-quality styling
-plt.rcParams.update({
-    "font.family": "sans-serif",
-    "font.size": 11,
-    "axes.spines.top": False,
-    "axes.spines.right": False,
-    "axes.grid": True,
-    "grid.alpha": 0.3,
-    "figure.dpi": 100,
-})
+# ── Simulate 1-year daily sales dataset ───────────────────────────────────────
+rng = np.random.default_rng(2024)
+N_DAYS = 365
 
-rng = np.random.default_rng(42)
-fig, axes = plt.subplots(1, 2, figsize=(11, 5))
+# Weekly + monthly seasonality + trend + noise
+t = np.arange(N_DAYS)
+trend = 1000 + t * 2.5
+weekly = 200 * np.sin(2 * np.pi * t / 7)         # weekly cycle
+seasonal = 500 * np.sin(2 * np.pi * t / 365 - 1) # annual cycle
+noise = rng.standard_normal(N_DAYS) * 150
+sales = trend + weekly + seasonal + noise
+sales = np.clip(sales, 200, None)
 
-# Left: Revenue chart with custom tick formatting
-ax = axes[0]
-months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-revenue = rng.integers(80_000, 200_000, 12).astype(float)
-ax.bar(months, revenue, color="#6366f1", alpha=0.85, edgecolor="white")
-ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, p: f"{chr(36)}{x/1000:.0f}K"))
-ax.set_title("Monthly Revenue", fontweight="bold", pad=15)
-ax.set_ylabel("Revenue")
-ax.tick_params(axis="x", rotation=45)
-# Annotate max
-max_idx = revenue.argmax()
-ax.annotate(
-    f"Peak: {chr(36)}{revenue[max_idx]/1000:.0f}K",
-    xy=(max_idx, revenue[max_idx]),
-    xytext=(max_idx - 2.5, revenue[max_idx] * 1.05),
-    arrowprops=dict(arrowstyle="->", color="#ec4899"),
-    color="#ec4899", fontweight="bold"
-)
+# Day-of-week effect
+dow = t % 7   # 0=Mon, 6=Sun
+dow_names = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
-# Right: Multi-line with legend and log scale
-ax = axes[1]
-x = np.linspace(1, 100, 200)
-models = {
-    "O(log n)":  np.log2(x),
-    "O(n)":      x / 20,
-    "O(n log n)": x * np.log2(x) / 150,
-    "O(n²)":     x**2 / 3000,
+# Monthly aggregation
+months = t // 30  # rough months (0-11)
+month_names = ["Jan","Feb","Mar","Apr","May","Jun",
+               "Jul","Aug","Sep","Oct","Nov","Dec"]
+
+# ── Layout ─────────────────────────────────────────────────────────────────────
+fig = plt.figure(figsize=(15, 11))
+fig.patch.set_facecolor("#0a0a12")
+gs = gridspec.GridSpec(3, 3, figure=fig,
+                        hspace=0.5, wspace=0.4,
+                        top=0.91, bottom=0.06)
+
+def dark_style(ax, title, xlabel="", ylabel=""):
+    ax.set_facecolor("#0f0f1a")
+    ax.tick_params(colors="#94a3b8", labelsize=8)
+    ax.set_title(title, color="white", fontweight="bold", fontsize=10)
+    if xlabel: ax.set_xlabel(xlabel, color="#94a3b8", fontsize=8)
+    if ylabel: ax.set_ylabel(ylabel, color="#94a3b8", fontsize=8)
+    for sp in ax.spines.values():
+        sp.set_edgecolor("#334155")
+
+# Panel 1: Full time series (spans 2 columns)
+ax_ts = fig.add_subplot(gs[0, :2])
+ax_ts.plot(t, sales, color="#334155", linewidth=1.0, alpha=0.6)
+window = 7
+ma7 = np.convolve(sales, np.ones(window)/window, mode="valid")
+ax_ts.plot(t[window//2:len(ma7)+window//2], ma7,
+           color="#6366f1", linewidth=2.5, label="7-day MA")
+window30 = 30
+ma30 = np.convolve(sales, np.ones(window30)/window30, mode="valid")
+ax_ts.plot(t[window30//2:len(ma30)+window30//2], ma30,
+           color="#f59e0b", linewidth=2.5, label="30-day MA")
+ax_ts.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x,p: f"{chr(36)}{x:,.0f}"))
+ax_ts.legend(facecolor="#1e1e2e", edgecolor="#334155", labelcolor="white", fontsize=9)
+ax_ts.grid(True, alpha=0.1, color="white")
+dark_style(ax_ts, "Daily Revenue with Moving Averages",
+           ylabel="Daily Revenue")
+
+# Panel 2: Stats card (top right)
+ax_stats = fig.add_subplot(gs[0, 2])
+ax_stats.set_facecolor("#0f0f1a")
+ax_stats.axis("off")
+stats = {
+    "Total Revenue": f"{chr(36)}{sales.sum()/1e6:.2f}M",
+    "Daily Average":  f"{chr(36)}{sales.mean():,.0f}",
+    "Best Day":       f"{chr(36)}{sales.max():,.0f}",
+    "Worst Day":      f"{chr(36)}{sales.min():,.0f}",
+    "YoY Growth":     "+18.3%",
+    "Std Deviation":  f"{chr(36)}{sales.std():,.0f}",
 }
-styles = ["-", "--", "-.", ":"]
-colors = ["#6366f1", "#10b981", "#f59e0b", "#ec4899"]
-for (name, y), style, color in zip(models.items(), styles, colors):
-    ax.plot(x, y, label=name, linestyle=style, color=color, linewidth=2.5)
-ax.set_yscale("log")
-ax.set_title("Algorithm Complexity", fontweight="bold", pad=15)
-ax.set_xlabel("Input Size (n)")
-ax.set_ylabel("Operations (log scale)")
-ax.legend(loc="upper left")
-ax.yaxis.set_major_formatter(ticker.LogFormatterMathtext())
+ax_stats.set_title("Key Metrics", color="white", fontweight="bold", fontsize=10, pad=5)
+for i, (k, v) in enumerate(stats.items()):
+    y = 0.85 - i * 0.14
+    ax_stats.text(0.05, y, k, transform=ax_stats.transAxes,
+                  color="#94a3b8", fontsize=9)
+    ax_stats.text(0.95, y, v, transform=ax_stats.transAxes,
+                  color="#6366f1", fontsize=10, fontweight="bold", ha="right")
 
-plt.tight_layout()
+# Panel 3: Day-of-week analysis
+ax_dow = fig.add_subplot(gs[1, 0])
+dow_sales = [sales[dow == d].mean() for d in range(7)]
+bar_colors = ["#6366f1" if d < 5 else "#f59e0b" for d in range(7)]
+bars = ax_dow.bar(dow_names, dow_sales, color=bar_colors, alpha=0.85, edgecolor="#0a0a12")
+ax_dow.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x,p: f"{chr(36)}{x:,.0f}"))
+dark_style(ax_dow, "Avg Revenue by Day", ylabel="Avg Revenue")
+ax_dow.grid(True, alpha=0.1, color="white", axis="y")
+
+# Panel 4: Monthly totals
+ax_monthly = fig.add_subplot(gs[1, 1])
+monthly_totals = [sales[months == m].sum() for m in range(12)]
+month_colors = plt.cm.viridis(np.linspace(0.2, 0.9, 12))
+ax_monthly.bar(month_names, monthly_totals, color=month_colors, edgecolor="#0a0a12")
+ax_monthly.tick_params(axis="x", rotation=45)
+ax_monthly.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x,p: f"{chr(36)}{x/1e3:.0f}K"))
+dark_style(ax_monthly, "Monthly Revenue", ylabel="Total Revenue")
+ax_monthly.grid(True, alpha=0.1, color="white", axis="y")
+
+# Panel 5: Distribution
+ax_dist = fig.add_subplot(gs[1, 2])
+ax_dist.hist(sales, bins=35, color="#6366f1", alpha=0.75,
+             density=True, edgecolor="#0a0a12", linewidth=0.5)
+# Manual KDE
+bw = 1.06 * np.std(sales) * len(sales)**(-0.2)
+x_g = np.linspace(sales.min()-100, sales.max()+100, 300)
+kde = np.mean(np.exp(-0.5*((x_g[:,None]-sales[None,:])/bw)**2)/(bw*np.sqrt(2*np.pi)), axis=1)
+ax_dist.plot(x_g, kde, color="#f59e0b", linewidth=2.5)
+ax_dist.axvline(np.median(sales), color="#10b981", linewidth=2,
+                linestyle="--", label=f"Median: {chr(36)}{np.median(sales):,.0f}")
+ax_dist.legend(facecolor="#1e1e2e", edgecolor="#334155", labelcolor="white", fontsize=8)
+dark_style(ax_dist, "Revenue Distribution", xlabel="Daily Revenue", ylabel="Density")
+
+# Panel 6: Seasonal decomposition (trend + residual)
+ax_trend = fig.add_subplot(gs[2, :2])
+residuals = sales - np.convolve(sales, np.ones(30)/30, mode="same")
+ax_trend.bar(t, residuals,
+             color=["#10b981" if r >= 0 else "#ef4444" for r in residuals],
+             alpha=0.7, width=1.0)
+ax_trend.axhline(0, color="#94a3b8", linewidth=1)
+ax_trend.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x,p: f"{chr(36)}{x:+,.0f}"))
+dark_style(ax_trend, "Residuals (Actual - 30-day MA)",
+           xlabel="Day of Year", ylabel="Deviation")
+ax_trend.grid(True, alpha=0.1, color="white", axis="y")
+
+# Panel 7: Autocorrelation (manual)
+ax_acf = fig.add_subplot(gs[2, 2])
+max_lag = 30
+sales_centered = sales - sales.mean()
+variance = np.var(sales)
+acf_values = [np.mean(sales_centered[:N_DAYS-k] * sales_centered[k:]) / variance
+              for k in range(max_lag + 1)]
+lags = range(max_lag + 1)
+ax_acf.vlines(lags, 0, acf_values, color="#6366f1", linewidth=2, alpha=0.8)
+ax_acf.axhline(0, color="#94a3b8", linewidth=0.8)
+ax_acf.axhline(1.96/np.sqrt(N_DAYS), color="#f59e0b", linewidth=1.5,
+               linestyle="--", alpha=0.7)
+ax_acf.axhline(-1.96/np.sqrt(N_DAYS), color="#f59e0b", linewidth=1.5,
+               linestyle="--", alpha=0.7, label="95% CI")
+ax_acf.scatter([7, 14, 21], [acf_values[7], acf_values[14], acf_values[21]],
+               color="#ec4899", zorder=5, s=50, label="Weekly peaks")
+ax_acf.legend(facecolor="#1e1e2e", edgecolor="#334155", labelcolor="white", fontsize=8)
+dark_style(ax_acf, "Autocorrelation (weekly spike)", xlabel="Lag (days)", ylabel="ACF")
+
+fig.suptitle("Sales EDA Dashboard — 365 Days", color="white",
+             fontsize=14, fontweight="bold")
 plt.show()
 
-# How to save in real code:
-# fig.savefig("output.png", dpi=150, bbox_inches="tight", facecolor="white")
-print("In production: fig.savefig('chart.png', dpi=150, bbox_inches='tight')")
-`} packages={["numpy", "pandas", "matplotlib"]} />
+print(f"Peak day: Day {sales.argmax()+1} — {chr(36)}{sales.max():,.0f}")
+print(f"ACF at lag 7: {acf_values[7]:.3f} (weekly seasonality strength)")
+`} packages={["numpy", "matplotlib"]} height={580} title="Complete EDA Dashboard" />
 
-## PROJECT: Exploratory Data Analysis Dashboard
+---
+
+## Chart Selection Guide
+
+```
+Question                     Best chart             Avoid
+─────────────────────────────────────────────────────────────────────────
+How does X change over time? Line chart             Bar chart (time ≥ 8 points)
+How do categories compare?   Bar/lollipop chart     Pie (>4 categories)
+What's my distribution?      Histogram + KDE        Bar chart of averages
+How do 2+ groups compare?    Box/violin plot        Multiple histograms
+How do two vars relate?      Scatter                Bar chart
+Show part-to-whole?          Stacked bar (≤5)       Pie (>4 slices)
+Show 3 variables?            Scatter(color+size)    3D plot (almost never)
+High-dim feature matrix?     Heatmap                Anything else
+Show raw data + summary?     Strip/swarm + box      Box alone (hides skew)
+Asymmetric matrix?           Heatmap (half only)    Full matrix (redundant)
+```
+
+---
+
+## Exercises
+
+**Exercise 1 — Histogram Bin Size Effect**
+Generate 1000 points from a bimodal distribution (mix of two normals). Plot the same data with bin counts: 5, 15, 30, 100, 500. Observe how bin choice can hide or reveal the bimodality. Add a KDE overlay using Silverman's rule on each.
 
 <PythonPlayground code={String.raw`import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 rng = np.random.default_rng(42)
-N = 200
-
-# Generate realistic student dataset
-demographics = rng.choice(["Group A", "Group B", "Group C"], N, p=[0.4, 0.35, 0.25])
-hours_study = np.clip(rng.normal(6, 2.5, N), 0, 14)
-base_score = 45 + hours_study * 3.5 + rng.normal(0, 8, N)
-# Group effect
-group_effect = {"Group A": 0, "Group B": 5, "Group C": -3}
-score = np.array([
-    base_score[i] + group_effect[demographics[i]]
-    for i in range(N)
+data = np.concatenate([
+    rng.standard_normal(500) * 5 + 45,   # Peak 1
+    rng.standard_normal(500) * 5 + 65,   # Peak 2
 ])
-score = np.clip(score, 20, 100)
 
-df = pd.DataFrame({
-    "score": score,
-    "hours": hours_study,
-    "group": demographics,
-})
+bin_counts = [5, 15, 30, 100, 500]
+fig, axes = plt.subplots(1, len(bin_counts), figsize=(15, 4), sharey=False)
+fig.suptitle("Bin Size Effect on Histogram — Bimodal Distribution", fontweight="bold")
 
-# ── 4-panel EDA figure ──────────────────────────────────────────────────────
-fig, axes = plt.subplots(2, 2, figsize=(13, 10))
-fig.suptitle("Student Performance — Exploratory Analysis\n(n=200 students)",
-             fontsize=15, fontweight="bold")
-palette = {"Group A": "#6366f1", "Group B": "#f59e0b", "Group C": "#10b981"}
+def kde(data, x, bw):
+    return np.mean(np.exp(-0.5*((x[:,None]-data[None,:])/bw)**2)/(bw*np.sqrt(2*np.pi)), axis=1)
 
-# Panel 1: Score distribution (histogram + KDE per group)
-ax1 = axes[0, 0]
-for group, color in palette.items():
-    vals = df[df["group"] == group]["score"].values
-    ax1.hist(vals, bins=15, alpha=0.45, color=color, density=True, label=group)
-    # Simple KDE
-    x_grid = np.linspace(20, 100, 200)
-    bw = 4.0
-    kde = np.mean(
-        np.exp(-0.5 * ((x_grid[:, None] - vals[None, :]) / bw)**2) / (bw * np.sqrt(2*np.pi)),
-        axis=1
-    )
-    ax1.plot(x_grid, kde, color=color, linewidth=2.5)
-ax1.axvline(df["score"].mean(), color="black", linewidth=1.5,
-            linestyle="--", label=f"Overall mean: {df['score'].mean():.1f}")
-ax1.set_title("Score Distribution by Group", fontweight="bold")
-ax1.set_xlabel("Exam Score")
-ax1.set_ylabel("Density")
-ax1.legend(fontsize=9)
-ax1.spines[["top","right"]].set_visible(False)
+x_g = np.linspace(data.min()-5, data.max()+5, 300)
+bw = 1.06 * data.std() * len(data)**(-0.2)
+kde_vals = kde(data, x_g, bw)
 
-# Panel 2: Score vs study hours (scatter + regression line)
-ax2 = axes[0, 1]
-for group, color in palette.items():
-    sub = df[df["group"] == group]
-    ax2.scatter(sub["hours"], sub["score"], color=color, alpha=0.55,
-                s=40, label=group, edgecolors="none")
-# Overall regression line
-coeffs = np.polyfit(df["hours"], df["score"], 1)
-x_line = np.linspace(df["hours"].min(), df["hours"].max(), 100)
-ax2.plot(x_line, np.polyval(coeffs, x_line),
-         color="black", linewidth=2.5, linestyle="-",
-         label=f"Regression (slope={coeffs[0]:.1f})")
-r2 = np.corrcoef(df["hours"], df["score"])[0, 1]**2
-ax2.set_title(f"Score vs Study Hours  (R²={r2:.2f})", fontweight="bold")
-ax2.set_xlabel("Daily Study Hours")
-ax2.set_ylabel("Exam Score")
-ax2.legend(fontsize=9)
-ax2.spines[["top","right"]].set_visible(False)
-
-# Panel 3: Box plot by group
-ax3 = axes[1, 0]
-data_by_group = [df[df["group"] == g]["score"].values for g in palette.keys()]
-bp = ax3.boxplot(data_by_group, patch_artist=True, notch=False,
-                 medianprops=dict(color="white", linewidth=2.5))
-for patch, color in zip(bp["boxes"], palette.values()):
-    patch.set_facecolor(color)
-    patch.set_alpha(0.75)
-ax3.set_xticklabels(list(palette.keys()))
-ax3.set_title("Score Distribution by Group (Box Plot)", fontweight="bold")
-ax3.set_xlabel("Group")
-ax3.set_ylabel("Exam Score")
-ax3.grid(True, axis="y", alpha=0.3)
-ax3.spines[["top","right"]].set_visible(False)
-
-# Panel 4: Correlation heatmap
-ax4 = axes[1, 1]
-# Build a small numeric feature matrix
-feature_matrix = pd.DataFrame({
-    "Score": df["score"],
-    "Hours": df["hours"],
-    "IsGroupA": (df["group"] == "Group A").astype(float),
-    "IsGroupB": (df["group"] == "Group B").astype(float),
-})
-corr = feature_matrix.corr()
-im = ax4.imshow(corr.values, cmap="coolwarm", vmin=-1, vmax=1)
-fig.colorbar(im, ax=ax4, shrink=0.75, label="Pearson r")
-ax4.set_xticks(range(len(corr.columns)))
-ax4.set_yticks(range(len(corr.columns)))
-ax4.set_xticklabels(corr.columns, rotation=35, ha="right", fontsize=9)
-ax4.set_yticklabels(corr.columns, fontsize=9)
-for i in range(len(corr)):
-    for j in range(len(corr)):
-        ax4.text(j, i, f"{corr.iloc[i,j]:.2f}", ha="center", va="center",
-                 fontsize=10, color="white" if abs(corr.iloc[i,j]) > 0.5 else "black")
-ax4.set_title("Feature Correlation Heatmap", fontweight="bold")
+for ax, bins in zip(axes, bin_counts):
+    ax.hist(data, bins=bins, density=True, color="#6366f1", alpha=0.5,
+            edgecolor="white", linewidth=0.3)
+    ax.plot(x_g, kde_vals, color="#f59e0b", linewidth=2)
+    ax.set_title(f"bins={bins}", fontweight="bold")
+    ax.spines[["top","right"]].set_visible(False)
+    if bins <= 5:
+        ax.set_xlabel("Note: bimodality hidden!")
+    elif bins >= 500:
+        ax.set_xlabel("Note: noisy, overfit!")
+    else:
+        ax.set_xlabel("Score")
 
 plt.tight_layout()
 plt.show()
-`} packages={["numpy", "pandas", "matplotlib"]} />
 
-## PROJECT: Time Series — Stock Price with Moving Averages
+print("Key insight: bins=15-30 reveals the bimodal structure.")
+print("Too few bins → obscures shape. Too many → noise dominates.")
+`} packages={["numpy", "matplotlib"]} height={320} title="Exercise 1 — Bin Size Effect" />
+
+**Exercise 2 — Broken Y-axis (Deliberate Misleading Chart)**
+Plot a bar chart where the differences look huge because the y-axis starts at 99.5% instead of 0%. Then fix it to start at 0%. Observe how axis truncation creates false urgency. Write a rule about when truncating the y-axis is acceptable (spoiler: almost never for bar charts).
+
+**Exercise 3 — Custom Colormap**
+Create a custom diverging colormap from `#ef4444` (red) → `white` → `#6366f1` (purple). Apply it to a correlation heatmap of 5 features from a random dataset. Ensure the color center is exactly at 0 using `vmin`/`vmax`.
+
+**Exercise 4 — Animated Chart**
+Using `matplotlib.animation.FuncAnimation`, create an animation of a sine wave where the frequency increases from 0.5 Hz to 5 Hz over 50 frames. Save as a GIF. Note: `FuncAnimation` works in notebook environments; the playground saves frames instead.
 
 <PythonPlayground code={String.raw`import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
-rng = np.random.default_rng(99)
+# Simulate animation by saving key frames
+t = np.linspace(0, 4 * np.pi, 500)
+frequencies = np.linspace(0.5, 5.0, 8)
 
-# Simulate a stock price (geometric Brownian motion)
-days = 252  # one trading year
-dt = 1 / days
-mu = 0.15     # annual drift (15%)
-sigma = 0.25  # annual volatility (25%)
+fig, axes = plt.subplots(2, 4, figsize=(14, 6))
+fig.suptitle("Animation Frames: Increasing Sine Wave Frequency", fontweight="bold")
 
-returns = np.exp((mu - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * rng.standard_normal(days))
-price = 100 * np.cumprod(returns)
-
-dates = pd.date_range("2024-01-02", periods=days, freq="B")
-df = pd.DataFrame({"price": price}, index=dates)
-df["ma20"]  = df["price"].rolling(20).mean()
-df["ma50"]  = df["price"].rolling(50).mean()
-df["upper"] = df["price"].rolling(20).mean() + 2 * df["price"].rolling(20).std()
-df["lower"] = df["price"].rolling(20).mean() - 2 * df["price"].rolling(20).std()
-
-fig, axes = plt.subplots(2, 1, figsize=(13, 8),
-                          gridspec_kw={"height_ratios": [3, 1]})
-fig.suptitle("Simulated Stock Price Analysis — 2024", fontsize=14, fontweight="bold")
-
-# Top: Price + moving averages + Bollinger bands
-ax1 = axes[0]
-ax1.fill_between(df.index, df["lower"], df["upper"], alpha=0.12,
-                  color="#6366f1", label="Bollinger Bands (±2σ)")
-ax1.plot(df.index, df["price"],  color="#94a3b8", linewidth=1.2, alpha=0.9, label="Price")
-ax1.plot(df.index, df["ma20"],   color="#6366f1", linewidth=2,   label="MA20")
-ax1.plot(df.index, df["ma50"],   color="#f59e0b", linewidth=2,   label="MA50")
-ax1.set_ylabel("Price ($)")
-ax1.legend(loc="upper left", fontsize=9)
-ax1.spines[["top","right"]].set_visible(False)
-ax1.grid(True, alpha=0.2)
-
-# Annotate max and min
-max_day = df["price"].idxmax()
-min_day = df["price"].idxmin()
-ax1.annotate(f"Peak {chr(36)}{df.at[max_day,'price']:.2f}",
-             xy=(max_day, df.at[max_day,"price"]),
-             xytext=(max_day, df.at[max_day,"price"] * 1.06),
-             ha="center", fontsize=9, color="#10b981", fontweight="bold",
-             arrowprops=dict(arrowstyle="->", color="#10b981"))
-ax1.annotate(f"Low {chr(36)}{df.at[min_day,'price']:.2f}",
-             xy=(min_day, df.at[min_day,"price"]),
-             xytext=(min_day, df.at[min_day,"price"] * 0.91),
-             ha="center", fontsize=9, color="#ef4444", fontweight="bold",
-             arrowprops=dict(arrowstyle="->", color="#ef4444"))
-
-# Bottom: Daily returns histogram
-daily_returns = df["price"].pct_change().dropna() * 100
-ax2 = axes[1]
-n_neg = (daily_returns < 0).sum()
-n_pos = (daily_returns >= 0).sum()
-ax2.bar(range(len(daily_returns)),
-        daily_returns.values,
-        color=["#ef4444" if r < 0 else "#10b981" for r in daily_returns.values],
-        alpha=0.7, width=1.0)
-ax2.axhline(0, color="black", linewidth=0.8)
-ax2.set_xlabel("Trading Day")
-ax2.set_ylabel("Daily Return (%)")
-ax2.set_title(f"Daily Returns  ({n_pos} positive / {n_neg} negative)", fontsize=10)
-ax2.spines[["top","right"]].set_visible(False)
+for ax, freq in zip(axes.flat, frequencies):
+    y = np.sin(freq * t) * np.exp(-t * 0.1)
+    ax.plot(t, y, color="#6366f1", linewidth=1.8)
+    ax.set_title(f"f = {freq:.1f} Hz", fontweight="bold", fontsize=10)
+    ax.set_ylim(-1.1, 1.1)
+    ax.axhline(0, color="#94a3b8", linewidth=0.5, linestyle=":")
+    ax.spines[["top","right"]].set_visible(False)
+    ax.set_yticks([-1, 0, 1])
 
 plt.tight_layout()
 plt.show()
 
-print(f"Final price: {chr(36)}{price[-1]:.2f}  (started at $100.00)")
-print(f"Annual return: {(price[-1]/100 - 1)*100:+.1f}%")
-print(f"Max drawdown: {((price / price.cummax() - 1).min() * 100):.1f}%")
-`} packages={["numpy", "pandas", "matplotlib"]} />
+print("In real code with FuncAnimation:")
+print("""
+from matplotlib.animation import FuncAnimation
 
-## Key Takeaways
+fig, ax = plt.subplots()
+line, = ax.plot([], [], lw=2)
+t = np.linspace(0, 4*np.pi, 500)
 
-- **Always use the OO API for scripts**: `fig, ax = plt.subplots()` gives explicit handles and is immune to the "current axes" state bugs that plague `plt.*` code
-- **`fig.tight_layout()` and `fig.savefig(bbox_inches='tight')`**: these two calls fix 90% of "labels are cut off" problems — make them habits
-- **`ax.set_*` methods do everything**: `set_title`, `set_xlabel`, `set_xlim`, `set_yscale('log')`, `set_aspect('equal')` — prefer these over the `plt.*` equivalents which may act on the wrong Axes
-- **Annotations require `xy` (data point) and `xytext` (label position)**: always specify both; `arrowprops` controls the connector style between them
-- **GridSpec enables complex multi-panel figures**: use `gridspec_kw={"height_ratios":[3,1]}` in `plt.subplots()` for simple cases, or `gridspec.GridSpec` for full control
-- **Seaborn's `set_theme` changes matplotlib's global defaults**: call it once at the top — it affects all subsequent plots including plain matplotlib ones
-- **`plt.show()` triggers rendering in the playground**: the component captures the figure at this call; without it, nothing renders
-- **Color consistency tells a story**: assign colors to categories once (e.g., a `palette` dict) and reuse across all panels — inconsistent colors confuse readers even when other design is perfect
+def update(frame):
+    freq = 0.5 + frame * 0.09
+    line.set_data(t, np.sin(freq * t))
+    ax.set_title(f"f = {freq:.2f} Hz")
+    return line,
+
+ani = FuncAnimation(fig, update, frames=50, interval=100, blit=True)
+ani.save("sine.gif", writer="pillow")
+""")
+`} packages={["numpy", "matplotlib"]} height={320} title="Exercise 4 — Animation Frames" />
+
+**Exercise 5 — Bubble Chart**
+Create a bubble chart showing countries: x = GDP per capita, y = Life expectancy, bubble size = population, color = continent. Use `np.log` to compress the population scale for bubble sizes. Include labels for the 5 most populous countries.
+
+**Exercise 6 — Facet Grid**
+Given a dataset with 3 numerical features and 1 categorical (4 levels), create a 4×3 grid of histograms — one row per category, one column per feature. Use `plt.subplots(4, 3, sharex="col")` so x-axes align by feature. Add a column title and row title using `fig.text`.
+
+<PythonPlayground code={String.raw`import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
+rng = np.random.default_rng(42)
+N = 300
+categories = ["Group A", "Group B", "Group C", "Group D"]
+palette = ["#6366f1", "#f59e0b", "#10b981", "#ec4899"]
+
+# Each group has different distributions for each feature
+data = {}
+for i, cat in enumerate(categories):
+    data[cat] = {
+        "Age":     rng.normal(30 + i*8, 5 + i, N//4),
+        "Score":   np.clip(rng.normal(50 + i*10, 15, N//4), 0, 100),
+        "Income":  np.exp(rng.normal(10.5 + i*0.15, 0.4, N//4)),
+    }
+
+features = ["Age", "Score", "Income"]
+fig, axes = plt.subplots(4, 3, figsize=(12, 10), sharex="col")
+fig.suptitle("Facet Grid — Distribution by Group and Feature", fontsize=13, fontweight="bold")
+
+for row, (cat, color) in enumerate(zip(categories, palette)):
+    for col, feature in enumerate(features):
+        ax = axes[row, col]
+        vals = data[cat][feature]
+        ax.hist(vals, bins=20, color=color, alpha=0.75, edgecolor="white", linewidth=0.3)
+        ax.set_ylabel(cat if col == 0 else "", fontsize=9, fontweight="bold", color=color)
+        if row == 0:
+            ax.set_title(feature, fontweight="bold")
+        if row == 3:
+            ax.set_xlabel(feature)
+        ax.spines[["top","right"]].set_visible(False)
+        ax.tick_params(labelsize=7)
+
+plt.tight_layout()
+plt.show()
+
+print("sharex='col': all histograms in same column share x-axis range")
+print("This makes it easy to compare distributions across groups")
+`} packages={["numpy", "matplotlib"]} height={380} title="Exercise 6 — Facet Grid" />
+
+**Exercise 7 — Publication-Quality Figure**
+Reproduce a Tufte-style minimalist chart: sparse gridlines, no chart border (remove all 4 spines), direct labels instead of legend, a reference line with a text annotation, and high contrast. Save at 300 DPI. The chart shows A/B test conversion rates with 95% confidence intervals over 14 days.
+
+**Exercise 8 — Heatmap from Scratch**
+Without seaborn, implement a correlation heatmap from a NumPy matrix. Annotate every cell with the value, color cells with a diverging colormap centered at 0, add row/column labels, and include a colorbar. Handle the edge case where `corr[i,i] = 1.0` (diagonal) specially with a different annotation.
+
+<PythonPlayground code={String.raw`import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
+rng = np.random.default_rng(42)
+n_features = 6
+feature_names = ["Revenue", "Sessions", "Conv. Rate", "Avg Order", "Bounce", "LTV"]
+
+# Generate a realistic correlation matrix
+# Start with random data that has some structure
+raw = rng.standard_normal((200, n_features))
+raw[:, 1] = raw[:, 0] + rng.standard_normal(200) * 0.5       # Sessions ~ Revenue
+raw[:, 3] = raw[:, 0] * 0.6 + rng.standard_normal(200) * 0.8 # AvgOrder ~ Revenue
+raw[:, 4] = -raw[:, 2] + rng.standard_normal(200) * 0.4      # Bounce ~ -ConvRate
+corr = np.corrcoef(raw.T)
+
+fig, ax = plt.subplots(figsize=(8, 7))
+n = len(corr)
+
+# Your task: implement the full heatmap below!
+# Steps:
+# 1. ax.imshow(corr, cmap="coolwarm", vmin=-1, vmax=1)
+# 2. fig.colorbar(im, label="Pearson r")
+# 3. Loop over all (i,j) to add text annotations
+# 4. Set tick labels
+# 5. Style diagonal cells differently (r=1.0 always)
+
+# Starter code:
+im = ax.imshow(corr, cmap="coolwarm", vmin=-1, vmax=1)
+fig.colorbar(im, ax=ax, label="Pearson r", shrink=0.8)
+
+ax.set_xticks(range(n))
+ax.set_yticks(range(n))
+ax.set_xticklabels(feature_names, rotation=35, ha="right")
+ax.set_yticklabels(feature_names)
+
+for i in range(n):
+    for j in range(n):
+        val = corr[i, j]
+        text_color = "white" if abs(val) > 0.5 else "black"
+        weight = "bold" if i == j else "normal"
+        annotation = "1.00" if i == j else f"{val:.2f}"
+        ax.text(j, i, annotation, ha="center", va="center",
+                fontsize=9, color=text_color, fontweight=weight)
+
+ax.set_title("Feature Correlation Matrix", fontweight="bold", pad=15)
+plt.tight_layout()
+plt.show()
+
+print("Interpretation:")
+for i in range(n):
+    for j in range(i+1, n):
+        if abs(corr[i,j]) > 0.4:
+            direction = "positive" if corr[i,j] > 0 else "negative"
+            print(f"  {feature_names[i]:12s} ↔ {feature_names[j]:12s}: "
+                  f"{corr[i,j]:+.2f} ({direction})")
+`} packages={["numpy", "matplotlib"]} height={380} title="Exercise 8 — Correlation Heatmap from Scratch" />

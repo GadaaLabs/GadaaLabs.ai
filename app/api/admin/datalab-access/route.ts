@@ -6,6 +6,8 @@ import {
   grantAccess,
   revokeAccess,
   getAccessCount,
+  getPendingRequests,
+  removePendingRequest,
 } from "@/lib/datalab-access";
 
 // ---------------------------------------------------------------------------
@@ -25,7 +27,8 @@ export async function GET() {
   }
 
   const users = getAllowedUsers();
-  return NextResponse.json({ users, count: getAccessCount() });
+  const pending = getPendingRequests();
+  return NextResponse.json({ users, count: getAccessCount(), pending });
 }
 
 // ---------------------------------------------------------------------------
@@ -34,7 +37,7 @@ export async function GET() {
 // ---------------------------------------------------------------------------
 
 interface PostBody {
-  action: "grant" | "revoke";
+  action: "grant" | "revoke" | "deny";
   userId: string;
   userName?: string;
   email?: string;
@@ -84,6 +87,11 @@ export async function POST(req: NextRequest) {
       success: true,
       message: `Access revoked for user ${userId}`,
     });
+  }
+
+  if (action === "deny") {
+    removePendingRequest(userId);
+    return NextResponse.json({ success: true, message: `Request from ${userId} dismissed.` });
   }
 
   return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });

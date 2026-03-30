@@ -115,3 +115,39 @@ export function getAccessCount(): number {
 export function getAdminCount(): number {
   return ADMIN_IDS.size;
 }
+
+// ---------------------------------------------------------------------------
+// Pending access requests (in-memory queue; cleared on restart)
+// ---------------------------------------------------------------------------
+
+export interface PendingRequest {
+  userId: string;
+  userName: string;
+  email?: string;
+  requestedAt: number;
+  approvalUrl: string; // full URL the admin can click
+}
+
+const pendingRequests = new Map<string, PendingRequest>();
+
+/** Add or update a pending request from a user. */
+export function addPendingRequest(req: PendingRequest): void {
+  pendingRequests.set(req.userId, req);
+}
+
+/** Remove a pending request (called after approval or denial). */
+export function removePendingRequest(userId: string): void {
+  pendingRequests.delete(userId);
+}
+
+/** Return all pending requests, newest first. */
+export function getPendingRequests(): PendingRequest[] {
+  return Array.from(pendingRequests.values()).sort(
+    (a, b) => b.requestedAt - a.requestedAt
+  );
+}
+
+/** Number of pending requests. */
+export function getPendingCount(): number {
+  return pendingRequests.size;
+}

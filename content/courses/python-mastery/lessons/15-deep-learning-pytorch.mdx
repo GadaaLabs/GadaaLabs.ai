@@ -1,80 +1,80 @@
 ---
 title: "Deep Learning with PyTorch"
-description: "Build neural networks from first principles, then with PyTorch: tensors, autograd, custom layers, training loops, and CNNs. Implement a digit classifier and understand every line."
-duration: 34
+description: "Build neural networks from first principles in NumPy, then in PyTorch: tensors, autograd, custom layers, training loops, CNNs, optimizers, and regularization. Implement and understand every line."
+duration: 40
 order: 15
 ---
 
 ## Why Neural Networks Work
 
-The **Universal Approximation Theorem** states that a neural network with a single hidden layer and enough neurons can approximate any continuous function to arbitrary precision. This is the mathematical guarantee that deep learning rests on.
+The **Universal Approximation Theorem** (Cybenko, 1989; Hornik, 1991) guarantees that a neural network with a single hidden layer containing enough neurons can approximate any continuous function on a compact subset of Rⁿ to arbitrary precision. This is the mathematical foundation.
 
-In practice: a network is a composition of differentiable operations. Because every operation has a known derivative, we can compute the gradient of the loss with respect to every parameter — then move parameters in the direction that decreases the loss. This is the entirety of deep learning, made feasible by GPUs and automatic differentiation.
+In practice, networks succeed because of **three ideas working together:**
 
-## Anatomy of a Neural Network
+1. **Differentiable composition** — every operation in the network (matmul, ReLU, softmax) has a computable gradient. This means we can propagate error signals backward through the entire network.
 
-```
-Input Layer → [Hidden Layer 1] → [Hidden Layer 2] → ... → Output Layer
-             (weights + bias)    (weights + bias)          (weights + bias)
-             + activation        + activation              + activation
-```
+2. **Stochastic gradient descent** — we don't need the optimal parameter update at each step; a noisy direction that's *mostly correct* is enough. Given enough steps, it converges.
 
-Each layer computes:
+3. **Efficient computation** — GPUs can perform thousands of matrix multiplications in parallel. A modern GPU can compute 20+ teraFLOPs per second.
 
-```
-output = activation(W @ input + b)
-```
+The actual mechanics: a network is a parameterized function `y = f(x; θ)`. We define a **loss** `L(y, y_true)` measuring how wrong the prediction is. We compute `∂L/∂θ` for every parameter θ (via backpropagation), then subtract a small fraction of that gradient from θ. Repeat millions of times.
 
-Where `W` is the weight matrix and `b` is the bias vector. The activation introduces nonlinearity — without it, stacking layers would collapse to a single linear transformation.
+---
 
-**Common activations:**
-- **ReLU**: `max(0, x)` — fast, avoids vanishing gradients, default choice
-- **Sigmoid**: `1/(1+e^-x)` — outputs 0–1, used in binary classification output
-- **Tanh**: `(e^x - e^-x)/(e^x + e^-x)` — outputs -1–1, zero-centered
-- **Softmax**: normalizes to probability distribution, used in multi-class output
+## The Mathematics of Backpropagation
 
-## Loss Functions
-
-**Regression — Mean Squared Error:**
+Consider a 3-layer network:
 
 ```
-MSE = (1/n) * Σ(y_pred - y_true)²
+x → [W₁, b₁] → ReLU → [W₂, b₂] → ReLU → [W₃, b₃] → sigmoid → ŷ → L
 ```
 
-**Binary Classification — Binary Cross-Entropy:**
-
+Forward pass:
 ```
-BCE = -(1/n) * Σ[y*log(p) + (1-y)*log(1-p)]
-```
-
-**Multi-class — Categorical Cross-Entropy:**
-
-```
-CCE = -(1/n) * Σ Σ y_true[i,c] * log(p[i,c])
-```
-
-## Backpropagation — The Chain Rule
-
-Given a network `loss = L(f3(f2(f1(x))))`, the gradient of loss with respect to layer 1 weights is:
-
-```
-∂L/∂W1 = ∂L/∂f3 · ∂f3/∂f2 · ∂f2/∂f1 · ∂f1/∂W1
+z₁ = W₁x + b₁
+a₁ = ReLU(z₁)
+z₂ = W₂a₁ + b₂
+a₂ = ReLU(z₂)
+z₃ = W₃a₂ + b₃
+ŷ  = sigmoid(z₃)
+L  = BCE(ŷ, y)
 ```
 
-This is the chain rule applied repeatedly. Backpropagation is just an efficient algorithm that computes this by working backward from the output, reusing intermediate values.
+Backward pass (chain rule applied right to left):
+```
+∂L/∂z₃  = ŷ - y                    (BCE + sigmoid derivative cancel cleanly)
+∂L/∂W₃  = (∂L/∂z₃) · a₂ᵀ / m       (m = batch size)
+∂L/∂b₃  = mean(∂L/∂z₃)
+∂L/∂a₂  = W₃ᵀ · (∂L/∂z₃)
+∂L/∂z₂  = (∂L/∂a₂) · ReLU'(z₂)     (ReLU' = 1 if z>0 else 0)
+∂L/∂W₂  = (∂L/∂z₂) · a₁ᵀ / m
+...and so on back to W₁
+```
 
-Every modern deep learning framework (PyTorch, JAX, TensorFlow) implements **automatic differentiation** — you define the forward pass, and gradients are computed for free.
+**Key insight:** each layer only needs the gradient from the layer *above* it. No layer needs to know about any other layer. This is why deep learning frameworks (PyTorch, JAX, TensorFlow) can handle architectures of arbitrary depth — backprop is just a recursive application of the chain rule.
 
-## Neural Network from Scratch with NumPy
+---
+
+## Activation Functions — Deep Dive
 
 <PythonPlayground code={String.raw`import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
-# ── Activation functions ──────────────────────────────────────────────────────
+# ── All major activation functions and their gradients ────────────────────────
+
 def relu(x):
     return np.maximum(0, x)
 
 def relu_grad(x):
     return (x > 0).astype(float)
+
+def leaky_relu(x, alpha=0.01):
+    return np.where(x > 0, x, alpha * x)
+
+def leaky_relu_grad(x, alpha=0.01):
+    return np.where(x > 0, 1.0, alpha)
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-np.clip(x, -500, 500)))
@@ -83,499 +83,1442 @@ def sigmoid_grad(x):
     s = sigmoid(x)
     return s * (1 - s)
 
-# ── Loss ──────────────────────────────────────────────────────────────────────
-def binary_cross_entropy(y_pred, y_true):
-    eps = 1e-8
-    return -np.mean(y_true * np.log(y_pred + eps) + (1 - y_true) * np.log(1 - y_pred + eps))
+def tanh_fn(x):
+    return np.tanh(x)
 
-# ── Neural Network class ──────────────────────────────────────────────────────
-class NeuralNetwork:
-    def __init__(self, layer_sizes, lr=0.01):
-        """layer_sizes: e.g. [2, 8, 4, 1]"""
-        self.lr = lr
-        rng = np.random.default_rng(42)
-        self.weights = []
-        self.biases  = []
-        for i in range(len(layer_sizes) - 1):
-            fan_in = layer_sizes[i]
-            # He initialization for ReLU layers
-            scale = np.sqrt(2.0 / fan_in)
-            W = rng.normal(0, scale, (layer_sizes[i+1], layer_sizes[i]))
-            b = np.zeros((layer_sizes[i+1], 1))
-            self.weights.append(W)
-            self.biases.append(b)
+def tanh_grad(x):
+    return 1 - np.tanh(x)**2
 
-    def forward(self, X):
-        """X: (n_features, n_samples)"""
-        self.activations = [X]
-        self.pre_activations = []
-        A = X
-        for i, (W, b) in enumerate(zip(self.weights, self.biases)):
-            Z = W @ A + b
-            self.pre_activations.append(Z)
-            if i < len(self.weights) - 1:
-                A = relu(Z)
-            else:
-                A = sigmoid(Z)
-            self.activations.append(A)
-        return A
+def gelu(x):
+    """Gaussian Error Linear Unit — used in BERT, GPT."""
+    return 0.5 * x * (1 + np.tanh(np.sqrt(2/np.pi) * (x + 0.044715 * x**3)))
 
-    def backward(self, y_true):
-        m = y_true.shape[1]
-        dA = self.activations[-1] - y_true   # d(BCE)/d(output) combined with sigmoid grad
+def swish(x):
+    """Swish — self-gated activation used in EfficientNet."""
+    return x * sigmoid(x)
 
-        grad_W = []
-        grad_b = []
-        for i in reversed(range(len(self.weights))):
-            Z = self.pre_activations[i]
-            if i < len(self.weights) - 1:
-                dZ = dA * relu_grad(Z)
-            else:
-                dZ = dA   # BCE + sigmoid gradient cancels cleanly
-            dW = (dZ @ self.activations[i].T) / m
-            db = dZ.mean(axis=1, keepdims=True)
-            dA = self.weights[i].T @ dZ
-            grad_W.insert(0, dW)
-            grad_b.insert(0, db)
+# ── Visualize ─────────────────────────────────────────────────────────────────
+x = np.linspace(-4, 4, 500)
+fns = [
+    ("ReLU",         relu,       relu_grad,       "#6366f1"),
+    ("Leaky ReLU",   leaky_relu, leaky_relu_grad, "#f59e0b"),
+    ("Sigmoid",      sigmoid,    sigmoid_grad,    "#10b981"),
+    ("Tanh",         tanh_fn,    tanh_grad,       "#ec4899"),
+    ("GELU",         gelu,       None,            "#8b5cf6"),
+    ("Swish",        swish,      None,            "#06b6d4"),
+]
 
-        for i in range(len(self.weights)):
-            self.weights[i] -= self.lr * grad_W[i]
-            self.biases[i]  -= self.lr * grad_b[i]
+fig, axes = plt.subplots(2, 3, figsize=(14, 8))
+fig.suptitle("Activation Functions and Their Gradients", fontsize=13, fontweight="bold")
 
-    def train(self, X, y, epochs=1000, verbose=True):
-        history = []
-        for epoch in range(epochs):
-            y_pred = self.forward(X)
-            loss = binary_cross_entropy(y_pred, y)
-            history.append(loss)
-            self.backward(y)
-            if verbose and epoch % 200 == 0:
-                preds = (y_pred > 0.5).astype(int)
-                acc = (preds == y).mean()
-                print(f"  Epoch {epoch:4d}: loss={loss:.4f}, acc={acc:.3f}")
-        return history
+for ax, (name, fn, grad_fn, color) in zip(axes.flat, fns):
+    y = fn(x)
+    ax.plot(x, y, color=color, linewidth=2.5, label=fn.__name__)
+    if grad_fn is not None:
+        g = grad_fn(x)
+        ax.plot(x, g, color=color, linewidth=1.5, linestyle="--", alpha=0.6, label="gradient")
+    ax.axhline(0, color="black", linewidth=0.5)
+    ax.axvline(0, color="black", linewidth=0.5)
+    ax.set_title(name, fontweight="bold")
+    ax.set_xlim(-4, 4)
+    ax.set_ylim(-1.2, 4.2)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.2)
+    ax.spines[["top","right"]].set_visible(False)
 
-# ── XOR problem: the classic 2-layer network demo ────────────────────────────
-X_xor = np.array([[0, 0, 1, 1],
-                   [0, 1, 0, 1]])   # shape (2, 4)
-y_xor = np.array([[0, 1, 1, 0]])    # XOR output
+plt.tight_layout()
+plt.show()
 
-print("XOR truth table:")
-for i in range(4):
-    print(f"  {int(X_xor[0,i])} XOR {int(X_xor[1,i])} = {int(y_xor[0,i])}")
+print("=== Activation Function Properties ===")
+props = [
+    ("ReLU",       "Output",  "0 to inf",    "Gradient",  "0 or 1 (sparse)",       "Default choice — fast, avoids vanishing gradient"),
+    ("Leaky ReLU", "Output",  "-0.04x to x", "Gradient",  "0.01 or 1",             "Fixes dying ReLU — negative side has small gradient"),
+    ("Sigmoid",    "Output",  "0 to 1",      "Gradient",  "max 0.25 (saturates)",  "Binary output only — hidden layers: causes vanishing gradient"),
+    ("Tanh",       "Output",  "-1 to 1",     "Gradient",  "max 1.0 (saturates)",   "Zero-centered — but still saturates for large |x|"),
+    ("GELU",       "Output",  "-0.17 to x",  "Gradient",  "smooth",                "Transformers (BERT/GPT) — smooth, probabilistic gating"),
+    ("Swish",      "Output",  "-0.28 to x",  "Gradient",  "smooth",                "EfficientNet — slightly better than ReLU on deep nets"),
+]
+for name, _, output, _, gradient, notes in props:
+    print(f"\n  {name}:")
+    print(f"    Range:    {output}")
+    print(f"    Gradient: {gradient}")
+    print(f"    Use when: {notes}")
+`} packages={["numpy", "matplotlib"]} height={520} title="Activation Functions — Complete Reference" />
 
-print("\\nTraining 3-layer network on XOR...")
-net = NeuralNetwork([2, 8, 4, 1], lr=0.05)
-history = net.train(X_xor, y_xor, epochs=1000, verbose=True)
+---
 
-final_pred = net.forward(X_xor)
-print("\\nFinal predictions:")
-for i in range(4):
-    print(f"  {int(X_xor[0,i])} XOR {int(X_xor[1,i])}: pred={final_pred[0,i]:.4f}, correct={int(y_xor[0,i])}")
-print(f"\\nFinal loss: {history[-1]:.6f}")
-`} packages={["numpy"]} height={500} title="Neural Network from Scratch — XOR Problem" />
-
-## Gradient Descent Variants
+## Loss Functions — Theory and Implementation
 
 <PythonPlayground code={String.raw`import numpy as np
 
-# Simulate a simple loss surface: L(w) = (w - 3)^2 + noise
+# ── Why loss functions matter ──────────────────────────────────────────────────
+# Loss = distance metric between predictions and ground truth.
+# Different problems require different distance metrics.
+
+EPS = 1e-8   # Numerical stability: prevents log(0)
+
+# ── Regression losses ─────────────────────────────────────────────────────────
+def mse(y_pred, y_true):
+    """Mean Squared Error — penalizes large errors quadratically."""
+    return np.mean((y_pred - y_true) ** 2)
+
+def mse_grad(y_pred, y_true):
+    return 2 * (y_pred - y_true) / len(y_true)
+
+def mae(y_pred, y_true):
+    """Mean Absolute Error — robust to outliers (linear penalty)."""
+    return np.mean(np.abs(y_pred - y_true))
+
+def huber(y_pred, y_true, delta=1.0):
+    """Huber loss — MSE for small errors, MAE for large errors."""
+    diff = np.abs(y_pred - y_true)
+    return np.where(diff <= delta,
+                    0.5 * diff**2,
+                    delta * diff - 0.5 * delta**2).mean()
+
+# ── Classification losses ──────────────────────────────────────────────────────
+def binary_cross_entropy(y_pred, y_true):
+    """BCE — for binary classification (sigmoid output)."""
+    y_pred = np.clip(y_pred, EPS, 1 - EPS)
+    return -np.mean(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred))
+
+def bce_grad(y_pred, y_true):
+    """Gradient of BCE with respect to sigmoid output (combined = ŷ - y)."""
+    return y_pred - y_true
+
+def softmax(x):
+    """Softmax — converts logits to probability distribution (sums to 1)."""
+    # Subtract max for numerical stability: prevents exp overflow
+    e_x = np.exp(x - x.max(axis=-1, keepdims=True))
+    return e_x / e_x.sum(axis=-1, keepdims=True)
+
+def cross_entropy(logits, y_true_onehot):
+    """CCE — for multi-class classification (softmax output)."""
+    probs = softmax(logits)
+    return -np.mean(np.sum(y_true_onehot * np.log(probs + EPS), axis=1))
+
+def cross_entropy_grad(logits, y_true_onehot):
+    """Gradient of CCE combined with softmax = (softmax(logits) - y_true) / m."""
+    return (softmax(logits) - y_true_onehot) / len(y_true_onehot)
+
+# ── Loss surface analysis ──────────────────────────────────────────────────────
+print("=== Loss Function Comparison ===")
+print()
+
+# Perfect prediction
+y_true = np.array([1.0, 0.0, 1.0, 0.0, 1.0])
+print("Perfect predictions (y_pred ≈ y_true):")
+y_perfect = np.array([0.99, 0.01, 0.97, 0.02, 0.98])
+print(f"  MSE:  {mse(y_perfect, y_true):.6f}")
+print(f"  MAE:  {mae(y_perfect, y_true):.6f}")
+print(f"  BCE:  {binary_cross_entropy(y_perfect, y_true):.6f}")
+
+print()
+print("Mediocre predictions (random):")
 rng = np.random.default_rng(42)
+y_mediocre = rng.uniform(0.3, 0.7, 5)
+print(f"  y_pred = {y_mediocre.round(2)}")
+print(f"  MSE:  {mse(y_mediocre, y_true):.6f}")
+print(f"  BCE:  {binary_cross_entropy(y_mediocre, y_true):.6f}")
 
-def loss(w, X, y):
-    pred = X * w
-    return np.mean((pred - y) ** 2)
+print()
+print("Confidently wrong (overconfident in wrong direction):")
+y_wrong = np.array([0.01, 0.99, 0.02, 0.98, 0.01])
+print(f"  MSE:  {mse(y_wrong, y_true):.6f}")
+print(f"  BCE:  {binary_cross_entropy(y_wrong, y_true):.4f}  ← very high!")
+print()
+print("Key insight: BCE punishes confident wrong answers much more than MSE")
+print("BCE at 100% wrong confidence: log(0.01) ≈ 4.6 per sample")
+print("MSE at 100% wrong confidence: (0.01-1)^2 ≈ 0.98 per sample")
 
-def grad(w, X, y):
-    pred = X * w
-    return 2 * np.mean((pred - y) * X)
+print()
+print("=== Softmax + Cross-Entropy ===")
+# 3-class classification: cat, dog, bird
+logits = np.array([[2.1, 0.5, -0.3],   # strongly predicts class 0
+                   [0.1, 3.2,  0.4],   # strongly predicts class 1
+                   [0.8, 0.9,  2.7]])  # strongly predicts class 2
+y_onehot = np.eye(3)[[0, 1, 2]]        # each sample's true class
 
-# Toy dataset: y = 3x + noise
-X = rng.normal(size=100)
-y = 3 * X + rng.normal(scale=0.5, size=100)
+probs = softmax(logits)
+print(f"Logits:      {logits[0]}")
+print(f"Softmax out: {probs[0].round(3)}  (sums to {probs[0].sum():.3f})")
+print(f"CCE loss:    {cross_entropy(logits, y_onehot):.4f}")
 
-def sgd(w_init, X, y, lr=0.1, epochs=50):
-    w = w_init
-    history = []
-    for e in range(epochs):
-        # Stochastic: use single random sample
-        idx = rng.integers(len(X))
-        g = grad(w, X[idx:idx+1], y[idx:idx+1])
-        w -= lr * g
-        history.append((loss(w, X, y), w))
-    return history
+print()
+# Why softmax is numerically tricky
+big_logit = np.array([[1000.0, 999.0, 998.0]])
+naive_exp = np.exp(big_logit)
+print("Naive softmax on large logits: overflow!")
+print(f"  np.exp([1000, 999, 998]) = {naive_exp}")
+stable_probs = softmax(big_logit)
+print(f"  Stable softmax output: {stable_probs[0].round(4)}")
+print("  Trick: subtract max before exp — equivalent mathematically, stable numerically")
+`} packages={["numpy"]} height={500} title="Loss Functions — Theory and Implementation" />
 
-def adam(w_init, X, y, lr=0.1, epochs=50, beta1=0.9, beta2=0.999, eps=1e-8):
-    w = w_init
-    m, v, t = 0.0, 0.0, 0
-    history = []
-    for e in range(epochs):
-        idx = rng.integers(len(X))
-        g = grad(w, X[idx:idx+1], y[idx:idx+1])
-        t += 1
+---
+
+## Neural Network from Scratch — Full NumPy Implementation
+
+Building a network from scratch makes every component concrete. After this, PyTorch will feel like it's doing the tedious parts for you.
+
+<PythonPlayground code={String.raw`import numpy as np
+
+class NeuralNetwork:
+    """
+    Fully connected neural network with:
+    - Configurable architecture: any depth and width
+    - He initialization for ReLU layers
+    - Mini-batch gradient descent
+    - Gradient clipping to prevent explosion
+    - Training history tracking
+    """
+
+    def __init__(self, layer_sizes: list[int], lr: float = 0.01, clip: float = 5.0):
+        """
+        layer_sizes: [input_dim, hidden1, hidden2, ..., output_dim]
+        Example: [2, 64, 32, 1] — 2 input features, 2 hidden layers, 1 output
+        """
+        self.lr = lr
+        self.clip = clip
+        rng = np.random.default_rng(42)
+
+        self.W: list[np.ndarray] = []
+        self.b: list[np.ndarray] = []
+
+        for i in range(len(layer_sizes) - 1):
+            n_in  = layer_sizes[i]
+            n_out = layer_sizes[i + 1]
+
+            # He initialization: var = 2/fan_in
+            # Why: with ReLU, ~half the neurons are inactive, so effective fan_in ≈ fan_in/2
+            # Keeping variance at 1 through layers prevents vanishing/exploding signals
+            scale = np.sqrt(2.0 / n_in)
+            self.W.append(rng.normal(0, scale, (n_in, n_out)))
+            self.b.append(np.zeros(n_out))
+
+    def _relu(self, x: np.ndarray) -> np.ndarray:
+        return np.maximum(0, x)
+
+    def _relu_grad(self, x: np.ndarray) -> np.ndarray:
+        return (x > 0).astype(np.float64)
+
+    def _sigmoid(self, x: np.ndarray) -> np.ndarray:
+        return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
+
+    def forward(self, X: np.ndarray) -> np.ndarray:
+        """
+        X: shape (n_samples, n_features)
+        Returns: shape (n_samples, n_output)
+
+        Stores pre-activations (z) and activations (a) for backprop.
+        """
+        self._z: list[np.ndarray] = []   # Pre-activations: z = Wa + b
+        self._a: list[np.ndarray] = [X]  # Activations: a = activation(z)
+
+        A = X
+        n_layers = len(self.W)
+
+        for i in range(n_layers):
+            Z = A @ self.W[i] + self.b[i]   # (n_samples, n_out)
+            self._z.append(Z)
+
+            if i < n_layers - 1:
+                A = self._relu(Z)            # Hidden layers: ReLU
+            else:
+                A = self._sigmoid(Z)         # Output: sigmoid for binary
+
+            self._a.append(A)
+
+        return A   # shape: (n_samples, 1) for binary classification
+
+    def backward(self, y: np.ndarray) -> dict[str, float]:
+        """
+        y: shape (n_samples,) — true labels
+
+        Returns gradient norms for monitoring.
+        """
+        m = len(y)
+        y_col = y.reshape(-1, 1)
+
+        # Output layer gradient: d(BCE)/d(sigmoid output) combined = ŷ - y
+        # This elegant result: derivative of BCE w.r.t. sigmoid input cancels the sigmoid derivative
+        dA = self._a[-1] - y_col   # (n_samples, 1)
+
+        grad_norms = {}
+        n_layers = len(self.W)
+
+        for i in reversed(range(n_layers)):
+            Z = self._z[i]
+            A_prev = self._a[i]
+
+            if i < n_layers - 1:
+                # Hidden layers: apply ReLU gradient
+                dZ = dA * self._relu_grad(Z)
+            else:
+                # Output layer: sigmoid gradient already incorporated above
+                dZ = dA
+
+            # Gradient with respect to weights and biases
+            dW = A_prev.T @ dZ / m
+            db = dZ.mean(axis=0)
+
+            # Gradient clipping: prevents explosion in deep nets
+            dW_norm = np.linalg.norm(dW)
+            if dW_norm > self.clip:
+                dW = dW * (self.clip / dW_norm)
+
+            grad_norms[f"layer_{i}"] = dW_norm
+
+            # Gradient for the previous layer (chain rule)
+            dA = dZ @ self.W[i].T
+
+            # Parameter update (gradient descent)
+            self.W[i] -= self.lr * dW
+            self.b[i] -= self.lr * db
+
+        return grad_norms
+
+    def train(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        epochs: int = 1000,
+        batch_size: int = 32,
+        val_data: tuple | None = None,
+        print_every: int = 200,
+    ) -> dict:
+        """
+        Mini-batch stochastic gradient descent.
+        Returns training history.
+        """
+        n = len(X)
+        rng = np.random.default_rng(0)
+        history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
+
+        for epoch in range(epochs):
+            # Shuffle training data each epoch
+            idx = rng.permutation(n)
+            X_shuf, y_shuf = X[idx], y[idx]
+
+            # Mini-batch updates
+            for start in range(0, n, batch_size):
+                X_batch = X_shuf[start:start + batch_size]
+                y_batch = y_shuf[start:start + batch_size]
+                self.forward(X_batch)
+                self.backward(y_batch)
+
+            # Track metrics on full dataset
+            y_pred_full = self.forward(X)[:, 0]
+            eps = 1e-8
+            train_loss = -np.mean(
+                y * np.log(y_pred_full + eps) +
+                (1 - y) * np.log(1 - y_pred_full + eps)
+            )
+            train_acc = ((y_pred_full > 0.5).astype(int) == y).mean()
+            history["train_loss"].append(train_loss)
+            history["train_acc"].append(train_acc)
+
+            if val_data:
+                X_v, y_v = val_data
+                y_pred_v = self.forward(X_v)[:, 0]
+                val_loss = -np.mean(
+                    y_v * np.log(y_pred_v + eps) +
+                    (1 - y_v) * np.log(1 - y_pred_v + eps)
+                )
+                val_acc = ((y_pred_v > 0.5).astype(int) == y_v).mean()
+                history["val_loss"].append(val_loss)
+                history["val_acc"].append(val_acc)
+
+            if epoch % print_every == 0:
+                val_str = ""
+                if val_data:
+                    val_str = f"  val_loss={history['val_loss'][-1]:.4f}  val_acc={history['val_acc'][-1]:.3f}"
+                print(f"Epoch {epoch:4d}: train_loss={train_loss:.4f}  train_acc={train_acc:.3f}{val_str}")
+
+        return history
+
+    def predict(self, X: np.ndarray, threshold: float = 0.5) -> np.ndarray:
+        return (self.forward(X)[:, 0] > threshold).astype(int)
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        return self.forward(X)[:, 0]
+
+
+# ── Dataset: interleaved rings (not linearly separable) ──────────────────────
+def make_rings(n: int = 500, noise: float = 0.1, seed: int = 42) -> tuple:
+    rng = np.random.default_rng(seed)
+    n_each = n // 2
+
+    # Inner ring: radius 1
+    theta1 = rng.uniform(0, 2 * np.pi, n_each)
+    r1 = rng.uniform(0.8, 1.2, n_each)
+    X0 = np.column_stack([r1 * np.cos(theta1), r1 * np.sin(theta1)])
+
+    # Outer ring: radius 2.5
+    theta2 = rng.uniform(0, 2 * np.pi, n_each)
+    r2 = rng.uniform(2.2, 2.8, n_each)
+    X1 = np.column_stack([r2 * np.cos(theta2), r2 * np.sin(theta2)])
+
+    X = np.vstack([X0, X1])
+    y = np.hstack([np.zeros(n_each), np.ones(n_each)])
+
+    # Normalize
+    X = (X - X.mean(axis=0)) / X.std(axis=0)
+
+    # Shuffle and split
+    idx = rng.permutation(n)
+    X, y = X[idx], y[idx]
+    split = int(n * 0.8)
+    return X[:split], y[:split], X[split:], y[split:]
+
+X_train, y_train, X_val, y_val = make_rings(n=600, noise=0.15)
+
+print(f"Training samples: {len(X_train)}, Validation: {len(X_val)}")
+print(f"Class balance: {y_train.mean():.2%} positive")
+print()
+
+# ── Train a shallow net (insufficient capacity) ───────────────────────────────
+print("=== Shallow Network [2 → 4 → 1] ===")
+net_shallow = NeuralNetwork([2, 4, 1], lr=0.05)
+h_shallow = net_shallow.train(
+    X_train, y_train, epochs=600,
+    val_data=(X_val, y_val), print_every=200
+)
+
+print()
+print("=== Deep Network [2 → 32 → 16 → 8 → 1] ===")
+net_deep = NeuralNetwork([2, 32, 16, 8, 1], lr=0.02)
+h_deep = net_deep.train(
+    X_train, y_train, epochs=600,
+    val_data=(X_val, y_val), print_every=200
+)
+
+print()
+print("=== Final Comparison ===")
+acc_shallow = (net_shallow.predict(X_val) == y_val).mean()
+acc_deep    = (net_deep.predict(X_val) == y_val).mean()
+print(f"Shallow [2→4→1]:          val_acc={acc_shallow:.3f}  (likely underfits rings)")
+print(f"Deep    [2→32→16→8→1]:    val_acc={acc_deep:.3f}  (sufficient capacity)")
+`} packages={["numpy"]} height={580} title="Production-Quality Neural Network in NumPy" />
+
+---
+
+## Optimizers: SGD, Momentum, RMSProp, Adam
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# ── Loss surface: Rosenbrock function (classic optimizer benchmark) ────────────
+# Rosenbrock: f(x,y) = (1-x)^2 + 100*(y-x^2)^2
+# Narrow curved valley — SGD struggles, adaptive methods shine
+
+def rosenbrock(w):
+    x, y = w[0], w[1]
+    return (1 - x)**2 + 100 * (y - x**2)**2
+
+def rosenbrock_grad(w):
+    x, y = w[0], w[1]
+    dx = -2*(1-x) - 400*x*(y - x**2)
+    dy = 200*(y - x**2)
+    return np.array([dx, dy])
+
+# ── Optimizer implementations ──────────────────────────────────────────────────
+
+def vanilla_sgd(grad_fn, w_init, lr=0.001, n_steps=500):
+    w = w_init.copy()
+    history = [rosenbrock(w)]
+    for _ in range(n_steps):
+        g = grad_fn(w)
+        w = w - lr * g
+        history.append(rosenbrock(w))
+    return w, history
+
+def momentum_sgd(grad_fn, w_init, lr=0.001, momentum=0.9, n_steps=500):
+    """Momentum: accumulates gradient history. Like a ball rolling downhill.
+    Accelerates in consistent gradient directions.
+    Dampens oscillations in noisy/curved surfaces.
+    """
+    w = w_init.copy()
+    v = np.zeros_like(w)   # Velocity
+    history = [rosenbrock(w)]
+    for _ in range(n_steps):
+        g = grad_fn(w)
+        v = momentum * v - lr * g    # Accumulate: keeps fraction of previous velocity
+        w = w + v
+        history.append(rosenbrock(w))
+    return w, history
+
+def rmsprop(grad_fn, w_init, lr=0.01, beta=0.9, eps=1e-8, n_steps=500):
+    """RMSProp: adaptive learning rate per parameter.
+    Divides by running RMS of past gradients.
+    Parameters with consistently large gradients get smaller effective LR.
+    """
+    w = w_init.copy()
+    v = np.zeros_like(w)   # Running average of squared gradients
+    history = [rosenbrock(w)]
+    for _ in range(n_steps):
+        g = grad_fn(w)
+        v = beta * v + (1 - beta) * g**2
+        w = w - lr * g / (np.sqrt(v) + eps)
+        history.append(rosenbrock(w))
+    return w, history
+
+def adam(grad_fn, w_init, lr=0.05, beta1=0.9, beta2=0.999, eps=1e-8, n_steps=500):
+    """Adam: Adaptive Moment Estimation.
+    m = exponentially weighted moving average of gradients (1st moment)
+    v = exponentially weighted moving average of squared gradients (2nd moment)
+    Bias correction: divides by (1 - beta^t) in early steps when m,v ≈ 0
+
+    Intuition: momentum (m) gives direction, RMSProp (v) gives step size.
+    Adam combines both into the best of both worlds.
+    """
+    w  = w_init.copy()
+    m  = np.zeros_like(w)   # 1st moment: mean of gradients
+    v  = np.zeros_like(w)   # 2nd moment: mean of squared gradients
+    history = [rosenbrock(w)]
+    for t in range(1, n_steps + 1):
+        g = grad_fn(w)
         m = beta1 * m + (1 - beta1) * g
         v = beta2 * v + (1 - beta2) * g**2
+
+        # Bias correction: early steps have m,v close to 0 (underestimated)
         m_hat = m / (1 - beta1**t)
         v_hat = v / (1 - beta2**t)
-        w -= lr * m_hat / (np.sqrt(v_hat) + eps)
-        history.append((loss(w, X, y), w))
-    return history
 
-print("Optimizer comparison (target w=3.0):")
-print(f"{'Epoch':>6} {'SGD loss':>12} {'SGD w':>8} {'Adam loss':>12} {'Adam w':>8}")
-print("-" * 50)
+        w = w - lr * m_hat / (np.sqrt(v_hat) + eps)
+        history.append(rosenbrock(w))
+    return w, history
 
-sgd_h  = sgd(0.0, X, y, lr=0.05, epochs=50)
-adam_h = adam(0.0, X, y, lr=0.3,  epochs=50)
+# ── Benchmark all optimizers ──────────────────────────────────────────────────
+w_init = np.array([-0.5, 0.5])
+target = np.array([1.0, 1.0])   # Global minimum of Rosenbrock
+N_STEPS = 1000
 
-for epoch in [0, 9, 19, 29, 49]:
-    sl, sw = sgd_h[epoch]
-    al, aw = adam_h[epoch]
-    print(f"{epoch+1:6d} {sl:12.6f} {sw:8.4f} {al:12.6f} {aw:8.4f}")
+optimizers = [
+    ("SGD (lr=1e-4)",       lambda: vanilla_sgd(rosenbrock_grad, w_init, lr=1e-4, n_steps=N_STEPS)),
+    ("SGD+Momentum (lr=1e-4)", lambda: momentum_sgd(rosenbrock_grad, w_init, lr=1e-4, momentum=0.9, n_steps=N_STEPS)),
+    ("RMSProp (lr=0.01)",   lambda: rmsprop(rosenbrock_grad, w_init, lr=0.01, n_steps=N_STEPS)),
+    ("Adam (lr=0.1)",       lambda: adam(rosenbrock_grad, w_init, lr=0.1, n_steps=N_STEPS)),
+]
 
-print(f"\\nSGD  final w={sgd_h[-1][1]:.4f} (target: 3.0000)")
-print(f"Adam final w={adam_h[-1][1]:.4f} (target: 3.0000)")
-print("Adam converges faster due to adaptive learning rates.")
-`} packages={["numpy"]} height={400} title="SGD vs Adam Optimizer" />
+print("=== Optimizer Comparison on Rosenbrock Function ===")
+print(f"Start: {w_init}, Target: {target}")
+print()
+print(f"{'Optimizer':30s} {'Final Loss':>12} {'Dist to Min':>12} {'Steps to <1.0':>14}")
+print("-" * 72)
+
+for name, opt_fn in optimizers:
+    w_final, history = opt_fn()
+    dist = np.linalg.norm(w_final - target)
+    loss_final = history[-1]
+
+    # Find first step where loss < 1.0
+    steps_to_1 = next((i for i, l in enumerate(history) if l < 1.0), N_STEPS)
+
+    print(f"  {name:28s} {loss_final:12.4f} {dist:12.4f} {steps_to_1:14d}")
+
+print()
+print("=== Loss Trajectory (every 200 steps) ===")
+print(f"{'Step':>6}", end="")
+histories = {}
+for name, opt_fn in optimizers:
+    w_final, history = opt_fn()
+    histories[name] = history
+    short = name.split(" (")[0]
+    print(f"  {short:>18}", end="")
+print()
+print("-" * 85)
+for step in [0, 100, 200, 400, 600, 800, 1000]:
+    print(f"{step:6d}", end="")
+    for name in histories:
+        val = histories[name][step] if step < len(histories[name]) else histories[name][-1]
+        print(f"  {val:18.4f}", end="")
+    print()
+
+print()
+print("=== Hyperparameter Guide ===")
+guide = [
+    ("SGD",         "lr",        "1e-4 to 1e-2",   "Simple but slow, needs careful LR tuning"),
+    ("SGD+Momentum","lr, mom",   "lr: same, mom: 0.9", "Better than SGD for smooth surfaces"),
+    ("RMSProp",     "lr, beta",  "lr: 1e-3, b: 0.9",  "Good for RNNs, adaptive per-param LR"),
+    ("Adam",        "lr, b1, b2","lr: 1e-3, defaults", "Default choice for most architectures"),
+    ("AdamW",       "lr, wd",    "lr: 1e-3, wd: 0.01", "Adam + L2 regularization (PyTorch recommended)"),
+]
+print(f"{'Optimizer':12s} {'Params':10s} {'Good defaults':20s}  Notes")
+for opt, params, defaults, notes in guide:
+    print(f"  {opt:10s} {params:10s} {defaults:20s}  {notes}")
+`} packages={["numpy"]} height={560} title="Optimizer Deep Dive — SGD to Adam" />
+
+---
+
+## Regularization: Preventing Overfitting
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# ── Regularization: the overfitting problem ───────────────────────────────────
+# A model with too much capacity memorizes training data but fails on new data.
+# Regularization adds constraints or noise to prevent this.
+
+rng = np.random.default_rng(42)
+
+# Simple 1D regression: true function is sin(x), noisy training data
+N_TRAIN = 20
+N_TEST  = 100
+x_train = np.sort(rng.uniform(-3, 3, N_TRAIN))
+y_train = np.sin(x_train) + rng.normal(0, 0.3, N_TRAIN)
+x_test  = np.linspace(-3.5, 3.5, N_TEST)
+y_test  = np.sin(x_test)
+
+# ── Polynomial regression to demonstrate overfitting ─────────────────────────
+def poly_features(x, degree):
+    return np.column_stack([x**d for d in range(degree + 1)])
+
+def train_poly(x, y, degree, l2_lambda=0.0):
+    """Fit polynomial with optional L2 (Ridge) regularization."""
+    X = poly_features(x, degree)
+    # Normal equation: w = (X^T X + lambda*I)^-1 X^T y
+    # Without regularization: can be singular for high degrees
+    I = np.eye(X.shape[1])
+    I[0, 0] = 0  # Don't regularize bias term
+    w = np.linalg.solve(X.T @ X + l2_lambda * I, X.T @ y)
+    return w
+
+def predict_poly(x, w):
+    degree = len(w) - 1
+    X = poly_features(x, degree)
+    return X @ w
+
+# Fit polynomials of increasing degree
+print("=== Overfitting with High-Degree Polynomials ===")
+print()
+print(f"{'Model':20s} {'Train MSE':>12} {'Test MSE':>12} {'Status'}")
+print("-" * 55)
+
+for degree in [1, 3, 7, 12, 15]:
+    w = train_poly(x_train, y_train, degree, l2_lambda=0.0)
+    y_pred_train = predict_poly(x_train, w)
+    y_pred_test  = predict_poly(x_test, w)
+
+    mse_train = np.mean((y_pred_train - y_train)**2)
+    mse_test  = np.mean((y_pred_test - y_test)**2)
+
+    if mse_test < 0.5:
+        status = "Good fit"
+    elif mse_test < 2.0:
+        status = "Moderate overfit"
+    else:
+        status = "OVERFIT"
+
+    print(f"  Degree {degree:2d} polynomial   {mse_train:12.4f} {mse_test:12.4f}  {status}")
+
+print()
+print("=== L2 Regularization (Ridge) — Degree 15 Polynomial ===")
+print()
+print(f"{'Lambda':>10} {'Train MSE':>12} {'Test MSE':>12} {'Max weight':>12}")
+print("-" * 55)
+
+for l2 in [0, 0.001, 0.01, 0.1, 1.0, 10.0]:
+    w = train_poly(x_train, y_train, degree=15, l2_lambda=l2)
+    y_pred_train = predict_poly(x_train, w)
+    y_pred_test  = predict_poly(x_test, w)
+    mse_train = np.mean((y_pred_train - y_train)**2)
+    mse_test  = np.mean((y_pred_test - y_test)**2)
+    max_w = np.abs(w[1:]).max()  # Exclude bias
+    print(f"  lambda={l2:>6.3f}   {mse_train:12.4f} {mse_test:12.4f} {max_w:12.2f}")
+
+print()
+print("=== Dropout: Implementation ===")
+print()
+
+def dropout(x, p_drop=0.5, training=True):
+    """
+    During training: randomly zero p_drop fraction of neurons.
+    During inference: use full network (no dropout).
+
+    Why scale by 1/(1-p_drop)?
+    Without scaling: expected activation = (1-p_drop) * x during training.
+    At inference (no dropout): activation = x.
+    This creates a train/inference mismatch!
+
+    'Inverted dropout' scales by 1/(1-p_drop) at training time,
+    so expected activation = x in both training and inference.
+    """
+    if not training:
+        return x    # No dropout at inference — use full network
+
+    mask = (np.random.rand(*x.shape) > p_drop).astype(float)
+    return x * mask / (1.0 - p_drop)    # Scale to maintain expected value
+
+rng2 = np.random.default_rng(0)
+activations = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+
+print("Original activations:          ", activations)
+print()
+for p in [0.0, 0.3, 0.5, 0.7]:
+    np.random.seed(42)
+    dropped = dropout(activations, p_drop=p, training=True)
+    print(f"Dropout p={p:.1f} (training):    {dropped.round(2)}")
+    print(f"  Original mean: {activations.mean():.2f}  After dropout mean: {dropped.mean():.2f}")
+    print()
+
+print("Dropout p=0.5 (inference):      ", dropout(activations, p_drop=0.5, training=False))
+print("Means match: regularization doesn't affect inference")
+
+print()
+print("=== Regularization Summary ===")
+methods = [
+    ("L1 (Lasso)",       "Shrinks small weights to exactly 0. Sparse weights = feature selection."),
+    ("L2 (Ridge/wd)",    "Shrinks all weights toward 0. Smooth solution, no sparsity."),
+    ("Dropout",          "Random neuron deactivation. Forces redundancy, prevents co-adaptation."),
+    ("Batch Norm",       "Normalizes layer inputs. Reduces internal covariate shift."),
+    ("Early Stopping",   "Stop training when val loss stops improving. Free regularization."),
+    ("Data Augmentation","Artificially increase training set. Only effective if augmentation is realistic."),
+]
+for name, explanation in methods:
+    print(f"  {name:20s} — {explanation}")
+`} packages={["numpy"]} height={560} title="Regularization Techniques — L2, Dropout, Early Stopping" />
+
+---
 
 ## PyTorch: Tensors and Autograd
 
-```python
-import torch
-
-# Tensor creation
-x = torch.tensor([1.0, 2.0, 3.0])
-W = torch.randn(3, 4, requires_grad=True)   # Track gradients
-b = torch.zeros(4, requires_grad=True)
-
-# Forward pass
-out = x @ W + b
-loss = out.sum()
-
-# Backward pass — PyTorch computes all gradients automatically
-loss.backward()
-print(W.grad)    # dL/dW
-print(b.grad)    # dL/db
-
-# GPU support — just move tensors
-device = "cuda" if torch.cuda.is_available() else "cpu"
-x = x.to(device)
-W = W.to(device)
-```
-
-## Building Models with nn.Module
+PyTorch is too large to run in the browser, but here is the complete reference for your local environment:
 
 ```python
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class MLP(nn.Module):
-    def __init__(self, input_size, hidden_sizes, output_size, dropout=0.3):
-        super().__init__()
-        layers = []
-        prev_size = input_size
-        for h in hidden_sizes:
-            layers.extend([
-                nn.Linear(prev_size, h),
-                nn.BatchNorm1d(h),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-            ])
-            prev_size = h
-        layers.append(nn.Linear(prev_size, output_size))
-        self.network = nn.Sequential(*layers)
+# ── Tensor creation ───────────────────────────────────────────────────────────
+x = torch.tensor([1.0, 2.0, 3.0])            # From Python list
+X = torch.randn(32, 784)                       # Random normal, shape (32, 784)
+W = torch.zeros(784, 256, requires_grad=True)  # Requires gradient tracking
+I = torch.eye(5)                               # Identity matrix
+Z = torch.zeros_like(W)                        # Same shape, all zeros
 
-    def forward(self, x):
-        return self.network(x)
+# ── GPU support ───────────────────────────────────────────────────────────────
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+X = X.to(device)
+W = W.to(device)
 
-model = MLP(input_size=784, hidden_sizes=[256, 128], output_size=10)
-print(model)
-print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
+# ── Autograd: automatic differentiation ───────────────────────────────────────
+# Every tensor with requires_grad=True builds a computation graph
+W = torch.randn(784, 256, requires_grad=True)
+b = torch.zeros(256, requires_grad=True)
+
+# Forward pass — builds the computation graph
+out = X @ W + b              # Linear layer
+out = F.relu(out)            # ReLU activation
+loss = out.sum()
+
+# Backward pass — computes all gradients via backprop
+loss.backward()
+
+print(W.grad.shape)          # (784, 256) — same shape as W
+print(b.grad.shape)          # (256,)
+
+# Zero gradients before next step! Gradients accumulate by default
+W.grad.zero_()
+b.grad.zero_()
+
+# ── Context managers ──────────────────────────────────────────────────────────
+with torch.no_grad():        # Disable gradient tracking (inference, val)
+    predictions = model(X_val)
+
+with torch.inference_mode(): # Faster than no_grad — stronger guarantees
+    predictions = model(X_test)
 ```
 
-## The PyTorch Training Loop
+### Building Models with nn.Module
 
 ```python
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
+class MLP(nn.Module):
+    """Multi-Layer Perceptron with BatchNorm and Dropout."""
 
-def train_model(model, train_loader, val_loader, epochs=20, lr=1e-3):
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3)
+    def __init__(self, input_size: int, hidden: list[int], output_size: int,
+                 dropout: float = 0.3):
+        super().__init__()
+
+        layers: list[nn.Module] = []
+        sizes = [input_size] + hidden
+
+        for i in range(len(sizes) - 1):
+            layers += [
+                nn.Linear(sizes[i], sizes[i+1]),
+                nn.BatchNorm1d(sizes[i+1]),   # Normalize layer inputs
+                nn.ReLU(),
+                nn.Dropout(dropout),          # Random zeroing
+            ]
+
+        layers.append(nn.Linear(hidden[-1], output_size))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+model = MLP(input_size=784, hidden=[512, 256, 128], output_size=10)
+print(model)
+print(f"Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+```
+
+### The Complete Training Loop
+
+```python
+from torch.utils.data import DataLoader, TensorDataset
+import torch.optim as optim
+
+def train(model, train_loader, val_loader, epochs=30):
+    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = nn.CrossEntropyLoss()
-    best_val_loss = float('inf')
+
+    best_val_acc = 0.0
+    patience_counter = 0
 
     for epoch in range(epochs):
-        # ── Training phase ──
-        model.train()
+        # ── Training phase ────────────────────────────────────────────────────
+        model.train()  # Enables Dropout and BatchNorm training mode
         train_loss = 0.0
+
         for X_batch, y_batch in train_loader:
-            optimizer.zero_grad()          # Clear gradients from previous step
-            outputs = model(X_batch)
-            loss = criterion(outputs, y_batch)
-            loss.backward()                # Compute gradients
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()               # Update weights
-            train_loss += loss.item()
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
 
-        # ── Validation phase ──
-        model.eval()
-        val_loss = 0.0
-        correct = 0
-        with torch.no_grad():              # No gradient computation
+            optimizer.zero_grad()              # Step 1: clear old gradients
+            logits = model(X_batch)            # Step 2: forward pass
+            loss = criterion(logits, y_batch)  # Step 3: compute loss
+            loss.backward()                    # Step 4: backprop
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Clip
+            optimizer.step()                   # Step 5: update weights
+
+            train_loss += loss.item() * len(X_batch)
+
+        # ── Validation phase ──────────────────────────────────────────────────
+        model.eval()  # Disables Dropout; BatchNorm uses running stats
+        correct = total = 0
+
+        with torch.no_grad():
             for X_batch, y_batch in val_loader:
-                outputs = model(X_batch)
-                val_loss += criterion(outputs, y_batch).item()
-                correct += (outputs.argmax(1) == y_batch).sum().item()
+                X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+                logits = model(X_batch)
+                preds  = logits.argmax(dim=1)
+                correct += (preds == y_batch).sum().item()
+                total   += len(y_batch)
 
-        val_loss /= len(val_loader)
-        scheduler.step(val_loss)
+        val_acc = correct / total
+        scheduler.step()   # Adjust learning rate
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            torch.save(model.state_dict(), "best_model.pt")   # Save best weights
+        # Early stopping
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), "best_model.pt")
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= 7:
+                print(f"Early stopping at epoch {epoch}")
+                break
 
-        if epoch % 5 == 0:
-            acc = correct / len(val_loader.dataset)
-            print(f"Epoch {epoch}: train={train_loss/len(train_loader):.4f}, "
-                  f"val={val_loss:.4f}, acc={acc:.3f}")
+        print(f"Epoch {epoch+1:2d}: loss={train_loss/len(train_loader.dataset):.4f}"
+              f"  val_acc={val_acc:.4f}  lr={scheduler.get_last_lr()[0]:.6f}")
 
+    # Load best weights
     model.load_state_dict(torch.load("best_model.pt"))
     return model
 ```
 
-## CNN Architecture
+---
 
-```python
-class CNN(nn.Module):
-    """Convolutional network for image classification."""
-    def __init__(self, n_classes=10):
-        super().__init__()
-        self.features = nn.Sequential(
-            # Block 1
-            nn.Conv2d(1, 32, kernel_size=3, padding=1),   # (1,28,28) -> (32,28,28)
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(2),                               # -> (32,14,14)
-
-            # Block 2
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),  # -> (64,14,14)
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.MaxPool2d(2),                               # -> (64,7,7)
-
-            # Block 3
-            nn.Conv2d(64, 128, kernel_size=3, padding=1), # -> (128,7,7)
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-        )
-        self.classifier = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),                       # -> (128,1,1)
-            nn.Flatten(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(64, n_classes),
-        )
-
-    def forward(self, x):
-        return self.classifier(self.features(x))
-```
-
-## PROJECT: Neural Network from Scratch — Decision Boundary
+## CNN Architecture — How Convolutions Work
 
 <PythonPlayground code={String.raw`import numpy as np
 
-# ── Dataset: two interleaved spirals ─────────────────────────────────────────
-def make_spirals(n=300, noise=0.3, seed=42):
+# ── Manual 2D convolution — understand what nn.Conv2d does ────────────────────
+def conv2d(image, kernel, padding=0, stride=1):
+    """
+    image:  (H, W) — grayscale image
+    kernel: (kH, kW) — convolution filter
+    Returns: feature map after convolution
+
+    Each output pixel = sum of element-wise multiply of kernel with image patch.
+    The kernel slides across the image, detecting the pattern it encodes.
+    """
+    H, W = image.shape
+    kH, kW = kernel.shape
+
+    # Pad image with zeros
+    if padding > 0:
+        image = np.pad(image, padding, mode="constant")
+        H, W = image.shape
+
+    # Output dimensions
+    out_H = (H - kH) // stride + 1
+    out_W = (W - kW) // stride + 1
+    output = np.zeros((out_H, out_W))
+
+    for i in range(0, out_H):
+        for j in range(0, out_W):
+            patch = image[i*stride:i*stride+kH, j*stride:j*stride+kW]
+            output[i, j] = (patch * kernel).sum()
+
+    return output
+
+def max_pool2d(feature_map, pool_size=2, stride=2):
+    """
+    MaxPool: take the maximum value in each pool_size x pool_size region.
+    Purpose: (1) Reduce spatial dimensions, (2) Add translation invariance.
+    """
+    H, W = feature_map.shape
+    out_H = (H - pool_size) // stride + 1
+    out_W = (W - pool_size) // stride + 1
+    output = np.zeros((out_H, out_W))
+
+    for i in range(out_H):
+        for j in range(out_W):
+            patch = feature_map[i*stride:i*stride+pool_size,
+                                j*stride:j*stride+pool_size]
+            output[i, j] = patch.max()
+
+    return output
+
+# ── Create a synthetic 8x8 grayscale image ────────────────────────────────────
+image = np.array([
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 1, 1, 1, 1, 0, 0],
+    [0, 0, 1, 0, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0, 1, 0, 0],
+    [0, 0, 1, 1, 1, 1, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+], dtype=float)   # Looks like a rectangle
+
+# ── Different kernels detect different features ────────────────────────────────
+kernels = {
+    "Horizontal Edge": np.array([[-1, -1, -1],
+                                   [ 0,  0,  0],
+                                   [ 1,  1,  1]], dtype=float),
+    "Vertical Edge":   np.array([[-1, 0, 1],
+                                   [-1, 0, 1],
+                                   [-1, 0, 1]], dtype=float),
+    "Sharpen":         np.array([[ 0, -1,  0],
+                                   [-1,  5, -1],
+                                   [ 0, -1,  0]], dtype=float),
+    "Blur (avg)":      np.ones((3,3)) / 9,
+}
+
+def print_matrix(m, label="", threshold=0.1):
+    """Print matrix as ASCII art."""
+    print(f"  {label}:")
+    for row in m:
+        line = ""
+        for val in row:
+            if val > threshold:
+                line += "█ "
+            elif val < -threshold:
+                line += "▒ "
+            else:
+                line += "· "
+        print(f"    {line}")
+    print()
+
+print("=== Input Image (8x8) ===")
+print_matrix(image, "Rectangle")
+
+print("=== Convolution Results ===")
+for name, kernel in kernels.items():
+    feature_map = conv2d(image, kernel, padding=1)
+    print_matrix(feature_map, f"After '{name}' kernel (3x3)")
+
+print("=== MaxPool Demonstration ===")
+h_edges = conv2d(image, kernels["Horizontal Edge"], padding=1)
+print_matrix(h_edges, "Horizontal edges (6x6)")
+pooled = max_pool2d(h_edges, pool_size=2, stride=2)
+print_matrix(pooled, "After 2x2 MaxPool (3x3 — spatial compression)")
+
+# ── CNN architecture math ─────────────────────────────────────────────────────
+print("=== CNN Spatial Dimension Math ===")
+print("Formula: out = floor((in + 2*padding - kernel_size) / stride) + 1")
+print()
+configs = [
+    (28, 3, 1, 1),   # MNIST Conv1
+    (28, 3, 1, 2),   # MNIST Conv1 with stride
+    (14, 3, 1, 1),   # MNIST Conv2
+    (14, 3, 1, 2),   # MNIST Conv2 with stride
+]
+print(f"{'Input':>6} {'Kernel':>8} {'Padding':>8} {'Stride':>7} {'Output':>8}")
+print("-" * 45)
+for inp, k, p, s in configs:
+    out = (inp + 2*p - k) // s + 1
+    print(f"  {inp:4d}     {k}x{k}           {p}       {s}       {out}")
+`} packages={["numpy"]} height={500} title="Convolutional Neural Networks — How Convolutions Work" />
+
+---
+
+## Project: Full Neural Network Training Pipeline
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# ── Dataset: make_moons equivalent (two crescent shapes) ─────────────────────
+def make_crescents(n=400, noise=0.15, seed=42):
     rng = np.random.default_rng(seed)
     n_each = n // 2
-    theta = np.sqrt(rng.random(n_each)) * 4 * np.pi
-    X0 = np.column_stack([theta * np.cos(theta), theta * np.sin(theta)])
-    X1 = np.column_stack([-theta * np.cos(theta), -theta * np.sin(theta)])
-    X0 += rng.normal(0, noise, X0.shape)
-    X1 += rng.normal(0, noise, X1.shape)
+
+    # Upper crescent (class 0)
+    angles0 = rng.uniform(0, np.pi, n_each)
+    X0 = np.column_stack([
+        np.cos(angles0),
+        np.sin(angles0)
+    ]) + rng.normal(0, noise, (n_each, 2))
+
+    # Lower crescent (class 1), shifted
+    angles1 = rng.uniform(0, np.pi, n_each)
+    X1 = np.column_stack([
+        1 - np.cos(angles1),
+        0.5 - np.sin(angles1)
+    ]) + rng.normal(0, noise, (n_each, 2))
+
     X = np.vstack([X0, X1])
     y = np.hstack([np.zeros(n_each), np.ones(n_each)])
-    return X, y
 
-# ── Vectorized Neural Network ─────────────────────────────────────────────────
-class Net:
-    def __init__(self, sizes, lr=0.005):
-        self.lr = lr
+    # Shuffle
+    idx = rng.permutation(n)
+    return X[idx], y[idx]
+
+# ── Full pipeline ─────────────────────────────────────────────────────────────
+
+# 1. Data preparation
+X, y = make_crescents(n=500, noise=0.15)
+X_mean, X_std = X.mean(0), X.std(0)
+X = (X - X_mean) / X_std   # Standardize: crucial for gradient descent stability
+
+# Train/val/test split (70/15/15)
+n = len(X)
+n_train = int(n * 0.7)
+n_val   = int(n * 0.15)
+X_train, y_train = X[:n_train], y[:n_train]
+X_val,   y_val   = X[n_train:n_train+n_val], y[n_train:n_train+n_val]
+X_test,  y_test  = X[n_train+n_val:], y[n_train+n_val:]
+
+print(f"Dataset: {len(X_train)} train / {len(X_val)} val / {len(X_test)} test")
+print(f"Class balance: {y_train.mean():.1%} positive")
+print()
+
+# 2. Model architecture
+class Layer:
+    def __init__(self, n_in, n_out, activation="relu"):
+        scale = np.sqrt(2.0 / n_in)
+        self.W = np.random.default_rng(42).normal(0, scale, (n_in, n_out))
+        self.b = np.zeros(n_out)
+        self.activation = activation
+
+class Model:
+    def __init__(self, sizes, lr=0.01, l2=0.001):
         rng = np.random.default_rng(42)
-        self.W = []
-        self.b = []
+        self.lr = lr
+        self.l2 = l2    # Weight decay coefficient
+        self.layers = []
         for i in range(len(sizes)-1):
             scale = np.sqrt(2.0 / sizes[i])
-            self.W.append(rng.normal(0, scale, (sizes[i], sizes[i+1])))
-            self.b.append(np.zeros(sizes[i+1]))
+            self.layers.append({
+                "W": rng.normal(0, scale, (sizes[i], sizes[i+1])),
+                "b": np.zeros(sizes[i+1]),
+                "is_output": i == len(sizes)-2
+            })
 
-    def relu(self, x): return np.maximum(0, x)
-    def sig(self, x):  return 1 / (1 + np.exp(-np.clip(x, -30, 30)))
+    def sigmoid(self, x):
+        return 1 / (1 + np.exp(-np.clip(x, -500, 500)))
 
     def forward(self, X):
-        self._a = [X]
-        self._z = []
+        self._cache = {"X": X, "zs": [], "as": [X]}
         A = X
-        for i, (W, b) in enumerate(zip(self.W, self.b)):
-            Z = A @ W + b
-            self._z.append(Z)
-            A = self.relu(Z) if i < len(self.W)-1 else self.sig(Z)
-            self._a.append(A)
+        for layer in self.layers:
+            Z = A @ layer["W"] + layer["b"]
+            self._cache["zs"].append(Z)
+            if layer["is_output"]:
+                A = self.sigmoid(Z)
+            else:
+                A = np.maximum(0, Z)  # ReLU
+            self._cache["as"].append(A)
         return A
 
-    def backward(self, y):
-        m = y.shape[0]
-        dA = self._a[-1] - y.reshape(-1,1)
-        for i in reversed(range(len(self.W))):
-            if i < len(self.W)-1:
-                dZ = dA * (self._z[i] > 0)
-            else:
+    def loss(self, y_pred, y_true):
+        y_pred = np.clip(y_pred[:, 0], 1e-8, 1-1e-8)
+        bce = -np.mean(y_true * np.log(y_pred) + (1-y_true) * np.log(1-y_pred))
+        # L2 regularization: add sum of squared weights (not bias)
+        l2_penalty = sum(np.sum(l["W"]**2) for l in self.layers)
+        return bce + self.l2 * l2_penalty / 2
+
+    def backward(self, y_true):
+        m = len(y_true)
+        dA = self._cache["as"][-1] - y_true.reshape(-1, 1)
+
+        for i in reversed(range(len(self.layers))):
+            Z = self._cache["zs"][i]
+            A_prev = self._cache["as"][i]
+            layer = self.layers[i]
+
+            if layer["is_output"]:
                 dZ = dA
-            dW = self._a[i].T @ dZ / m
+            else:
+                dZ = dA * (Z > 0).astype(float)
+
+            dW = A_prev.T @ dZ / m + self.l2 * layer["W"]  # L2 gradient
             db = dZ.mean(0)
-            dA = dZ @ self.W[i].T
-            self.W[i] -= self.lr * dW
-            self.b[i]  -= self.lr * db
+            dA = dZ @ layer["W"].T
 
-    def train(self, X, y, epochs):
-        losses = []
-        for e in range(epochs):
-            pred = self.forward(X)
-            loss = -np.mean(y * np.log(pred[:,0]+1e-8) + (1-y)*np.log(1-pred[:,0]+1e-8))
-            losses.append(loss)
-            self.backward(y)
-        return losses
+            layer["W"] -= self.lr * dW
+            layer["b"] -= self.lr * db
 
-    def predict(self, X):
-        return (self.forward(X)[:,0] > 0.5).astype(int)
+    def accuracy(self, X, y):
+        pred = (self.forward(X)[:, 0] > 0.5).astype(int)
+        return (pred == y.astype(int)).mean()
 
-# ── Train ─────────────────────────────────────────────────────────────────────
-X, y = make_spirals(n=400, noise=0.2)
-X = (X - X.mean(0)) / X.std(0)   # Normalize
+    def train(self, X_train, y_train, X_val, y_val, epochs=500, batch_size=32):
+        rng = np.random.default_rng(0)
+        history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
+        best_val_loss = float("inf")
+        patience, patience_counter = 10, 0
 
-net = Net([2, 32, 32, 16, 1], lr=0.01)
-losses = net.train(X, y, epochs=3000)
+        for epoch in range(epochs):
+            # Mini-batch SGD
+            idx = rng.permutation(len(X_train))
+            for start in range(0, len(X_train), batch_size):
+                batch_idx = idx[start:start+batch_size]
+                self.forward(X_train[batch_idx])
+                self.backward(y_train[batch_idx])
 
-final_preds = net.predict(X)
-accuracy = (final_preds == y).mean()
+            # Metrics
+            y_pred_train = self.forward(X_train)
+            y_pred_val   = self.forward(X_val)
+            tl = self.loss(y_pred_train, y_train)
+            vl = self.loss(y_pred_val, y_val)
+            ta = self.accuracy(X_train, y_train)
+            va = self.accuracy(X_val, y_val)
 
-# ── Results ───────────────────────────────────────────────────────────────────
-print(f"Training accuracy: {accuracy:.3%}")
-print(f"Final loss: {losses[-1]:.4f}")
+            history["train_loss"].append(tl)
+            history["val_loss"].append(vl)
+            history["train_acc"].append(ta)
+            history["val_acc"].append(va)
 
-# Show loss curve in text
-print("\\nLoss curve (every 300 epochs):")
-print(f"{'Epoch':>8} {'Loss':>10}")
-print("-" * 20)
-for i in range(0, 3000, 300):
-    print(f"{i:8d} {losses[i]:10.4f}")
+            # Early stopping
+            if vl < best_val_loss - 1e-5:
+                best_val_loss = vl
+                patience_counter = 0
+                best_weights = [(l["W"].copy(), l["b"].copy()) for l in self.layers]
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    print(f"  Early stopping at epoch {epoch+1}")
+                    # Restore best weights
+                    for i, (W, b) in enumerate(best_weights):
+                        self.layers[i]["W"] = W
+                        self.layers[i]["b"] = b
+                    break
 
-# Decision boundary sample
-print("\\nDecision boundary check (4 quadrant samples):")
-test_pts = np.array([[-1,-1],[1,-1],[-1,1],[1,1]])
-test_preds = net.forward(test_pts)[:,0]
-for pt, prob in zip(test_pts, test_preds):
-    cls = "class 1" if prob > 0.5 else "class 0"
-    print(f"  {pt} -> prob={prob:.3f} ({cls})")
-`} packages={["numpy"]} height={500} title="Neural Net from Scratch — Spiral Classification" />
+            if (epoch+1) % 100 == 0:
+                print(f"  Epoch {epoch+1:4d}: loss={tl:.4f}/{vl:.4f}  acc={ta:.3f}/{va:.3f}")
 
-## PyTorch Digit Classifier on MNIST
+        return history
 
-This code runs in a Python environment with PyTorch installed, not in the browser playground:
+# 3. Train
+print("=== Training: [2 → 32 → 16 → 1] with L2 regularization ===")
+model = Model([2, 32, 16, 1], lr=0.05, l2=0.001)
+history = model.train(X_train, y_train, X_val, y_val, epochs=500, batch_size=16)
+
+# 4. Test evaluation
+test_acc = model.accuracy(X_test, y_test)
+test_probs = model.forward(X_test)[:, 0]
+
+# Compute precision and recall manually
+preds = (test_probs > 0.5).astype(int)
+TP = ((preds == 1) & (y_test == 1)).sum()
+FP = ((preds == 1) & (y_test == 0)).sum()
+FN = ((preds == 0) & (y_test == 1)).sum()
+TN = ((preds == 0) & (y_test == 0)).sum()
+
+precision = TP / (TP + FP) if (TP + FP) > 0 else 0
+recall    = TP / (TP + FN) if (TP + FN) > 0 else 0
+f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+
+print()
+print("=== Test Set Evaluation ===")
+print(f"Accuracy:  {test_acc:.4f}")
+print(f"Precision: {precision:.4f}")
+print(f"Recall:    {recall:.4f}")
+print(f"F1 Score:  {f1:.4f}")
+print()
+print(f"Confusion Matrix:")
+print(f"  TP={TP:4d}  FP={FP:4d}")
+print(f"  FN={FN:4d}  TN={TN:4d}")
+print()
+
+# 5. Learning curve analysis
+print("=== Learning Curve (every 50 epochs) ===")
+print(f"{'Epoch':>6} {'Train Loss':>12} {'Val Loss':>12} {'Train Acc':>11} {'Val Acc':>9}")
+print("-" * 55)
+for i in range(0, len(history["train_loss"]), 50):
+    print(f"  {i:4d}  {history['train_loss'][i]:12.4f} {history['val_loss'][i]:12.4f} "
+          f"{history['train_acc'][i]:11.3f} {history['val_acc'][i]:9.3f}")
+`} packages={["numpy"]} height={580} title="Complete Training Pipeline with Early Stopping" />
+
+---
+
+## PyTorch Reference: CNN for Image Classification
 
 ```python
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
+import torchvision
 
-# Data
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.1307,), (0.3081,))
-])
-train_data = datasets.MNIST('.', train=True,  download=True, transform=transform)
-test_data  = datasets.MNIST('.', train=False, download=True, transform=transform)
-train_loader = DataLoader(train_data, batch_size=128, shuffle=True,  num_workers=4)
-test_loader  = DataLoader(test_data,  batch_size=256, shuffle=False, num_workers=4)
-
-# Model
-class DigitClassifier(nn.Module):
-    def __init__(self):
+class ConvBlock(nn.Module):
+    """Conv → BatchNorm → ReLU → optional MaxPool"""
+    def __init__(self, in_channels, out_channels, pool=False):
         super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(1, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(),
-            nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(),
-            nn.AdaptiveAvgPool2d(4),
+        layers = [
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        ]
+        if pool:
+            layers.append(nn.MaxPool2d(2))
+        self.block = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.block(x)
+
+class CNN(nn.Module):
+    """CNN for CIFAR-10 (32x32 RGB images, 10 classes)."""
+
+    def __init__(self, n_classes=10):
+        super().__init__()
+        self.features = nn.Sequential(
+            ConvBlock(3,  64,  pool=False),  # (3,32,32) → (64,32,32)
+            ConvBlock(64, 64,  pool=True),   # → (64,16,16)
+            ConvBlock(64, 128, pool=False),  # → (128,16,16)
+            ConvBlock(128,128, pool=True),   # → (128,8,8)
+            ConvBlock(128,256, pool=False),  # → (256,8,8)
+            ConvBlock(256,256, pool=True),   # → (256,4,4)
         )
-        self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(128*4*4, 256), nn.ReLU(), nn.Dropout(0.4),
-            nn.Linear(256, 10)
+        self.classifier = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),         # → (256,1,1) — handles any input size
+            nn.Flatten(),                    # → (256,)
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(128, n_classes),
         )
-    def forward(self, x): return self.fc(self.conv(x))
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = DigitClassifier().to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-criterion = nn.CrossEntropyLoss()
+    def forward(self, x):
+        return self.classifier(self.features(x))
 
-# Training loop
-for epoch in range(10):
-    model.train()
-    for X, y in train_loader:
-        X, y = X.to(device), y.to(device)
-        optimizer.zero_grad()
-        loss = criterion(model(X), y)
-        loss.backward()
-        optimizer.step()
+# Transfer learning: fine-tune ResNet-18
+def make_finetune_model(n_classes=10, freeze_backbone=True):
+    model = torchvision.models.resnet18(weights="DEFAULT")
 
-    # Evaluate
-    model.eval()
-    correct = 0
-    with torch.no_grad():
-        for X, y in test_loader:
-            X, y = X.to(device), y.to(device)
-            correct += (model(X).argmax(1) == y).sum().item()
-    print(f"Epoch {epoch+1}: accuracy={correct/len(test_data):.4f}")
-# Typically reaches >99% accuracy in 10 epochs
+    if freeze_backbone:
+        for param in model.parameters():
+            param.requires_grad = False
+
+    # Replace the final fully connected layer
+    in_features = model.fc.in_features    # 512 for ResNet-18
+    model.fc = nn.Sequential(
+        nn.Linear(in_features, 256),
+        nn.ReLU(),
+        nn.Dropout(0.4),
+        nn.Linear(256, n_classes),
+    )
+    return model
+
+# Only train the new head initially, then unfreeze backbone for fine-tuning
+model = make_finetune_model(n_classes=10, freeze_backbone=True)
+trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+total     = sum(p.numel() for p in model.parameters())
+print(f"Trainable: {trainable:,} / {total:,} ({trainable/total:.1%})")
 ```
 
-## Debugging Neural Networks
+---
 
-When training stalls or fails, work through this checklist:
+## Exercises
 
-**Loss not decreasing:**
-- Check learning rate — too high causes oscillation, too low causes glacial progress
-- Check that `optimizer.zero_grad()` is called every step
-- Verify input normalization — unnormalized inputs slow convergence dramatically
-- Print the loss before calling `.backward()` to confirm the forward pass runs
+**Exercise 1 — Backpropagation by Hand**
+Implement forward and backward pass for a single linear layer with MSE loss. Given `x = [1.0, 2.0]`, `W = [[0.5, 0.3], [0.4, 0.6]]`, `b = [0, 0]`, `y_true = [1.0, 0.5]`, compute the loss and gradients `dW` and `db`. Verify by numerically computing the gradient as `(L(W+eps) - L(W-eps)) / (2*eps)` for each element.
 
-**Vanishing gradients** (deep networks):
-- Add `BatchNorm` after each layer
-- Use ReLU (or leaky ReLU) instead of sigmoid/tanh in hidden layers
-- Use residual connections (skip connections)
-- Gradient clipping: `torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)`
+<PythonPlayground code={String.raw`import numpy as np
 
-**Overfitting:**
-- Add `Dropout(0.3-0.5)` after dense layers
-- L2 regularization: `weight_decay=1e-4` in optimizer
-- Reduce model capacity
-- Add data augmentation (images) or collect more data
+# Numerical gradient check
+x = np.array([1.0, 2.0])
+W = np.array([[0.5, 0.3], [0.4, 0.6]])
+b = np.array([0.0, 0.0])
+y_true = np.array([1.0, 0.5])
 
-## Key Takeaways
+def forward(x, W, b):
+    return W @ x + b
 
-- Backpropagation is the chain rule applied recursively — every modern framework automates this
-- ReLU is the default activation; it avoids the vanishing gradient problem that plagued sigmoid/tanh networks
-- The training loop structure is always: `zero_grad → forward → loss → backward → step`
-- `BatchNorm` stabilizes training by normalizing layer inputs; add it after every linear/conv layer
-- Use `model.eval()` and `torch.no_grad()` during validation — these disable dropout and gradient tracking
-- Learning rate is the most important hyperparameter; use `ReduceLROnPlateau` or cosine annealing
-- Transfer learning: freeze pretrained feature layers, replace and train only the classification head
-- When debugging, simplify — overfit a single batch first to confirm the model and loss function are correct
+def mse(y_pred, y_true):
+    return np.mean((y_pred - y_true)**2)
+
+# Analytical gradient
+y_pred = forward(x, W, b)
+loss = mse(y_pred, y_true)
+print(f"Forward pass: y_pred={y_pred}, loss={loss:.6f}")
+
+# d(MSE)/d(y_pred) = 2*(y_pred - y_true) / n
+dL_dy_pred = 2 * (y_pred - y_true) / len(y_true)
+# y_pred = W @ x + b
+# d(y_pred)/d(W_ij) = x_j (for output i)
+dL_dW = np.outer(dL_dy_pred, x)   # (n_out, n_in)
+dL_db = dL_dy_pred                 # (n_out,)
+
+print(f"\nAnalytical gradients:")
+print(f"  dW = {dL_dW}")
+print(f"  db = {dL_db}")
+
+# Numerical gradient check (finite differences)
+eps = 1e-5
+dW_numerical = np.zeros_like(W)
+for i in range(W.shape[0]):
+    for j in range(W.shape[1]):
+        W_plus = W.copy();  W_plus[i,j]  += eps
+        W_minus = W.copy(); W_minus[i,j] -= eps
+        dW_numerical[i,j] = (mse(forward(x,W_plus,b), y_true) -
+                              mse(forward(x,W_minus,b), y_true)) / (2 * eps)
+
+print(f"\nNumerical gradients (finite differences):")
+print(f"  dW = {dW_numerical}")
+print(f"\nMax error: {np.abs(dL_dW - dW_numerical).max():.2e}")
+print("(Should be < 1e-5 if implementation is correct)")
+`} packages={["numpy"]} height={320} title="Exercise 1 — Gradient Check" />
+
+**Exercise 2 — XOR with Minimal Network**
+The XOR problem requires at least one hidden layer — it is not linearly separable. Implement a minimal `[2, 4, 1]` network, train on all 4 XOR inputs, and verify it reaches 100% accuracy. Then visualize the decision boundary by evaluating a 50×50 grid of points.
+
+**Exercise 3 — Implement Adam from Scratch**
+Using the NumPy `NeuralNetwork` class above as a base, add Adam optimizer support. Replace the simple gradient descent update with the Adam update rule. Compare convergence speed on the crescent dataset against plain SGD.
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# Adam optimizer update rule:
+# m = beta1 * m + (1 - beta1) * g          # 1st moment
+# v = beta2 * v + (1 - beta2) * g^2        # 2nd moment
+# m_hat = m / (1 - beta1^t)                # Bias correction
+# v_hat = v / (1 - beta2^t)
+# w = w - lr * m_hat / (sqrt(v_hat) + eps) # Update
+
+class AdamOptimizer:
+    def __init__(self, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8):
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
+        self.t = 0
+        self.m = {}  # 1st moments
+        self.v = {}  # 2nd moments
+
+    def update(self, param_id, param, grad):
+        """
+        param_id: unique string key for this parameter (e.g., "W0", "b0")
+        param:    current parameter value (modified in-place)
+        grad:     gradient of loss w.r.t. param
+        """
+        if param_id not in self.m:
+            self.m[param_id] = np.zeros_like(param)
+            self.v[param_id] = np.zeros_like(param)
+
+        # TODO: implement the Adam update
+        # Step 1: update t (call this once per full backward pass, not per parameter)
+        # Step 2: update m and v
+        # Step 3: compute bias-corrected m_hat and v_hat
+        # Step 4: return updated param
+
+        pass  # Replace with implementation
+
+# Test: minimize f(w) = (w - 5)^2
+w = np.array([0.0])
+opt = AdamOptimizer(lr=0.1)
+
+print("Minimizing f(w) = (w-5)^2 with Adam:")
+print(f"{'Step':>6} {'w':>10} {'f(w)':>10} {'grad':>10}")
+for step in range(1, 51):
+    opt.t = step  # Increment time step
+    grad = 2 * (w - 5)
+    w = opt.update("w", w, grad) or w  # Your implementation should modify w
+    if step % 10 == 0:
+        print(f"  {step:4d} {w[0]:10.4f} {(w[0]-5)**2:10.6f} {grad[0]:10.4f}")
+
+print(f"\nFinal w={w[0]:.4f} (target: 5.0)")
+`} packages={["numpy"]} height={320} title="Exercise 3 — Adam Optimizer" />
+
+**Exercise 4 — Batch Normalization**
+Implement `batch_norm(x, gamma, beta, eps=1e-5)` that normalizes a batch of activations to mean=0, std=1, then scales and shifts with learned parameters. Test on a batch where the activations have wildly different scales. Show that batch norm makes training stable.
+
+**Exercise 5 — Early Stopping**
+Add proper early stopping to the `NeuralNetwork.train()` method: track the best validation loss, save the best weights, and stop training if validation loss hasn't improved for `patience` epochs. Test with a dataset where the network starts to overfit after epoch 100.
+
+**Exercise 6 — Learning Rate Scheduler**
+Implement a cosine annealing learning rate scheduler: `lr_t = lr_min + 0.5*(lr_max - lr_min)*(1 + cos(pi*t/T))` where `t` is the current epoch and `T` is the total epochs. Apply it to the crescent training and plot the learning rate curve.
+
+**Exercise 7 — Confusion Matrix and ROC Curve**
+Using the model from the project, implement: (a) a confusion matrix function, (b) precision-recall curve by varying the decision threshold from 0 to 1, (c) the area under the ROC curve (AUC-ROC). For (c), use the trapezoidal rule.
+
+<PythonPlayground code={String.raw`import numpy as np
+
+# Simulate model output for 200 test samples
+rng = np.random.default_rng(42)
+y_true = rng.integers(0, 2, 200)
+# Simulate imperfect model scores (probabilities)
+y_scores = np.where(y_true == 1,
+                    rng.beta(5, 2, 200),    # True positives: higher scores
+                    rng.beta(2, 5, 200))    # True negatives: lower scores
+
+def confusion_matrix(y_true, y_pred):
+    TP = ((y_pred == 1) & (y_true == 1)).sum()
+    FP = ((y_pred == 1) & (y_true == 0)).sum()
+    FN = ((y_pred == 0) & (y_true == 1)).sum()
+    TN = ((y_pred == 0) & (y_true == 0)).sum()
+    return TP, FP, FN, TN
+
+def roc_curve(y_true, y_scores, n_thresholds=100):
+    """Compute ROC curve by sweeping decision threshold."""
+    thresholds = np.linspace(0, 1, n_thresholds)
+    tprs, fprs = [], []
+
+    for thresh in thresholds:
+        y_pred = (y_scores >= thresh).astype(int)
+        TP, FP, FN, TN = confusion_matrix(y_true, y_pred)
+        tpr = TP / (TP + FN) if (TP + FN) > 0 else 0   # Recall
+        fpr = FP / (FP + TN) if (FP + TN) > 0 else 0
+        tprs.append(tpr)
+        fprs.append(fpr)
+
+    return np.array(fprs), np.array(tprs), thresholds
+
+fprs, tprs, thresholds = roc_curve(y_true, y_scores)
+# AUC using trapezoidal rule
+auc = np.trapz(tprs, fprs)
+
+# Sort by FPR for proper curve
+sort_idx = np.argsort(fprs)
+fprs_sorted = fprs[sort_idx]
+tprs_sorted = tprs[sort_idx]
+auc_sorted = abs(np.trapz(tprs_sorted, fprs_sorted))
+
+print(f"AUC-ROC: {auc_sorted:.4f}")
+print(f"(1.0 = perfect classifier, 0.5 = random, <0.5 = worse than random)")
+
+# Show ROC curve as text
+print("\nROC Curve (sampled):")
+print(f"{'Threshold':>10} {'FPR':>8} {'TPR':>8}")
+for thresh, fpr, tpr in zip(thresholds[::10], fprs[::10], tprs[::10]):
+    bar_len = int(tpr * 20)
+    print(f"  {thresh:.2f}      {fpr:.3f}    {tpr:.3f}  {'|'*bar_len}")
+
+# Default threshold confusion matrix
+y_pred_default = (y_scores >= 0.5).astype(int)
+TP, FP, FN, TN = confusion_matrix(y_true, y_pred_default)
+print(f"\nAt threshold=0.5:")
+print(f"  TP={TP}  FP={FP}  FN={FN}  TN={TN}")
+print(f"  Precision: {TP/(TP+FP):.3f}")
+print(f"  Recall:    {TP/(TP+FN):.3f}")
+`} packages={["numpy"]} height={360} title="Exercise 7 — ROC Curve and AUC" />
+
+**Exercise 8 — Neural Net for Tabular Data**
+Using the `NeuralNetwork` class, build a classifier for the following tabular problem: predict if a customer will buy a subscription based on `[age, income, browsing_time, previous_purchases]`. Generate a synthetic dataset (500 samples) where the true rule is `income > 50000 AND browsing_time > 10 AND age < 50`. Train with 80/20 split, report accuracy, and analyze which features the network weights most heavily by examining the magnitude of first-layer weights.

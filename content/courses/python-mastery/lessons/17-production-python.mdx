@@ -1,45 +1,78 @@
 ---
 title: "Production Python — FastAPI, Packaging & Profiling"
-description: "Take Python code to production: build a FastAPI ML serving endpoint, package a library, profile and optimize performance, and structure a professional Python project."
-duration: 30
+description: "Take Python code to production: project structure, pyproject.toml, FastAPI with async, Pydantic v2 deep dive, structured logging, CPU and memory profiling, optimization, Docker, and full ML serving API."
+duration: 40
 order: 17
 ---
 
-## Project Structure
+## The Gap Between Scripts and Production
 
-Two dominant layouts for Python projects:
+Most Python tutorials stop when the code "works on my machine." Production Python demands more:
+- **Reproducibility** — any engineer can install, run, and test the project in minutes
+- **Correctness at the boundary** — all external input is validated and typed
+- **Observability** — logs are structured JSON, parseable by Datadog/Splunk/CloudWatch
+- **Performance** — you know *why* code is slow before you optimize it
+- **Deployability** — the app ships as a container, not a zip of `.py` files
 
-**Flat layout** — simple, good for applications:
+This lesson closes that gap systematically.
+
+---
+
+## Project Structure: Flat vs Src Layout
+
+Two layouts dominate Python projects. The choice matters for packaging correctness.
+
+**Flat layout** — simple, good for applications and services:
+
 ```
-my_project/
+ml_service/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py
-│   ├── models.py
+│   ├── main.py          # FastAPI app + lifespan
+│   ├── models.py        # Pydantic schemas
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── predictor.py # ML inference logic
+│   │   └── cache.py     # Redis caching
 │   └── api/
+│       ├── __init__.py
+│       ├── predict.py   # /predict endpoint
+│       └── health.py    # /health endpoint
 ├── tests/
+│   ├── __init__.py
+│   ├── test_predict.py
+│   └── test_health.py
 ├── pyproject.toml
-└── README.md
+├── Dockerfile
+└── .env.example
 ```
 
-**src layout** — recommended for libraries (prevents accidental imports from the project root):
+**Src layout** — mandatory for libraries published to PyPI:
+
 ```
 my_library/
 ├── src/
 │   └── my_library/
-│       ├── __init__.py
+│       ├── __init__.py   # public API re-exported here
 │       ├── core.py
 │       └── utils.py
 ├── tests/
+│   └── test_core.py
 ├── pyproject.toml
 └── README.md
 ```
 
-Use **src layout** when publishing to PyPI. Use **flat layout** for web applications and scripts. The key difference: with src layout, you can only import your package if it's installed, which catches packaging bugs early.
+**Why src layout prevents real bugs:** With flat layout, running `python -c "import my_library"` from the project root imports from the *local directory*, not the installed package. A broken `__init__.py` would make tests pass (importing local) but deployment fail (importing installed). The `src/` barrier forces proper install (`pip install -e .`) and catches this class of error during development.
 
-## pyproject.toml — The Modern Standard
+**Decision rule:**
+- Building an API service, CLI app, or data pipeline → flat layout
+- Building a reusable library for PyPI → src layout
 
-`pyproject.toml` replaces `setup.py`, `setup.cfg`, `requirements.txt`, and `MANIFEST.in`:
+---
+
+## pyproject.toml — The Single Source of Truth
+
+`pyproject.toml` replaced `setup.py`, `setup.cfg`, `requirements.txt`, and `MANIFEST.in`. It is the PEP 517/518/621 standard:
 
 ```toml
 [build-system]
@@ -48,515 +81,1558 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ml-serving"
-version = "0.1.0"
-description = "FastAPI-based ML model serving"
+version = "0.2.0"
+description = "FastAPI-based ML model serving with structured logging"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
+keywords = ["machine-learning", "fastapi", "mlops"]
+
 dependencies = [
     "fastapi>=0.111.0",
-    "uvicorn[standard]>=0.29.0",
+    "uvicorn[standard]>=0.29.0",    # [standard] = httptools + uvloop (fast event loop)
     "pydantic>=2.7.0",
     "scikit-learn>=1.4.0",
     "numpy>=1.26.0",
+    "structlog>=24.0.0",            # Structured logging library
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
-    "httpx>=0.27.0",    # For FastAPI TestClient
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",    # Required for FastAPI TestClient with async
     "ruff>=0.4.0",
     "mypy>=1.10.0",
+    "coverage>=7.0.0",
+]
+prod = [
+    "gunicorn>=22.0.0",     # Process manager for uvicorn in production
+    "prometheus-client>=0.20.0",
 ]
 
 [project.scripts]
+# Creates a CLI command: "serve" -> calls ml_serving.main:start()
 serve = "ml_serving.main:start"
 
 [tool.ruff]
 line-length = 88
-select = ["E", "F", "I", "N", "UP"]
+target-version = "py311"
+select = ["E", "F", "I", "N", "UP", "B", "C90"]
+
+[tool.ruff.per-file-ignores]
+"tests/**" = ["S101"]    # Allow assert in tests
 
 [tool.mypy]
 strict = true
 python_version = "3.11"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "--tb=short -q"
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+fail_under = 80
 ```
 
-Install in development mode: `pip install -e ".[dev]"`. The `-e` flag installs a symlink to your source, so edits take effect immediately without reinstalling.
+Key commands:
+```bash
+pip install -e ".[dev]"    # Install in editable mode with dev extras
+ruff check .               # Lint
+ruff format .              # Format (replaces Black)
+mypy app/                  # Type check
+pytest --cov=app           # Test with coverage
+python -m build            # Build wheel + sdist for PyPI
+```
 
-## FastAPI — Async ML Serving
+---
 
-FastAPI generates OpenAPI docs automatically, validates requests via Pydantic, and handles async operations natively:
+## Virtual Environments and Dependency Pinning
+
+Always work in virtual environments. Never install packages globally:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate    # Linux/Mac
+.venv\Scripts\activate       # Windows
+
+pip install -e ".[dev]"
+pip freeze > requirements.lock    # Pin exact versions for reproducibility
+```
+
+**For production, pin exact versions:**
+```bash
+# requirements.lock — exact pins, used in Docker
+fastapi==0.111.1
+uvicorn==0.29.0
+pydantic==2.7.2
+numpy==1.26.4
+scikit-learn==1.4.2
+```
+
+The `pyproject.toml` uses `>=` (minimum versions, flexible). `requirements.lock` uses `==` (pinned, reproducible builds). Docker uses the lock file. Developers install from `pyproject.toml`.
+
+---
+
+## FastAPI: From Basics to Production
+
+FastAPI generates OpenAPI docs, validates requests via Pydantic, and handles async natively. Here's a complete production-grade ML API:
+
+### The Lifespan Context Manager
 
 ```python
 # app/main.py
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel, Field, field_validator
-import numpy as np
+from fastapi import FastAPI
 import pickle
 import logging
 
 logger = logging.getLogger(__name__)
 
-# ── Lifespan: load model on startup, clean up on shutdown ─────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("Loading model...")
-    app.state.model = pickle.load(open("model.pkl", "rb"))
-    app.state.scaler = pickle.load(open("scaler.pkl", "rb"))
-    logger.info("Model loaded successfully")
-    yield
-    # Shutdown
-    logger.info("Shutting down")
+    """Load resources on startup, clean up on shutdown."""
+    # ── STARTUP ────────────────────────────────────────────────────────────────
+    logger.info("startup.begin", extra={"stage": "model_load"})
+
+    try:
+        with open("artifacts/model.pkl", "rb") as f:
+            app.state.model = pickle.load(f)
+        with open("artifacts/scaler.pkl", "rb") as f:
+            app.state.scaler = pickle.load(f)
+        app.state.model_version = "v2.1.0"
+        logger.info("startup.complete", extra={"model_version": app.state.model_version})
+    except FileNotFoundError as e:
+        logger.error("startup.failed", extra={"error": str(e)})
+        raise RuntimeError("Cannot start: model artifacts missing") from e
+
+    yield   # App runs here
+
+    # ── SHUTDOWN ───────────────────────────────────────────────────────────────
+    # Free GPU memory, close DB connections, flush metrics
+    logger.info("shutdown.complete")
 
 app = FastAPI(
-    title="ML Model API",
-    version="1.0.0",
+    title="Churn Predictor API",
+    version="2.1.0",
+    description="Real-time ML inference with structured logging and OpenAPI docs",
     lifespan=lifespan,
 )
+```
 
-# ── Pydantic models define the API contract ────────────────────────────────────
+**Why lifespan, not module-level globals?** Module-level code runs once at import time — in tests, this tries to load the model file and fails. The lifespan manager only runs when the ASGI server starts, and tests can mock `app.state` before the test client starts.
+
+### Pydantic Schemas — The API Contract
+
+```python
+# app/models.py
+from pydantic import BaseModel, Field, field_validator, computed_field
+from typing import Literal
+from datetime import datetime
+
 class PredictRequest(BaseModel):
-    tenure: int = Field(..., ge=1, le=72, description="Customer tenure in months")
-    monthly_charges: float = Field(..., gt=0, le=500)
-    contract_type: str = Field(..., pattern="^(month-to-month|one_year|two_year)$")
-    num_products: int = Field(..., ge=1, le=10)
+    """Input validation — all fields checked before the route handler runs."""
+
+    tenure_months: int = Field(
+        ...,                           # required (no default)
+        ge=1, le=120,
+        description="Customer tenure in months",
+        examples=[24]
+    )
+    monthly_charges: float = Field(..., gt=0.0, le=1000.0)
+    contract_type: Literal["month-to-month", "one_year", "two_year"]
+    num_products: int = Field(..., ge=1, le=8)
+    internet_service: Literal["DSL", "Fiber", "None"] = "DSL"
 
     @field_validator("monthly_charges")
     @classmethod
-    def validate_charges(cls, v):
-        if v < 20:
-            raise ValueError("Monthly charges seem too low")
+    def charges_reasonable(cls, v: float) -> float:
+        if v < 18.0:
+            raise ValueError(
+                f"monthly_charges={v} is below our minimum plan of $18"
+            )
         return round(v, 2)
 
 class PredictResponse(BaseModel):
-    churn_probability: float
+    churn_probability: float = Field(..., ge=0.0, le=1.0)
     churn_prediction: bool
-    confidence: str
-    model_version: str = "1.0.0"
+    risk_tier: Literal["low", "medium", "high"]
+    model_version: str
+    predicted_at: datetime
 
-class HealthResponse(BaseModel):
-    status: str
-    model_loaded: bool
+    @computed_field                    # Derived at serialization time
+    @property
+    def recommendation(self) -> str:
+        if self.risk_tier == "high":
+            return "Immediate retention offer — 20% discount"
+        if self.risk_tier == "medium":
+            return "Proactive check-in call within 7 days"
+        return "Standard engagement — no action required"
+```
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
-@app.get("/health", response_model=HealthResponse)
-async def health():
+### Dependency Injection
+
+```python
+# app/dependencies.py
+from fastapi import Request, HTTPException, Header
+from typing import Annotated
+import os
+
+# Dependencies are reusable, testable, and composable
+async def get_model(request: Request):
+    """Inject the loaded model from app.state."""
+    if not hasattr(request.app.state, "model"):
+        raise HTTPException(503, "Model not loaded — service starting up")
+    return request.app.state.model
+
+async def require_api_key(
+    x_api_key: Annotated[str | None, Header()] = None
+):
+    """Authentication via API key header."""
+    valid_keys = set(os.environ.get("API_KEYS", "dev-key").split(","))
+    if x_api_key not in valid_keys:
+        raise HTTPException(401, "Invalid or missing API key")
+    return x_api_key
+
+# Usage in route:
+# async def predict(
+#     request: PredictRequest,
+#     model = Depends(get_model),
+#     _auth = Depends(require_api_key),
+# ):
+```
+
+### The Prediction Endpoint
+
+```python
+# app/api/predict.py
+import numpy as np
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.concurrency import run_in_threadpool
+
+from app.models import PredictRequest, PredictResponse
+from app.dependencies import get_model, require_api_key
+from datetime import datetime, timezone
+
+router = APIRouter(prefix="/predict", tags=["inference"])
+
+CONTRACT_ENCODING = {
+    "month-to-month": 0,
+    "one_year":        1,
+    "two_year":        2,
+}
+
+INTERNET_ENCODING = {"DSL": 0, "Fiber": 1, "None": 2}
+
+def _sync_predict(model, scaler, req: PredictRequest) -> dict:
+    """CPU-bound inference — runs in a thread pool."""
+    features = np.array([[
+        req.tenure_months,
+        req.monthly_charges,
+        CONTRACT_ENCODING[req.contract_type],
+        req.num_products,
+        INTERNET_ENCODING[req.internet_service],
+    ]])
+    features_scaled = scaler.transform(features)
+    proba = float(model.predict_proba(features_scaled)[0, 1])
+
+    risk = "high" if proba > 0.7 else "medium" if proba > 0.4 else "low"
     return {
-        "status": "healthy",
-        "model_loaded": hasattr(app.state, "model"),
+        "churn_probability": round(proba, 4),
+        "churn_prediction": proba > 0.5,
+        "risk_tier": risk,
     }
 
-@app.post("/predict", response_model=PredictResponse)
-async def predict(request: PredictRequest):
+@router.post("/", response_model=PredictResponse)
+async def predict(
+    request: PredictRequest,
+    model = Depends(get_model),
+    _auth = Depends(require_api_key),
+):
     try:
-        features = np.array([[
-            request.tenure,
-            request.monthly_charges,
-            1 if request.contract_type == "month-to-month" else 0,
-            request.num_products,
-        ]])
-        features_scaled = app.state.scaler.transform(features)
-        proba = app.state.model.predict_proba(features_scaled)[0, 1]
-        confidence = "high" if abs(proba - 0.5) > 0.3 else "medium" if abs(proba - 0.5) > 0.1 else "low"
-
-        logger.info(f"Prediction: proba={proba:.3f}, tenure={request.tenure}")
+        # run_in_threadpool: offload CPU work, keep event loop responsive
+        result = await run_in_threadpool(
+            _sync_predict, model, request.app.state.scaler, request
+        )
         return PredictResponse(
-            churn_probability=round(float(proba), 4),
-            churn_prediction=proba > 0.5,
-            confidence=confidence,
+            **result,
+            model_version=request.app.state.model_version,
+            predicted_at=datetime.now(timezone.utc),
         )
     except Exception as e:
-        logger.error(f"Prediction failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
-
-@app.get("/model/info")
-async def model_info():
-    return {
-        "model_type": type(app.state.model).__name__,
-        "features": ["tenure", "monthly_charges", "contract_type", "num_products"],
-        "output": "churn_probability [0, 1]",
-    }
+        raise HTTPException(500, detail=f"Inference failed: {e}") from e
 ```
 
-## Pydantic v2
-
-Pydantic v2 (released 2023) is 5-50x faster than v1 due to a Rust core:
+### Middleware
 
 ```python
-from pydantic import BaseModel, Field, field_validator, model_validator
-from typing import Optional
-from datetime import datetime
-
-class MLExperiment(BaseModel):
-    model_config = {"str_strip_whitespace": True, "frozen": True}
-
-    name: str = Field(..., min_length=3, max_length=100)
-    accuracy: float = Field(..., ge=0.0, le=1.0)
-    parameters: dict[str, float | int | str]
-    tags: list[str] = []
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    parent_run_id: Optional[str] = None
-
-    @field_validator("name")
-    @classmethod
-    def no_spaces_in_name(cls, v: str) -> str:
-        return v.replace(" ", "_").lower()
-
-    @model_validator(mode="after")
-    def check_high_accuracy_has_tag(self) -> "MLExperiment":
-        if self.accuracy > 0.95 and "validated" not in self.tags:
-            raise ValueError("High-accuracy models must include 'validated' tag")
-        return self
-
-# Serialization
-exp = MLExperiment(name="churn model v2", accuracy=0.88, parameters={"n_estimators": 100})
-print(exp.model_dump())
-print(exp.model_dump_json(indent=2))
-
-# Parsing from dict/JSON
-data = {"name": "test", "accuracy": 0.75, "parameters": {"lr": 0.01}}
-exp2 = MLExperiment.model_validate(data)
-```
-
-## Structured Logging
-
-Production logging should be machine-parseable. Never use `print()` in production:
-
-```python
-import logging
-import json
-import sys
-import uuid
+# app/middleware.py
+import uuid, time
 from contextvars import ContextVar
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi import Request
+import structlog
 
-# Correlation ID for tracing requests across logs
 correlation_id: ContextVar[str] = ContextVar("correlation_id", default="")
 
-class JSONFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        log_obj = {
-            "timestamp":      self.formatTime(record),
-            "level":          record.levelname,
-            "logger":         record.name,
-            "message":        record.getMessage(),
-            "module":         record.module,
-            "correlation_id": correlation_id.get(""),
-        }
-        if record.exc_info:
-            log_obj["exception"] = self.formatException(record.exc_info)
-        return json.dumps(log_obj)
+log = structlog.get_logger()
 
-def setup_logging(level: str = "INFO") -> None:
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JSONFormatter())
-    root = logging.getLogger()
-    root.setLevel(getattr(logging, level.upper()))
-    root.addHandler(handler)
-
-# FastAPI middleware to inject correlation IDs
-from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
-
-class CorrelationIDMiddleware(BaseHTTPMiddleware):
+class ObservabilityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        cid = request.headers.get("X-Correlation-ID", str(uuid.uuid4())[:8])
+        # Trace across services: read from header or generate new
+        cid = request.headers.get("X-Correlation-ID", uuid.uuid4().hex[:12])
         token = correlation_id.set(cid)
+
+        start = time.perf_counter()
         try:
             response = await call_next(request)
+            elapsed_ms = (time.perf_counter() - start) * 1000
+
+            log.info(
+                "request.completed",
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                duration_ms=round(elapsed_ms, 2),
+                correlation_id=cid,
+            )
             response.headers["X-Correlation-ID"] = cid
+            response.headers["X-Response-Time-Ms"] = str(round(elapsed_ms, 2))
             return response
         finally:
             correlation_id.reset(token)
 ```
 
-## Profiling
+---
 
-<PythonPlayground code={String.raw`import time
-import tracemalloc
-import cProfile
+## Pydantic v2 — Deep Dive
+
+Pydantic v2 (2023) rewrote the core in Rust, achieving 5–17x speedup. The API changed significantly:
+
+<PythonPlayground code={String.raw`# pip install pydantic  (v2 is default)
+# Pyodide has pydantic — let's use a pure-Python validator demo
+# since micropip may not have pydantic, we'll implement the same patterns manually
+
+from dataclasses import dataclass, field
+from typing import Any
+import json
+from datetime import datetime
+
+# ── Pydantic v2 BaseModel equivalent (conceptually) ───────────────────────────
+# In production you'd use:
+#   from pydantic import BaseModel, Field, field_validator, model_validator
+
+# Let's demonstrate the CONCEPTS with Python dataclasses + manual validation
+# so you can see exactly what Pydantic automates
+
+class ValidationError(Exception):
+    def __init__(self, errors):
+        self.errors = errors
+        super().__init__(str(errors))
+
+def validate_field(name, value, dtype, constraints):
+    errors = []
+    if not isinstance(value, dtype):
+        errors.append(f"{name}: expected {dtype.__name__}, got {type(value).__name__}")
+        return errors
+    for key, constraint in constraints.items():
+        if key == "ge" and value < constraint:
+            errors.append(f"{name}: {value} is less than minimum {constraint}")
+        elif key == "le" and value > constraint:
+            errors.append(f"{name}: {value} exceeds maximum {constraint}")
+        elif key == "min_length" and len(value) < constraint:
+            errors.append(f"{name}: length {len(value)} < min_length {constraint}")
+        elif key == "pattern":
+            import re
+            if not re.fullmatch(constraint, value):
+                errors.append(f"{name}: '{value}' doesn't match pattern '{constraint}'")
+    return errors
+
+class MLExperimentValidator:
+    """Demonstrates what Pydantic v2 does under the hood."""
+
+    def __init__(self, name, accuracy, parameters, tags=None):
+        errors = []
+
+        # Field validation
+        errors += validate_field("name", name, str, {"min_length": 3})
+        errors += validate_field("accuracy", accuracy, (int, float), {"ge": 0.0, "le": 1.0})
+
+        if not isinstance(parameters, dict):
+            errors.append("parameters: must be a dict")
+        if tags is not None and not isinstance(tags, list):
+            errors.append("tags: must be a list")
+
+        if errors:
+            raise ValidationError(errors)
+
+        # Cross-field validator (model_validator in pydantic)
+        tags = tags or []
+        if accuracy > 0.95 and "validated" not in tags:
+            raise ValidationError(
+                ["High-accuracy experiments must include 'validated' tag"]
+            )
+
+        # Transformation: normalize name
+        self.name = name.strip().lower().replace(" ", "_")
+        self.accuracy = round(float(accuracy), 6)
+        self.parameters = parameters
+        self.tags = tags
+        self.created_at = datetime.now().isoformat()
+
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "accuracy": self.accuracy,
+            "parameters": self.parameters,
+            "tags": self.tags,
+            "created_at": self.created_at,
+        }
+
+print("=== Field Validation ===")
+try:
+    exp = MLExperimentValidator("ab", 0.88, {"lr": 0.01})
+except ValidationError as e:
+    print(f"Error (expected): {e.errors}")
+
+print()
+
+print("=== Cross-field Validation ===")
+try:
+    exp = MLExperimentValidator("churn_v3", 0.97, {"n_estimators": 200})
+except ValidationError as e:
+    print(f"Error (expected): {e.errors}")
+
+print()
+
+print("=== Valid Object ===")
+exp = MLExperimentValidator(
+    name="  Churn Model V2  ",   # Whitespace stripped, lowercase
+    accuracy=0.97,
+    parameters={"n_estimators": 200, "max_depth": 6},
+    tags=["validated", "production"],
+)
+print(json.dumps(exp.to_dict(), indent=2))
+
+print()
+print("=== Pydantic v2 Syntax (reference — runs in your project) ===")
+print("""
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+class MLExperiment(BaseModel):
+    model_config = {"str_strip_whitespace": True}
+
+    name: str = Field(..., min_length=3)
+    accuracy: float = Field(..., ge=0.0, le=1.0)
+    parameters: dict[str, float | int | str]
+    tags: list[str] = []
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, v: str) -> str:
+        return v.lower().replace(" ", "_")
+
+    @model_validator(mode="after")
+    def high_accuracy_must_be_validated(self) -> "MLExperiment":
+        if self.accuracy > 0.95 and "validated" not in self.tags:
+            raise ValueError("accuracy > 0.95 requires 'validated' tag")
+        return self
+""")
+`} height={520} title="Pydantic v2 Validation Patterns" />
+
+---
+
+## Profiling: Measure Before You Optimize
+
+The cardinal rule: **never optimize without measuring**. Profiling tells you *where* the time actually goes — not where you think it goes.
+
+### CPU Profiling with cProfile and timeit
+
+<PythonPlayground code={String.raw`import cProfile
 import pstats
 import io
+import timeit
 import numpy as np
 
-# ── tracemalloc: memory profiling ─────────────────────────────────────────────
-def memory_hungry():
-    result = []
-    for i in range(10000):
-        result.append(list(range(i % 100)))  # Creates many small lists
-    return result
+# ── The problem: find top-N similar items by cosine similarity ────────────────
+# This is a real production bottleneck in recommendation systems
 
-def memory_efficient():
-    def gen():
-        for i in range(10000):
-            yield list(range(i % 100))
-    return list(gen())  # Generator vs direct list
+def cosine_similarity_slow(a, b):
+    """Pure Python — O(n) with high constant factor."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(y * y for y in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
-tracemalloc.start()
-memory_hungry()
-snapshot1 = tracemalloc.take_snapshot()
-tracemalloc.clear_traces()
+def find_top_k_slow(query, vectors, k=5):
+    """Find top-k most similar vectors. O(n*d) Python loops."""
+    scores = [(i, cosine_similarity_slow(query, v)) for i, v in enumerate(vectors)]
+    scores.sort(key=lambda x: -x[1])
+    return scores[:k]
 
-tracemalloc.start()
-memory_efficient()
-snapshot2 = tracemalloc.take_snapshot()
-tracemalloc.stop()
+def find_top_k_numpy(query, matrix, k=5):
+    """Vectorized: all similarities computed in a single BLAS call."""
+    # matrix: (n_items, dim)  query: (dim,)
+    q = np.asarray(query, dtype=np.float32)
+    M = np.asarray(matrix, dtype=np.float32)
 
-stats1 = snapshot1.statistics("lineno")
-stats2 = snapshot2.statistics("lineno")
-print("=== Memory Usage ===")
-print(f"memory_hungry:    {sum(s.size for s in stats1) / 1024:.1f} KB")
-print(f"memory_efficient: {sum(s.size for s in stats2) / 1024:.1f} KB")
+    # Normalize query
+    q_norm = q / (np.linalg.norm(q) + 1e-10)
 
-# ── cProfile: CPU profiling ───────────────────────────────────────────────────
-def slow_sum(n):
-    """Intentionally slow: Python loop."""
-    total = 0
-    for i in range(n):
-        total += i * i
-    return total
+    # Normalize all rows at once
+    norms = np.linalg.norm(M, axis=1, keepdims=True) + 1e-10
+    M_norm = M / norms
 
-def fast_sum(n):
-    """Vectorized with NumPy."""
-    return int(np.arange(n, dtype=np.int64).dot(np.arange(n, dtype=np.int64)))
+    # All dot products in one matrix-vector multiply
+    similarities = M_norm @ q_norm    # shape: (n_items,)
 
+    # np.argpartition: O(n) partial sort, much faster than full sort for large k
+    if k < len(similarities):
+        top_k_idx = np.argpartition(similarities, -k)[-k:]
+        top_k_idx = top_k_idx[np.argsort(similarities[top_k_idx])[::-1]]
+    else:
+        top_k_idx = np.argsort(similarities)[::-1]
+
+    return list(zip(top_k_idx.tolist(), similarities[top_k_idx].tolist()))
+
+# ── Setup test data ───────────────────────────────────────────────────────────
+np.random.seed(42)
+DIM = 64
+N_ITEMS = 2000
+K = 10
+
+query = list(np.random.randn(DIM).astype(float))
+vectors_list = [list(np.random.randn(DIM).astype(float)) for _ in range(N_ITEMS)]
+matrix_np = np.array(vectors_list, dtype=np.float32)
+query_list = list(query)
+
+# ── Verify correctness ────────────────────────────────────────────────────────
+slow_result = find_top_k_slow(query_list, vectors_list, K)
+fast_result = find_top_k_numpy(query, matrix_np, K)
+slow_indices = {r[0] for r in slow_result}
+fast_indices = {r[0] for r in fast_result}
+print(f"Results agree: {slow_indices == fast_indices}")
+
+# ── Profile the slow version ──────────────────────────────────────────────────
 pr = cProfile.Profile()
 pr.enable()
-slow_sum(100000)
+for _ in range(5):
+    find_top_k_slow(query_list, vectors_list, K)
 pr.disable()
 
 stream = io.StringIO()
-ps = pstats.Stats(pr, stream=stream).sort_stats("cumulative")
-ps.print_stats(5)
-profile_output = stream.getvalue()
-print("\\n=== cProfile Output (slow_sum) ===")
-for line in profile_output.split("\\n")[4:10]:
+ps = pstats.Stats(pr, stream=stream).sort_stats("tottime")
+ps.print_stats(8)
+output = stream.getvalue()
+
+print("\n=== cProfile: find_top_k_slow (5 calls) ===")
+for line in output.split("\n")[4:14]:
     if line.strip():
         print(line)
 
-# ── timeit comparison ─────────────────────────────────────────────────────────
-import timeit
+# ── Benchmark both ────────────────────────────────────────────────────────────
+REPEAT = 5
+t_slow = timeit.timeit(
+    lambda: find_top_k_slow(query_list, vectors_list, K),
+    number=REPEAT
+) / REPEAT
 
-n = 100000
-t_slow = timeit.timeit(lambda: slow_sum(n), number=10) / 10
-t_fast = timeit.timeit(lambda: fast_sum(n), number=100) / 100
+t_fast = timeit.timeit(
+    lambda: find_top_k_numpy(query, matrix_np, K),
+    number=REPEAT * 10
+) / (REPEAT * 10)
 
-print(f"\\n=== Benchmarks (n={n:,}) ===")
-print(f"slow_sum (Python loop): {t_slow*1000:.2f} ms")
-print(f"fast_sum (NumPy):       {t_fast*1000:.3f} ms")
+print(f"\n=== Benchmark (n={N_ITEMS}, dim={DIM}, k={K}) ===")
+print(f"find_top_k_slow  (Python loops):  {t_slow*1000:8.2f} ms")
+print(f"find_top_k_numpy (NumPy BLAS):    {t_fast*1000:8.3f} ms")
 print(f"Speedup: {t_slow/t_fast:.0f}x")
-`} packages={["numpy"]} height={440} title="Profiling: Memory and CPU" />
+print()
+print("Optimization insight:")
+print("  Python: 2 nested loops (query*item * dim multiplications)")
+print("  NumPy:  1 matrix-vector multiply — runs in BLAS C/Fortran routines")
+print("          with cache-optimal memory access, SIMD vectorization")
+`} packages={["numpy"]} height={540} title="CPU Profiling: Finding Real Bottlenecks" />
 
-<PythonPlayground code={String.raw`import numpy as np
-import time
+### Memory Profiling with tracemalloc
 
-# ── 5 implementations of the same algorithm: sum of squares ──────────────────
-def impl_1_pure_loop(arr):
-    """Pure Python loop."""
-    total = 0
-    for x in arr:
-        total += x * x
-    return total
+<PythonPlayground code={String.raw`import tracemalloc
+import gc
+import numpy as np
 
-def impl_2_list_comp(arr):
-    """List comprehension."""
-    return sum(x*x for x in arr)
+# ── Common memory mistake: accumulating objects in a loop ─────────────────────
 
-def impl_3_map(arr):
-    """map() function."""
-    return sum(map(lambda x: x*x, arr))
+def process_data_leaky(n_chunks, chunk_size):
+    """Memory leak: appends processed chunks but never releases them."""
+    all_stats = []    # This grows forever
 
-def impl_4_numpy(arr):
-    """NumPy vectorized."""
-    a = np.asarray(arr)
-    return int((a * a).sum())
+    for i in range(n_chunks):
+        chunk = np.random.randn(chunk_size)
+        stats = {
+            "chunk_id": i,
+            "mean": float(chunk.mean()),
+            "std": float(chunk.std()),
+            "min": float(chunk.min()),
+            "max": float(chunk.max()),
+            "data": chunk,    # BUG: storing raw data unnecessarily
+        }
+        all_stats.append(stats)
 
-def impl_5_numpy_dot(arr):
-    """NumPy dot product (most efficient)."""
-    a = np.asarray(arr)
-    return int(np.dot(a, a))
+    return all_stats
 
-import timeit
-import tracemalloc
+def process_data_efficient(n_chunks, chunk_size):
+    """Process one chunk at a time, keep only the summary."""
+    all_stats = []
 
-n = 50000
-data = list(range(n))
-data_arr = np.array(data, dtype=np.int64)
-REPEAT = 20
+    for i in range(n_chunks):
+        chunk = np.random.randn(chunk_size)
+        stats = {
+            "chunk_id": i,
+            "mean": float(chunk.mean()),
+            "std": float(chunk.std()),
+            "min": float(chunk.min()),
+            "max": float(chunk.max()),
+            # chunk is NOT stored — released when loop iterates
+        }
+        all_stats.append(stats)
+        # del chunk  # Optional: explicit release
 
-implementations = [
-    ("Pure loop",      lambda: impl_1_pure_loop(data)),
-    ("List comp/gen",  lambda: impl_2_list_comp(data)),
-    ("map(lambda)",    lambda: impl_3_map(data)),
-    ("NumPy .sum()",   lambda: impl_4_numpy(data_arr)),
-    ("NumPy dot()",    lambda: impl_5_numpy_dot(data_arr)),
+    return all_stats
+
+def process_data_generator(n_chunks, chunk_size):
+    """Generator: never holds more than one chunk in memory."""
+    for i in range(n_chunks):
+        chunk = np.random.randn(chunk_size)
+        yield {
+            "chunk_id": i,
+            "mean": float(chunk.mean()),
+            "std": float(chunk.std()),
+        }
+
+N_CHUNKS = 50
+CHUNK_SIZE = 5000
+
+# ── Measure leaky version ─────────────────────────────────────────────────────
+gc.collect()
+tracemalloc.start()
+result_leaky = process_data_leaky(N_CHUNKS, CHUNK_SIZE)
+snap_leaky = tracemalloc.take_snapshot()
+tracemalloc.stop()
+
+peak_leaky = max(s.size for s in snap_leaky.statistics("lineno"))
+total_leaky = sum(s.size for s in snap_leaky.statistics("lineno"))
+
+# ── Measure efficient version ─────────────────────────────────────────────────
+del result_leaky
+gc.collect()
+tracemalloc.start()
+result_eff = process_data_efficient(N_CHUNKS, CHUNK_SIZE)
+snap_eff = tracemalloc.take_snapshot()
+tracemalloc.stop()
+
+total_eff = sum(s.size for s in snap_eff.statistics("lineno"))
+
+# ── Measure generator version ─────────────────────────────────────────────────
+del result_eff
+gc.collect()
+tracemalloc.start()
+result_gen = list(process_data_generator(N_CHUNKS, CHUNK_SIZE))
+snap_gen = tracemalloc.take_snapshot()
+tracemalloc.stop()
+
+total_gen = sum(s.size for s in snap_gen.statistics("lineno"))
+
+print(f"=== Memory Comparison ({N_CHUNKS} chunks x {CHUNK_SIZE:,} floats) ===")
+print(f"  Leaky (stores raw arrays):  {total_leaky/1024/1024:.2f} MB")
+print(f"  Efficient (stats only):     {total_eff/1024:.1f} KB")
+print(f"  Generator:                  {total_gen/1024:.1f} KB")
+print()
+
+# ── Top allocations in the leaky version ─────────────────────────────────────
+print("=== Top Memory Allocations (leaky) ===")
+for stat in snap_leaky.statistics("lineno")[:5]:
+    print(f"  {stat.size/1024:8.1f} KB  —  {stat.traceback[0]}")
+
+print()
+print("=== Memory Optimization Strategies ===")
+strategies = [
+    ("Store only aggregates",    "Never append raw arrays to a list if you only need stats"),
+    ("Use generators",           "yield instead of return for large sequences"),
+    ("Process in chunks",        "read_csv(chunksize=N) instead of loading entire file"),
+    ("Use float32 not float64",  "halves memory for ML arrays (float64 is rarely needed)"),
+    ("del + gc.collect()",       "explicitly release large intermediates before next step"),
+    ("numpy views not copies",   "arr[::2] is a view (no copy), arr[::2].copy() is not"),
 ]
+for strategy, why in strategies:
+    print(f"  {strategy:30s} — {why}")
+`} packages={["numpy"]} height={500} title="Memory Profiling with tracemalloc" />
 
-print(f"=== Performance Profiler: sum of squares (n={n:,}) ===")
-print(f"{'Implementation':20s} {'Time (ms)':>10} {'Speedup':>10} {'Correct':>8}")
-print("-" * 55)
+---
 
-baseline = None
-expected = impl_5_numpy_dot(data_arr)
+## Performance Optimization Patterns
 
-for name, fn in implementations:
-    t = timeit.timeit(fn, number=REPEAT) / REPEAT * 1000
-    if baseline is None:
-        baseline = t
-    speedup = baseline / t
-    correct = "YES" if fn() == expected else "NO"
-    bar = "█" * min(int(speedup * 2), 40)
-    print(f"{name:20s} {t:10.3f} {speedup:9.1f}x {correct:>8}  {bar}")
+<PythonPlayground code={String.raw`import timeit
+import numpy as np
+from functools import lru_cache
+import math
 
-print("\\n=== Memory Usage ===")
-for name, fn in implementations:
-    tracemalloc.start()
-    fn()
-    snap = tracemalloc.take_snapshot()
-    tracemalloc.stop()
-    mem = sum(s.size for s in snap.statistics("lineno")) / 1024
-    print(f"  {name:20s}: {mem:6.1f} KB")
+# ── Pattern 1: Replace Python loops with vectorized NumPy ────────────────────
+print("=== Pattern 1: Vectorization ===")
 
-print("\\n=== Recommendation ===")
-print("NumPy dot() wins: vectorized C loop, no Python overhead, cache-friendly.")
-print("Use NumPy whenever operating on numeric arrays.")
-`} packages={["numpy"]} height={460} title="Performance Profiler — 5 Implementations" />
+def haversine_loop(lat1, lon1, lats2, lons2):
+    """Distance from one point to many — pure Python loop."""
+    R = 6371  # Earth radius km
+    results = []
+    for lat2, lon2 in zip(lats2, lons2):
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = (math.sin(dlat/2)**2 +
+             math.cos(math.radians(lat1)) *
+             math.cos(math.radians(lat2)) *
+             math.sin(dlon/2)**2)
+        results.append(R * 2 * math.asin(math.sqrt(a)))
+    return results
 
-## Concurrency in FastAPI
+def haversine_vectorized(lat1, lon1, lats2, lons2):
+    """Same computation — fully vectorized."""
+    R = 6371.0
+    lat1_r = np.radians(lat1)
+    dlat = np.radians(lats2 - lat1)
+    dlon = np.radians(lons2 - lon1)
+    a = (np.sin(dlat/2)**2 +
+         np.cos(lat1_r) * np.cos(np.radians(lats2)) *
+         np.sin(dlon/2)**2)
+    return R * 2 * np.arcsin(np.sqrt(a))
+
+np.random.seed(42)
+N = 5000
+lat1, lon1 = 51.5074, -0.1278   # London
+lats2 = np.random.uniform(-90, 90, N).astype(np.float64)
+lons2 = np.random.uniform(-180, 180, N).astype(np.float64)
+lats2_list = lats2.tolist()
+lons2_list = lons2.tolist()
+
+t_loop = timeit.timeit(lambda: haversine_loop(lat1, lon1, lats2_list, lons2_list), number=10) / 10
+t_vec  = timeit.timeit(lambda: haversine_vectorized(lat1, lon1, lats2, lons2), number=100) / 100
+print(f"  Loop:        {t_loop*1000:.2f} ms")
+print(f"  Vectorized:  {t_vec*1000:.3f} ms  ({t_loop/t_vec:.0f}x faster)")
+
+# ── Pattern 2: Memoization with lru_cache ─────────────────────────────────────
+print("\n=== Pattern 2: Memoization ===")
+
+def fibonacci_naive(n):
+    if n < 2:
+        return n
+    return fibonacci_naive(n-1) + fibonacci_naive(n-2)
+
+@lru_cache(maxsize=None)
+def fibonacci_cached(n):
+    if n < 2:
+        return n
+    return fibonacci_cached(n-1) + fibonacci_cached(n-2)
+
+t_naive  = timeit.timeit(lambda: fibonacci_naive(28), number=3) / 3
+t_cached = timeit.timeit(lambda: fibonacci_cached(28), number=1000) / 1000
+print(f"  fibonacci(28) naive:  {t_naive*1000:.1f} ms")
+print(f"  fibonacci(28) cached: {t_cached*1000:.4f} ms  ({t_naive/t_cached:.0f}x faster)")
+print(f"  Cache info: {fibonacci_cached.cache_info()}")
+
+# ── Pattern 3: Set lookup O(1) vs list lookup O(n) ───────────────────────────
+print("\n=== Pattern 3: Set Lookup vs List Lookup ===")
+
+N_ITEMS = 50000
+big_list = list(range(N_ITEMS))
+big_set  = set(big_list)
+targets  = list(range(0, N_ITEMS, 100))   # 500 queries
+
+t_list = timeit.timeit(lambda: [x in big_list for x in targets], number=20) / 20
+t_set  = timeit.timeit(lambda: [x in big_set  for x in targets], number=2000) / 2000
+print(f"  List membership (O(n)): {t_list*1000:.2f} ms")
+print(f"  Set membership  (O(1)): {t_set*1000:.3f} ms  ({t_list/t_set:.0f}x faster)")
+
+# ── Pattern 4: String concatenation ──────────────────────────────────────────
+print("\n=== Pattern 4: String Building ===")
+
+N_STRINGS = 5000
+words = [f"word{i}" for i in range(N_STRINGS)]
+
+def concat_plus(words):
+    result = ""
+    for w in words:
+        result += w + " "
+    return result.strip()
+
+def concat_join(words):
+    return " ".join(words)
+
+t_plus = timeit.timeit(lambda: concat_plus(words), number=100) / 100
+t_join = timeit.timeit(lambda: concat_join(words), number=5000) / 5000
+print(f"  += concatenation: {t_plus*1000:.2f} ms  (O(n^2) — creates new string each time)")
+print(f"  ''.join():        {t_join*1000:.3f} ms  (O(n)  — single allocation)")
+print(f"  Speedup: {t_plus/t_join:.0f}x")
+
+print("\n=== Summary: Optimization Hierarchy ===")
+rules = [
+    ("1. Choose the right algorithm",   "O(n) beats O(n^2) at any scale"),
+    ("2. Use appropriate data structures","set/dict O(1) lookup vs list O(n)"),
+    ("3. Vectorize with NumPy",          "BLAS C routines vs Python bytecode"),
+    ("4. Cache expensive pure functions","lru_cache for repeated identical calls"),
+    ("5. Build strings with join()",     "Not += in a loop"),
+    ("6. Profile first",                 "Never optimize by intuition alone"),
+]
+for rank, tip in rules:
+    print(f"  {rank:35s} — {tip}")
+`} packages={["numpy"]} height={560} title="Python Performance Optimization Patterns" />
+
+---
+
+## Structured Logging
+
+Production logs must be machine-parseable. Structured JSON logs are queryable by any log aggregation system (Datadog, Splunk, AWS CloudWatch):
 
 ```python
-from fastapi import FastAPI, BackgroundTasks
-import asyncio
+# app/logging_config.py
+import logging
+import json
+import sys
+from contextvars import ContextVar
 
-app = FastAPI()
+correlation_id: ContextVar[str] = ContextVar("correlation_id", default="")
 
-# Async endpoints: release event loop during I/O waits
-@app.post("/predict/async")
-async def predict_async(request: PredictRequest):
-    # Non-blocking: event loop handles other requests while waiting
-    result = await run_prediction_in_thread(request)
-    return result
+class JSONFormatter(logging.Formatter):
+    """Emit one JSON object per log line — parseable by any log aggregator."""
 
-# CPU-bound: offload to thread pool to avoid blocking event loop
-from fastapi.concurrency import run_in_threadpool
+    RESERVED = {"name", "msg", "args", "levelname", "levelno", "pathname",
+                 "filename", "module", "exc_info", "exc_text", "stack_info",
+                 "lineno", "funcName", "created", "msecs", "relativeCreated",
+                 "thread", "threadName", "processName", "process"}
 
-@app.post("/predict/cpu")
-async def predict_cpu(request: PredictRequest):
-    # run_in_threadpool runs blocking code in a thread pool
-    result = await run_in_threadpool(blocking_predict, request)
-    return result
+    def format(self, record: logging.LogRecord) -> str:
+        log_obj = {
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S.%03dZ"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "line": record.lineno,
+            "correlation_id": correlation_id.get(""),
+        }
+        # Include any extra= fields that aren't internal logging fields
+        for key, value in record.__dict__.items():
+            if key not in self.RESERVED and not key.startswith("_"):
+                log_obj[key] = value
 
-# Background tasks: return immediately, work continues after response
-@app.post("/train")
-async def trigger_training(background_tasks: BackgroundTasks):
-    background_tasks.add_task(retrain_model_job, dataset_path="data/new.csv")
-    return {"status": "training started"}
+        if record.exc_info:
+            log_obj["exception"] = self.formatException(record.exc_info)
 
-async def retrain_model_job(dataset_path: str):
-    """Runs after the response is sent."""
-    await asyncio.sleep(0)   # Yield once to allow response to flush
-    # ... long training job ...
+        return json.dumps(log_obj, default=str)
+
+def configure_logging(level: str = "INFO") -> None:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JSONFormatter())
+    logging.basicConfig(level=level, handlers=[handler])
+
+# Usage:
+# logger = logging.getLogger(__name__)
+# logger.info("prediction.complete", extra={
+#     "model_version": "v2.1",
+#     "tenure": 24,
+#     "churn_probability": 0.73,
+#     "duration_ms": 12.4,
+# })
+#
+# Output:
+# {"timestamp": "2024-01-15T10:23:45.123Z", "level": "INFO",
+#  "logger": "app.api.predict", "message": "prediction.complete",
+#  "model_version": "v2.1", "churn_probability": 0.73, "duration_ms": 12.4}
 ```
 
-## Testing a FastAPI App
+**Logging levels — use them correctly:**
+```
+DEBUG    — Detailed internals: "Loading 3,412 rows from cache"
+INFO     — Normal events: "prediction.complete", "model.loaded"
+WARNING  — Degraded but functional: "cache.miss, falling back to DB"
+ERROR    — Request failed, but service alive: "prediction.failed: ValueError"
+CRITICAL — Service is broken: "model.load.failed — cannot serve requests"
+```
+
+---
+
+## Environment Configuration with Pydantic Settings
+
+<PythonPlayground code={String.raw`import os
+from typing import Literal
+
+# ── Production-grade settings pattern ─────────────────────────────────────────
+# In your project: from pydantic_settings import BaseSettings
+# Here we implement the same pattern manually
+
+class Settings:
+    """
+    Reads config from environment variables with type coercion and validation.
+
+    Pydantic Settings equivalent:
+
+        from pydantic_settings import BaseSettings
+        from pydantic import Field
+
+        class Settings(BaseSettings):
+            model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+            groq_api_key: str = Field(..., env="GROQ_API_KEY")
+            model_version: str = "v2.1.0"
+            max_batch_size: int = 32
+            log_level: Literal["DEBUG","INFO","WARNING","ERROR"] = "INFO"
+            environment: Literal["local","staging","production"] = "local"
+            redis_url: str | None = None
+    """
+
+    def __init__(self):
+        # Required — raise early if missing
+        self.groq_api_key = self._require("GROQ_API_KEY", "your-key-here")
+
+        # Optional with defaults and type coercion
+        self.model_version   = os.environ.get("MODEL_VERSION", "v2.1.0")
+        self.max_batch_size  = int(os.environ.get("MAX_BATCH_SIZE", "32"))
+        self.log_level       = os.environ.get("LOG_LEVEL", "INFO")
+        self.environment     = os.environ.get("ENVIRONMENT", "local")
+        self.redis_url       = os.environ.get("REDIS_URL")   # Optional[str]
+
+        self._validate()
+
+    def _require(self, key, default=None):
+        val = os.environ.get(key, default)
+        if val is None:
+            raise RuntimeError(
+                f"Required environment variable {key!r} is not set.\n"
+                f"Copy .env.example to .env and fill in {key}."
+            )
+        return val
+
+    def _validate(self):
+        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if self.log_level.upper() not in valid_levels:
+            raise ValueError(f"LOG_LEVEL must be one of {valid_levels}")
+        if self.max_batch_size < 1 or self.max_batch_size > 512:
+            raise ValueError("MAX_BATCH_SIZE must be between 1 and 512")
+        valid_envs = {"local", "staging", "production"}
+        if self.environment not in valid_envs:
+            raise ValueError(f"ENVIRONMENT must be one of {valid_envs}")
+
+    def is_production(self):
+        return self.environment == "production"
+
+    def __repr__(self):
+        # Never print API keys in logs
+        return (
+            f"Settings(environment={self.environment!r}, "
+            f"model_version={self.model_version!r}, "
+            f"max_batch_size={self.max_batch_size}, "
+            f"log_level={self.log_level!r}, "
+            f"groq_api_key=***)"
+        )
+
+# Singleton pattern — settings loaded once at startup
+_settings = None
+
+def get_settings() -> Settings:
+    """FastAPI Depends(get_settings) gives every endpoint the same instance."""
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
+
+# ── Demo ──────────────────────────────────────────────────────────────────────
+settings = get_settings()
+print(f"Settings loaded: {settings}")
+print(f"Is production:   {settings.is_production()}")
+print(f"Max batch size:  {settings.max_batch_size}")
+print()
+print("=== .env.example file ===")
+print("""
+# Required
+GROQ_API_KEY=your_key_from_console.groq.com
+
+# Optional
+MODEL_VERSION=v2.1.0
+MAX_BATCH_SIZE=32
+LOG_LEVEL=INFO
+ENVIRONMENT=local          # local | staging | production
+REDIS_URL=                 # Leave blank to disable caching
+""")
+`} height={440} title="Environment Configuration Pattern" />
+
+---
+
+## Testing a FastAPI Application
 
 ```python
-# tests/test_api.py
+# tests/test_predict.py
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch
+import numpy as np
 from app.main import app
 
-@pytest.fixture
-def client():
-    with TestClient(app) as c:
-        yield c
-
-@pytest.fixture
+@pytest.fixture(scope="module")
 def mock_model():
+    """Reusable mock — predict_proba returns 70% churn."""
     model = MagicMock()
-    model.predict_proba.return_value = [[0.3, 0.7]]   # 70% churn probability
+    model.predict_proba.return_value = np.array([[0.30, 0.70]])
     return model
 
-def test_health(client):
-    response = client.get("/health")
-    assert response.status_code == 200
-    assert response.json()["status"] == "healthy"
+@pytest.fixture(scope="module")
+def mock_scaler():
+    scaler = MagicMock()
+    scaler.transform.side_effect = lambda x: x   # Identity transform
+    return scaler
 
-def test_predict_valid(client, mock_model):
-    with patch.object(app.state, "model", mock_model):
-        response = client.post("/predict", json={
-            "tenure": 12,
-            "monthly_charges": 65.0,
+@pytest.fixture(scope="module")
+def client(mock_model, mock_scaler):
+    """TestClient with model pre-loaded in app.state."""
+    with TestClient(app) as c:
+        c.app.state.model = mock_model
+        c.app.state.scaler = mock_scaler
+        c.app.state.model_version = "test-v1"
+        yield c
+
+# ── Happy path ────────────────────────────────────────────────────────────────
+def test_predict_high_churn(client):
+    response = client.post(
+        "/predict/",
+        json={
+            "tenure_months": 3,
+            "monthly_charges": 89.5,
             "contract_type": "month-to-month",
-            "num_products": 2,
-        })
+            "num_products": 1,
+            "internet_service": "Fiber",
+        },
+        headers={"X-Api-Key": "dev-key"},
+    )
     assert response.status_code == 200
     data = response.json()
-    assert 0 <= data["churn_probability"] <= 1
-    assert data["churn_prediction"] is True   # 70% > 50%
+    assert data["churn_prediction"] is True        # 70% > 50%
+    assert data["risk_tier"] == "high"             # 70% > 70%
+    assert "recommendation" in data                # computed_field
+    assert data["model_version"] == "test-v1"
 
-def test_predict_invalid_contract(client):
-    response = client.post("/predict", json={
-        "tenure": 12,
-        "monthly_charges": 65.0,
-        "contract_type": "invalid",   # Should fail validation
-        "num_products": 2,
-    })
-    assert response.status_code == 422   # Pydantic validation error
+# ── Validation errors (422 Unprocessable Entity) ───────────────────────────────
+@pytest.mark.parametrize("bad_payload,error_field", [
+    ({"tenure_months": 0}, "tenure_months"),        # ge=1 violated
+    ({"monthly_charges": 5.0}, "monthly_charges"),  # custom validator
+    ({"contract_type": "weekly"}, "contract_type"), # not in Literal
+])
+def test_predict_validation(client, bad_payload):
+    base = {
+        "tenure_months": 12, "monthly_charges": 55.0,
+        "contract_type": "month-to-month", "num_products": 2,
+    }
+    base.update(bad_payload)
+    response = client.post("/predict/", json=base, headers={"X-Api-Key": "dev-key"})
+    assert response.status_code == 422
+
+# ── Authentication ─────────────────────────────────────────────────────────────
+def test_predict_no_auth(client):
+    response = client.post("/predict/", json={})
+    assert response.status_code == 401
 ```
 
-## Docker for Python
+---
+
+## Docker: Multi-Stage Builds
 
 ```dockerfile
-# Dockerfile
-FROM python:3.11-slim AS base
+# ── Stage 1: Builder ──────────────────────────────────────────────────────────
+FROM python:3.11-slim AS builder
+WORKDIR /build
+
+# Install build tools
+RUN pip install --no-cache-dir build hatchling
+
+# Copy dependency spec FIRST — this layer is cached unless pyproject.toml changes
+COPY pyproject.toml .
+RUN pip install --no-cache-dir ".[prod]" --target=/deps
+
+# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+FROM python:3.11-slim AS runtime
 WORKDIR /app
 
-# Dependencies layer (cached separately from code)
-COPY pyproject.toml .
-RUN pip install --no-cache-dir -e ".[prod]"
+# Non-root user — mandatory for production security
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
 
-# Code layer
-COPY src/ src/
+# Copy installed packages from builder
+COPY --from=builder /deps /usr/local/lib/python3.11/site-packages/
+
+# Copy application code LAST — changes here don't invalidate dependency layer
 COPY app/ app/
+COPY artifacts/ artifacts/   # Pre-trained model files
 
-# Non-root user for security
-RUN useradd --create-home appuser
+RUN chown -R appuser:appgroup /app
 USER appuser
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+
+# --workers: CPU count. --worker-class uvicorn.workers.UvicornWorker: async.
+CMD ["gunicorn", "app.main:app",
+     "--workers", "4",
+     "--worker-class", "uvicorn.workers.UvicornWorker",
+     "--bind", "0.0.0.0:8000",
+     "--timeout", "30",
+     "--access-logfile", "-",
+     "--error-logfile", "-"]
 ```
 
-```dockerfile
-# Multi-stage build to reduce image size
-FROM python:3.11-slim AS builder
-WORKDIR /build
-COPY pyproject.toml .
-RUN pip install --no-cache-dir build && python -m build
-
-FROM python:3.11-slim AS runtime
-WORKDIR /app
-COPY --from=builder /build/dist/*.whl .
-RUN pip install --no-cache-dir *.whl && rm *.whl
-CMD ["uvicorn", "ml_serving.main:app", "--host", "0.0.0.0", "--port", "8000"]
+**Layer ordering is a performance decision:**
+```
+Rarely changes  → COPY pyproject.toml + RUN pip install  (cached layer, fast rebuilds)
+Often changes   → COPY app/                               (invalidates only this + subsequent)
 ```
 
-Layer caching matters: put slowly-changing content (dependencies) before rapidly-changing content (code). The `COPY pyproject.toml` + `RUN pip install` layer is cached unless `pyproject.toml` changes.
+A model file change rebuilds only the last 2 layers — 5s instead of 3min.
 
-## Key Takeaways
+---
 
-- Use `src/` layout for libraries, flat layout for applications — this prevents silent import bugs in packaging
-- `pyproject.toml` is the single source of truth for project metadata, dependencies, and tool configuration
-- FastAPI's lifespan context manager is the correct place to load ML models — not module-level globals
-- Pydantic v2 validators (`@field_validator`, `@model_validator`) are the first line of defense against bad input
-- Never use `print()` in production — structured JSON logs are queryable by log aggregation systems
-- Profile with `cProfile` for CPU, `tracemalloc` for memory — never optimize without measuring first
-- NumPy vectorization can be 100x faster than Python loops; use `np.dot()` for sum-of-products patterns
-- Docker layer order is a performance decision: `COPY requirements` before `COPY source` maximizes cache hits
+## Full Project: ML Serving API
+
+<PythonPlayground code={String.raw`import numpy as np
+import time
+import json
+import hashlib
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from typing import Optional
+import random
+
+# ── Production ML serving without FastAPI (runs in Pyodide) ───────────────────
+# This demonstrates the business logic layer — validation, inference, caching,
+# rate limiting, and metrics — which is the hardest part to get right.
+
+# ── Simulated trained model ───────────────────────────────────────────────────
+class SimpleChurnModel:
+    """Logistic regression weights from a trained model."""
+
+    # Learned coefficients (normally from pickle.load("model.pkl"))
+    WEIGHTS = np.array([
+        -0.08,   # tenure_months (longer = less churn)
+         0.015,  # monthly_charges (higher = more churn)
+         0.6,    # is_month_to_month
+        -0.15,   # num_products (more = less churn)
+         0.3,    # is_fiber
+    ], dtype=np.float32)
+    BIAS = -1.5
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        logits = X @ self.WEIGHTS + self.BIAS
+        probas = 1 / (1 + np.exp(-logits))
+        return np.column_stack([1 - probas, probas])
+
+model = SimpleChurnModel()
+
+# ── In-memory LRU cache (Redis in production) ─────────────────────────────────
+class PredictionCache:
+    def __init__(self, maxsize=1000):
+        self._cache = {}
+        self._order = deque()
+        self._maxsize = maxsize
+        self.hits = self.misses = 0
+
+    def _key(self, features: list) -> str:
+        return hashlib.md5(json.dumps(features, sort_keys=True).encode()).hexdigest()[:16]
+
+    def get(self, features: list) -> Optional[dict]:
+        k = self._key(features)
+        if k in self._cache:
+            self.hits += 1
+            return self._cache[k]
+        self.misses += 1
+        return None
+
+    def set(self, features: list, result: dict):
+        k = self._key(features)
+        if len(self._cache) >= self._maxsize:
+            oldest = self._order.popleft()
+            self._cache.pop(oldest, None)
+        self._cache[k] = result
+        self._order.append(k)
+
+    @property
+    def hit_rate(self):
+        total = self.hits + self.misses
+        return self.hits / total if total > 0 else 0.0
+
+cache = PredictionCache()
+
+# ── Per-IP rate limiter (Upstash Redis in production) ─────────────────────────
+class RateLimiter:
+    def __init__(self, max_per_minute=60):
+        self._windows = defaultdict(list)
+        self.max_per_minute = max_per_minute
+
+    def allow(self, ip: str) -> tuple[bool, int]:
+        now = time.time()
+        window = self._windows[ip]
+        # Remove requests older than 60 seconds
+        while window and now - window[0] > 60:
+            window.pop(0)
+
+        if len(window) >= self.max_per_minute:
+            return False, self.max_per_minute - len(window)
+
+        window.append(now)
+        return True, self.max_per_minute - len(window)
+
+rate_limiter = RateLimiter(max_per_minute=10)
+
+# ── Metrics collector (Prometheus in production) ───────────────────────────────
+@dataclass
+class Metrics:
+    total_requests: int = 0
+    successful_predictions: int = 0
+    validation_errors: int = 0
+    rate_limited: int = 0
+    cache_hits: int = 0
+    latencies_ms: list = field(default_factory=list)
+
+    def p50(self): return np.percentile(self.latencies_ms, 50) if self.latencies_ms else 0
+    def p95(self): return np.percentile(self.latencies_ms, 95) if self.latencies_ms else 0
+    def p99(self): return np.percentile(self.latencies_ms, 99) if self.latencies_ms else 0
+
+metrics = Metrics()
+
+# ── Request validation ─────────────────────────────────────────────────────────
+def validate_request(data: dict) -> tuple[bool, str, list]:
+    errors = []
+
+    tenure = data.get("tenure_months")
+    if not isinstance(tenure, (int, float)) or not (1 <= tenure <= 120):
+        errors.append("tenure_months must be 1-120")
+
+    charges = data.get("monthly_charges")
+    if not isinstance(charges, (int, float)) or charges < 18 or charges > 1000:
+        errors.append("monthly_charges must be 18-1000")
+
+    contract = data.get("contract_type")
+    valid_contracts = {"month-to-month", "one_year", "two_year"}
+    if contract not in valid_contracts:
+        errors.append(f"contract_type must be one of {valid_contracts}")
+
+    products = data.get("num_products", 1)
+    if not isinstance(products, int) or not (1 <= products <= 8):
+        errors.append("num_products must be 1-8")
+
+    if errors:
+        return False, "validation_error", errors
+
+    features = [
+        float(tenure),
+        float(charges),
+        1.0 if contract == "month-to-month" else 0.0,
+        float(products),
+        1.0 if data.get("internet_service") == "Fiber" else 0.0,
+    ]
+    return True, "ok", features
+
+# ── The prediction endpoint ────────────────────────────────────────────────────
+def predict(request_data: dict, client_ip: str = "127.0.0.1") -> dict:
+    metrics.total_requests += 1
+    start = time.perf_counter()
+
+    # 1. Rate limit check
+    allowed, remaining = rate_limiter.allow(client_ip)
+    if not allowed:
+        metrics.rate_limited += 1
+        return {"error": "rate_limit_exceeded", "retry_after_seconds": 60}
+
+    # 2. Validate input
+    valid, status, result = validate_request(request_data)
+    if not valid:
+        metrics.validation_errors += 1
+        return {"error": "validation_error", "details": result}
+
+    features = result
+
+    # 3. Check cache
+    cached = cache.get(features)
+    if cached:
+        metrics.cache_hits += 1
+        elapsed = (time.perf_counter() - start) * 1000
+        metrics.latencies_ms.append(elapsed)
+        return {**cached, "cached": True, "latency_ms": round(elapsed, 3)}
+
+    # 4. Inference
+    X = np.array([features], dtype=np.float32)
+    proba = float(model.predict_proba(X)[0, 1])
+
+    risk = "high" if proba > 0.7 else "medium" if proba > 0.4 else "low"
+    recommendations = {
+        "high":   "Immediate retention offer: 20% discount + priority support",
+        "medium": "Proactive outreach within 7 days",
+        "low":    "Standard engagement — no intervention needed",
+    }
+
+    response = {
+        "churn_probability": round(proba, 4),
+        "churn_prediction": proba > 0.5,
+        "risk_tier": risk,
+        "recommendation": recommendations[risk],
+        "model_version": "v2.1.0",
+        "cached": False,
+    }
+
+    # 5. Cache the result
+    cache.set(features, response)
+
+    elapsed = (time.perf_counter() - start) * 1000
+    metrics.latencies_ms.append(elapsed)
+    metrics.successful_predictions += 1
+
+    return {**response, "latency_ms": round(elapsed, 3)}
+
+# ── Load test simulation ───────────────────────────────────────────────────────
+print("=== ML Serving API Load Test ===\n")
+
+# Simulate 100 requests from 5 different clients
+test_scenarios = [
+    {"tenure_months": 3,  "monthly_charges": 95.0,  "contract_type": "month-to-month", "num_products": 1, "internet_service": "Fiber"},
+    {"tenure_months": 36, "monthly_charges": 45.0,  "contract_type": "two_year",        "num_products": 4},
+    {"tenure_months": 12, "monthly_charges": 65.0,  "contract_type": "one_year",        "num_products": 2},
+    {"tenure_months": 1,  "monthly_charges": 120.0, "contract_type": "month-to-month",  "num_products": 1},
+    {"tenure_months": 60, "monthly_charges": 30.0,  "contract_type": "two_year",        "num_products": 6},
+    {"tenure_months": -1, "monthly_charges": 55.0,  "contract_type": "month-to-month",  "num_products": 2},  # Invalid
+    {"tenure_months": 24, "monthly_charges": 5.0,   "contract_type": "month-to-month",  "num_products": 2},  # Invalid
+]
+ips = [f"192.168.1.{i}" for i in range(1, 6)]
+
+random.seed(42)
+results_summary = {"success": 0, "error": 0, "rate_limited": 0}
+
+for i in range(80):
+    scenario = random.choice(test_scenarios)
+    ip = random.choice(ips)
+    result = predict(scenario.copy(), ip)
+
+    if "error" in result:
+        if result["error"] == "rate_limit_exceeded":
+            results_summary["rate_limited"] += 1
+        else:
+            results_summary["error"] += 1
+    else:
+        results_summary["success"] += 1
+
+# Print sample predictions
+print("Sample Predictions:")
+for scenario in test_scenarios[:3]:
+    r = predict(scenario, "demo-client")
+    if "churn_probability" in r:
+        print(f"  tenure={scenario['tenure_months']:3d}mo, "
+              f"charges={scenario.get('monthly_charges',0):6.1f}, "
+              f"contract={scenario['contract_type']:15s} -> "
+              f"churn={r['churn_probability']:.3f} [{r['risk_tier']:6s}]")
+
+print(f"\nRequest Summary:")
+for k, v in results_summary.items():
+    print(f"  {k:15s}: {v}")
+
+print(f"\nCache Performance:")
+print(f"  Hit rate:    {cache.hit_rate:.1%}")
+print(f"  Cache hits:  {cache.hits}")
+print(f"  Cache misses:{cache.misses}")
+
+print(f"\nLatency Distribution (successful requests):")
+if metrics.latencies_ms:
+    print(f"  p50:  {metrics.p50():.3f} ms")
+    print(f"  p95:  {metrics.p95():.3f} ms")
+    print(f"  p99:  {metrics.p99():.3f} ms")
+    print(f"  mean: {np.mean(metrics.latencies_ms):.3f} ms")
+`} packages={["numpy"]} height={580} title="Full ML Serving API — Business Logic Layer" />
+
+---
+
+## Exercises
+
+**Exercise 1 — Profiling Challenge**
+Write a function `word_frequency(text: str) -> dict[str, int]` using three approaches: (a) split + loop, (b) `Counter`, (c) regex + Counter. Use `timeit` to benchmark all three on a 10,000-word text. Report which is fastest and why.
+
+<PythonPlayground code={String.raw`import timeit
+import re
+from collections import Counter
+import random
+
+# Generate test text
+words = ["apple", "banana", "cherry", "dog", "elephant", "falcon", "grape"]
+text = " ".join(random.choices(words, k=10000))
+
+def word_freq_loop(text):
+    freq = {}
+    for word in text.split():
+        freq[word] = freq.get(word, 0) + 1
+    return freq
+
+def word_freq_counter(text):
+    return dict(Counter(text.split()))
+
+def word_freq_regex(text):
+    return dict(Counter(re.findall(r'\b\w+\b', text)))
+
+# YOUR TURN: Add your own implementation here!
+# def word_freq_custom(text):
+#     ...
+
+REPEAT = 200
+t1 = timeit.timeit(lambda: word_freq_loop(text), number=REPEAT) / REPEAT
+t2 = timeit.timeit(lambda: word_freq_counter(text), number=REPEAT) / REPEAT
+t3 = timeit.timeit(lambda: word_freq_regex(text), number=REPEAT) / REPEAT
+
+print(f"Loop + dict.get():  {t1*1000:.3f} ms")
+print(f"Counter(split()):   {t2*1000:.3f} ms  ({t1/t2:.1f}x vs loop)")
+print(f"regex + Counter:    {t3*1000:.3f} ms  ({t1/t3:.1f}x vs loop)")
+print()
+# Verify all give same results
+r1, r2, r3 = word_freq_loop(text), word_freq_counter(text), word_freq_regex(text)
+print(f"All agree: {r1 == r2 == r3}")
+print(f"Sample: {list(sorted(r1.items()))[:4]}")
+`} height={300} title="Exercise 1 — Word Frequency Profiling" />
+
+**Exercise 2 — Pydantic-Style Validator**
+Implement a `DatasetConfig` validator class that validates: `name` (3-50 chars, alphanumeric + underscores only), `n_rows` (100–10,000,000), `split_ratio` (0.05–0.4), and `features` (non-empty list of strings, each 1-30 chars). Raise descriptive errors for all violations.
+
+<PythonPlayground code={String.raw`import re
+
+class DatasetConfig:
+    """
+    Validate dataset configuration.
+
+    Rules:
+    - name: 3-50 chars, only [a-z0-9_] (lowercase, digits, underscores)
+    - n_rows: int, 100 to 10_000_000
+    - split_ratio: float, 0.05 to 0.40 (test set fraction)
+    - features: non-empty list, each feature name 1-30 chars
+    """
+
+    def __init__(self, name, n_rows, split_ratio, features):
+        # TODO: validate all fields
+        # Raise ValueError with a clear message for each violation
+        errors = []
+
+        # Validate name
+        # ...
+
+        # Validate n_rows
+        # ...
+
+        # Validate split_ratio
+        # ...
+
+        # Validate features
+        # ...
+
+        if errors:
+            raise ValueError("Validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
+
+        self.name = name
+        self.n_rows = n_rows
+        self.split_ratio = split_ratio
+        self.features = features
+
+    def train_size(self):
+        return int(self.n_rows * (1 - self.split_ratio))
+
+    def test_size(self):
+        return self.n_rows - self.train_size()
+
+# Test valid config
+config = DatasetConfig(
+    name="churn_dataset",
+    n_rows=50000,
+    split_ratio=0.2,
+    features=["tenure", "charges", "contract"],
+)
+print(f"Config: {config.name}, train={config.train_size():,}, test={config.test_size():,}")
+
+# Test invalid configs
+test_cases = [
+    ("Ab", 50000, 0.2, ["feat"]),        # name too short
+    ("a b", 50000, 0.2, ["feat"]),       # name has space
+    ("valid", 50, 0.2, ["feat"]),        # n_rows too small
+    ("valid", 50000, 0.5, ["feat"]),     # split_ratio too high
+    ("valid", 50000, 0.2, []),           # empty features
+]
+for args in test_cases:
+    try:
+        DatasetConfig(*args)
+        print(f"ERROR: Should have failed for {args[0]!r}")
+    except ValueError as e:
+        print(f"Caught (expected): {str(e).split(chr(10))[1].strip()}")
+`} height={340} title="Exercise 2 — Validator Implementation" />
+
+**Exercise 3 — Memory-Efficient Data Pipeline**
+Write a `DataPipeline` class with methods `from_csv_chunks(path, chunksize)` (generator), `filter(predicate)`, `transform(fn)`, and `to_stats()`. It should never hold more than one chunk in memory. Use `tracemalloc` to verify memory stays below 10MB even for a 1M row dataset.
+
+**Exercise 4 — Rate Limiter**
+Implement a `TokenBucketRateLimiter` with `capacity`, `refill_rate` (tokens/second), and `consume(n=1)` method. Test it under burst load: 100 requests in 1 second against a limiter with capacity=20, refill_rate=5/sec. Count how many succeed.
+
+<PythonPlayground code={String.raw`import time
+
+class TokenBucketRateLimiter:
+    """
+    Token bucket algorithm:
+    - Bucket holds 'capacity' tokens
+    - Tokens refill at 'refill_rate' per second
+    - Each request consumes 'n' tokens
+    - If insufficient tokens: deny (don't block)
+    """
+
+    def __init__(self, capacity: float, refill_rate: float):
+        # TODO: implement
+        pass
+
+    def consume(self, n: float = 1.0) -> bool:
+        """Return True if request allowed, False if rate limited."""
+        # TODO: implement
+        pass
+
+# Test
+limiter = TokenBucketRateLimiter(capacity=20, refill_rate=5)
+
+# Simulate 30 rapid requests
+allowed = 0
+denied = 0
+for i in range(30):
+    if limiter.consume():
+        allowed += 1
+    else:
+        denied += 1
+
+print(f"First burst (30 requests): {allowed} allowed, {denied} denied")
+print(f"Expected: ~20 allowed, ~10 denied (full bucket, then exhausted)")
+
+# Wait 2 seconds, try 15 more
+time.sleep(2)
+allowed2 = denied2 = 0
+for i in range(15):
+    if limiter.consume():
+        allowed2 += 1
+    else:
+        denied2 += 1
+print(f"\nAfter 2s wait (15 requests): {allowed2} allowed, {denied2} denied")
+print(f"Expected: ~10 allowed (5 tok/s * 2s = 10 tokens refilled)")
+`} height={280} title="Exercise 4 — Token Bucket Rate Limiter" />
+
+**Exercise 5 — Benchmark String Formatting Methods**
+Benchmark five ways to build a log line from 5 variables: `%` formatting, `.format()`, f-string, `Template`, and `"".join()` on a pre-built list. Rank them by speed. Then explain why f-strings and `%` are faster than `.format()`.
+
+**Exercise 6 — Structured Logger**
+Implement a `StructuredLogger` class that wraps Python's `logging` module and emits JSON. Each call to `info(event, **kwargs)` should produce one JSON line with `timestamp`, `level`, `event`, and all extra kwargs. Write 3 tests using `caplog` (pytest fixture).
+
+**Exercise 7 — Configuration Loader**
+Build a `Config` class that loads settings from three sources in priority order: (1) environment variables, (2) a `config.json` file, (3) hardcoded defaults. Write a test that patches `os.environ` and verifies environment variables override file values.
+
+**Exercise 8 — Production Health Check**
+Implement a `HealthChecker` class with async `check()` method that checks: model loaded, memory below 80% of 4GB, last prediction within 60 seconds, and no more than 5 errors in the last 60 seconds. Return `{"status": "healthy"|"degraded"|"unhealthy", "checks": {...}}`.
