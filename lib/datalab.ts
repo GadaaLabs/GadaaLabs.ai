@@ -136,6 +136,73 @@ export function computeStats(rows: Row[], fileName: string, fileSizeKB: number):
   return { fileName, fileSizeKB, rowCount: rows.length, columnCount: keys.length, columns };
 }
 
+// ---------------------------------------------------------------------------
+// JSON / JSONL normalisation — flatten nested objects to tabular rows
+// ---------------------------------------------------------------------------
+
+function flattenObject(obj: unknown, prefix = ""): Record<string, unknown> {
+  if (typeof obj !== "object" || obj === null) return { value: obj };
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+    const fullKey = prefix ? `${prefix}.${key}` : key;
+    if (Array.isArray(val)) {
+      result[fullKey] = JSON.stringify(val);
+    } else if (typeof val === "object" && val !== null) {
+      Object.assign(result, flattenObject(val, fullKey));
+    } else {
+      result[fullKey] = val;
+    }
+  }
+  return result;
+}
+
+export function normalizeJsonToRows(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) return data.map((item) => flattenObject(item));
+  if (typeof data === "object" && data !== null) {
+    for (const val of Object.values(data as Record<string, unknown>)) {
+      if (Array.isArray(val) && val.length > 0) return val.map((item) => flattenObject(item));
+    }
+    return [flattenObject(data)];
+  }
+  return [];
+}
+
+// ---------------------------------------------------------------------------
+// XML → rows: each repeated child element of the root becomes one row
+// ---------------------------------------------------------------------------
+
+export function normalizeXmlToRows(xmlString: string): Record<string, unknown>[] {
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xmlString, "application/xml");
+    if (doc.querySelector("parsererror")) throw new Error("XML parse error");
+
+    const root = doc.documentElement;
+    const children = Array.from(root.children);
+    if (children.length === 0) return [{ content: root.textContent?.trim() ?? "" }];
+
+    // Find the most frequent child tag name → those are the "rows"
+    const tagCounts: Record<string, number> = {};
+    for (const child of children) tagCounts[child.tagName] = (tagCounts[child.tagName] ?? 0) + 1;
+    const rowTag = Object.entries(tagCounts).sort((a, b) => b[1] - a[1])[0][0];
+    const rowElements = Array.from(root.querySelectorAll(`:scope > ${rowTag}`));
+
+    return rowElements.map((el) => {
+      const row: Record<string, unknown> = {};
+      // attributes
+      for (const attr of Array.from(el.attributes)) row[`@${attr.name}`] = attr.value;
+      // child text nodes
+      for (const child of Array.from(el.children)) {
+        row[child.tagName] = child.textContent?.trim() ?? "";
+      }
+      if (el.children.length === 0) row["_text"] = el.textContent?.trim() ?? "";
+      return row;
+    });
+  } catch {
+    return [{ raw: xmlString.slice(0, 500) }];
+  }
+}
+
 export function summaryToPrompt(summary: DatasetSummary): string {
   const lines: string[] = [
     `Dataset: ${summary.fileName} (${summary.rowCount} rows × ${summary.columnCount} columns, ${summary.fileSizeKB} KB)`,

@@ -7,13 +7,14 @@ import { ChartPanel } from "./ChartPanel";
 import { AgentCard, type AgentStatus } from "./AgentCard";
 import { NotesPanel } from "./NotesPanel";
 import { PromptBuilderTab } from "./PromptBuilderTab";
+import { ExpertHub } from "./ExpertHub";
 import { computeStats, summaryToPrompt, type DatasetSummary } from "@/lib/datalab";
 import { downloadNotebook } from "@/lib/notebook";
 import {
   BarChart2, Brain, MessageSquare, AlertCircle, Loader2, Send,
   RotateCcw, CheckCircle2, Download, FileDown, Zap,
   Database, TrendingUp, Cpu, FileText, BookOpen,
-  Users, Sparkles, StickyNote,
+  Users, Sparkles, StickyNote, FlaskConical, Cpu as CpuIcon,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
@@ -203,6 +204,9 @@ function metaFor(id: string): AgentMeta {
 // ─────────────────────────────────────────────
 
 export function DataLabShell() {
+  // Mode: "datalab" for dataset analysis, "expert-hub" for standalone expert agents
+  const [mode, setMode] = useState<"datalab" | "expert-hub">("datalab");
+
   // Core dataset state
   const [summary, setSummary] = useState<DatasetSummary | null>(null);
   const [parsing, setParsing] = useState(false);
@@ -594,9 +598,44 @@ export function DataLabShell() {
   // Empty state (no file loaded)
   // ─────────────────────────────────────────────
 
+  // ── Mode switcher (always visible) ──────────────────────────
+  const modeSwitcher = (
+    <div className="flex gap-2 mb-6">
+      {(["datalab", "expert-hub"] as const).map((m) => (
+        <button
+          key={m}
+          onClick={() => setMode(m)}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all"
+          style={{
+            background: mode === m
+              ? "linear-gradient(135deg, var(--color-purple-700), var(--color-purple-600))"
+              : "var(--color-bg-surface)",
+            color: mode === m ? "#fff" : "var(--color-text-muted)",
+            border: `1px solid ${mode === m ? "transparent" : "var(--color-border-default)"}`,
+            boxShadow: mode === m ? "var(--glow-purple-sm)" : "none",
+          }}
+        >
+          {m === "datalab"
+            ? <><FlaskConical className="h-4 w-4" /> Data Analysis</>
+            : <><CpuIcon className="h-4 w-4" /> Expert Agents</>}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (mode === "expert-hub") {
+    return (
+      <div>
+        {modeSwitcher}
+        <ExpertHub />
+      </div>
+    );
+  }
+
   if (!summary) {
     return (
       <div className="max-w-2xl mx-auto">
+        {modeSwitcher}
         <DropZone onData={handleData} onError={setError} loading={parsing} />
         {error && (
           <div className="mt-4 flex items-start gap-2 px-4 py-3 rounded-xl"
@@ -648,6 +687,7 @@ export function DataLabShell() {
 
   return (
     <div>
+      {modeSwitcher}
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
         <div>
