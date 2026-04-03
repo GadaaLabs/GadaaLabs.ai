@@ -2,6 +2,7 @@
 
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
+  // reserved for TimeSeriesTab
   LineChart, Line,
 } from "recharts";
 import type { DatasetSummary, ColumnStats, ChartType } from "@/lib/datalab";
@@ -318,7 +319,7 @@ interface Props {
 
 export function ChartPanel({ summary, chartInsights = {} }: Props) {
   const chartable = summary.columns.filter(
-    (c) => c.type !== "mixed" && (c.histogram?.length ?? 0) > 0 || (c.topValues?.length ?? 0) > 0
+    (c) => c.type !== "mixed" && ((c.histogram?.length ?? 0) > 0 || (c.topValues?.length ?? 0) > 0)
   );
 
   if (chartable.length === 0) {
