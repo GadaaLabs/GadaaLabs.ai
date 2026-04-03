@@ -8,6 +8,12 @@ import { AgentCard, type AgentStatus } from "./AgentCard";
 import { NotesPanel } from "./NotesPanel";
 import { PromptBuilderTab } from "./PromptBuilderTab";
 import { ExpertHub } from "./ExpertHub";
+import { DistributionsTab } from "./DistributionsTab";
+import { CorrelationsTab } from "./CorrelationsTab";
+import { OutliersTab } from "./OutliersTab";
+import { MissingTab } from "./MissingTab";
+import { DSWorkflowTab } from "./DSWorkflowTab";
+import { ReportTab } from "./ReportTab";
 import { computeStats, summaryToPrompt, type DatasetSummary } from "@/lib/datalab";
 import { downloadNotebook } from "@/lib/notebook";
 import {
@@ -21,7 +27,8 @@ import {
 // Types
 // ─────────────────────────────────────────────
 
-type Tab = "overview" | "charts" | "analysis" | "code" | "chat" | "agents" | "prompt-builder" | "notes";
+type Tab = "overview" | "charts" | "analysis" | "code" | "chat" | "agents" | "prompt-builder" | "notes"
+         | "distributions" | "correlations" | "outliers" | "missing" | "ds-workflow" | "report";
 
 interface Message { role: "user" | "assistant"; content: string; }
 
@@ -592,6 +599,12 @@ export function DataLabShell() {
     { id: "agents",          label: "Agent Team",     icon: Users },
     { id: "prompt-builder",  label: "Prompt Builder", icon: Sparkles },
     { id: "notes",           label: "Notes",          icon: StickyNote },
+    { id: "distributions",  label: "Distributions",  icon: BarChart2 },
+    { id: "correlations",   label: "Correlations",   icon: Brain },
+    { id: "outliers",       label: "Outliers",       icon: AlertCircle },
+    { id: "missing",        label: "Missing Data",   icon: Database },
+    { id: "ds-workflow",    label: "DS Workflow",    icon: Zap },
+    { id: "report",         label: "Report",         icon: FileText },
   ];
 
   // ─────────────────────────────────────────────
@@ -1079,6 +1092,34 @@ export function DataLabShell() {
         <div style={{ position: "relative" }}>
           <NotesPanel datasetName={summary.fileName} userId="anon" />
         </div>
+      )}
+
+      {tab === "distributions" && (
+        <DistributionsTab summary={summary} />
+      )}
+
+      {tab === "correlations" && (
+        <CorrelationsTab summary={summary} />
+      )}
+
+      {tab === "outliers" && (
+        <OutliersTab summary={summary} />
+      )}
+
+      {tab === "missing" && (
+        <MissingTab summary={summary} />
+      )}
+
+      {tab === "ds-workflow" && (
+        <DSWorkflowTab summary={summary} analysisComplete={pipelineDone} />
+      )}
+
+      {tab === "report" && (
+        <ReportTab
+          summary={summary}
+          qualityScore={0}
+          analysisComplete={pipelineDone}
+        />
       )}
     </div>
   );
