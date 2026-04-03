@@ -2,8 +2,6 @@
 
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
-  // reserved for TimeSeriesTab
-  LineChart, Line,
 } from "recharts";
 import type { DatasetSummary, ColumnStats, ChartType } from "@/lib/datalab";
 

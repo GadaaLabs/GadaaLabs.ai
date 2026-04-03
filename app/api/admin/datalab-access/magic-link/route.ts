@@ -22,8 +22,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "name and email are required" }, { status: 400 });
   }
 
-  const agentScope = agentsParam.split(",").map((s) => s.trim()).filter(Boolean);
-  const token = createMagicAccessToken(name, email, agentScope, days);
+  const VALID_SCOPES = new Set(["data-analyst", "visualization", "ml-expert", "feature-engineer", "nlp-expert", "time-series", "full"]);
+  const agentScope = agentsParam.split(",").map((s) => s.trim()).filter((s) => VALID_SCOPES.has(s));
+  const finalScope = agentScope.length > 0 ? agentScope : ["full"];
+  const token = createMagicAccessToken(name, email, finalScope, days);
 
   const origin = process.env.NEXT_PUBLIC_URL
     ?? process.env.NEXTAUTH_URL

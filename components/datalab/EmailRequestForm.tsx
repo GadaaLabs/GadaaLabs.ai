@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { Mail, Check, Loader2 } from "lucide-react";
 
-type AgentScope = "data-analyst" | "visualization" | "ml-expert" | "feature-engineer" | "nlp-expert" | "time-series" | "full";
+import type { AgentScope } from "@/lib/datalab-access";
 
 const AGENT_OPTIONS: { id: AgentScope; label: string }[] = [
   { id: "data-analyst", label: "Data Analyst" },

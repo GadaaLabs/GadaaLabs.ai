@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict",
-    maxAge: 604_800, // 7 days in seconds
+    maxAge: Math.max(0, Math.floor((result.payload.exp - Date.now()) / 1000)),
     path: "/",
   });
   return response;
