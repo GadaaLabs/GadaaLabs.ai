@@ -23,6 +23,7 @@ import {
   ExternalLink,
   Copy,
   Check,
+  Mail,
 } from "lucide-react";
 
 // ---------------------------------------------------------------------------
@@ -43,6 +44,16 @@ interface PendingRequest {
   email?: string;
   requestedAt: number;
   approvalUrl: string;
+}
+
+interface EmailPendingRequest {
+  type: "email";
+  id: string;
+  name: string;
+  email: string;
+  reason?: string;
+  agentScope: string[];
+  requestedAt: number;
 }
 
 type StatusMessage = { type: "success" | "error"; text: string } | null;
@@ -138,12 +149,55 @@ function StatCard({
 }
 
 // ---------------------------------------------------------------------------
+// CopyMagicLinkButton
+// ---------------------------------------------------------------------------
+
+function CopyMagicLinkButton({ req }: { req: EmailPendingRequest }) {
+  const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  async function handleCopy() {
+    setLoading(true);
+    try {
+      const agents = req.agentScope.join(",");
+      const url = `/api/admin/datalab-access/magic-link?name=${encodeURIComponent(req.name)}&email=${encodeURIComponent(req.email)}&agents=${encodeURIComponent(agents)}&days=7`;
+      const res = await fetch(url);
+      const data = (await res.json()) as { magicUrl?: string; error?: string };
+      if (data.magicUrl) {
+        await navigator.clipboard.writeText(data.magicUrl);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 3000);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <button
+      onClick={() => void handleCopy()}
+      disabled={loading}
+      className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity hover:opacity-80 disabled:opacity-50"
+      style={{
+        background: "rgba(52,211,153,0.12)",
+        border: "1px solid rgba(52,211,153,0.3)",
+        color: "#34d399",
+      }}
+    >
+      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      {loading ? "…" : copied ? "Copied!" : "Copy 7-day link"}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
 export default function AdminDataLabPage() {
   const [users, setUsers] = useState<DataLabUser[]>([]);
   const [pending, setPending] = useState<PendingRequest[]>([]);
+  const [emailPending, setEmailPending] = useState<EmailPendingRequest[]>([]);
   const [count, setCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<StatusMessage>(null);
@@ -173,10 +227,12 @@ export default function AdminDataLabPage() {
         users: DataLabUser[];
         count: number;
         pending: PendingRequest[];
+        emailPending: EmailPendingRequest[];
       };
       setUsers(data.users);
       setCount(data.count);
       setPending(data.pending ?? []);
+      setEmailPending(data.emailPending ?? []);
     } catch {
       setStatus({ type: "error", text: "Could not load. Are you signed in as an admin?" });
     } finally {
@@ -485,6 +541,76 @@ export default function AdminDataLabPage() {
                   <XCircle className="h-3.5 w-3.5" />
                   {denying === req.userId ? "…" : "Dismiss"}
                 </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── EMAIL PENDING REQUESTS ───────────────────────────────────────── */}
+      {emailPending.length > 0 && (
+        <div
+          className="rounded-2xl overflow-hidden mb-8"
+          style={{
+            background: "var(--color-bg-surface)",
+            border: "1px solid rgba(52,211,153,0.35)",
+            boxShadow: "0 0 0 3px rgba(52,211,153,0.04)",
+          }}
+        >
+          <div
+            className="px-6 py-4 flex items-center gap-2"
+            style={{ borderBottom: "1px solid var(--color-border-subtle)", background: "rgba(52,211,153,0.03)" }}
+          >
+            <Mail className="h-5 w-5" style={{ color: "#34d399" }} />
+            <h2 className="text-base font-semibold" style={{ color: "var(--color-text-primary)" }}>
+              Email Access Requests
+            </h2>
+            <span
+              className="ml-auto text-xs px-2 py-0.5 rounded-full font-medium"
+              style={{ background: "rgba(52,211,153,0.12)", color: "#34d399" }}
+            >
+              {emailPending.length} waiting
+            </span>
+          </div>
+          <div className="divide-y" style={{ borderColor: "var(--color-border-subtle)" }}>
+            {emailPending.map((req) => (
+              <div key={req.id} className="px-6 py-4 flex items-start gap-4">
+                <div
+                  className="flex h-9 w-9 items-center justify-center rounded-full text-sm font-bold flex-shrink-0 mt-0.5"
+                  style={{ background: "var(--color-bg-elevated)", color: "#34d399" }}
+                >
+                  {req.name.charAt(0).toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>{req.name}</p>
+                  <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>{req.email}</p>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {req.agentScope.map((scope) => (
+                      <span key={scope}
+                        className="text-xs px-2 py-0.5 rounded-full"
+                        style={{ background: "rgba(139,92,246,0.12)", color: "#8b5cf6",
+                          border: "1px solid rgba(139,92,246,0.25)" }}>
+                        {scope}
+                      </span>
+                    ))}
+                  </div>
+                  {req.reason && (
+                    <p className="text-xs mt-1 italic" style={{ color: "var(--color-text-muted)" }}>
+                      &ldquo;{req.reason}&rdquo;
+                    </p>
+                  )}
+                  <p className="text-xs mt-0.5" style={{ color: "var(--color-text-disabled)" }}>
+                    {timeAgo(req.requestedAt)}
+                  </p>
+                </div>
+                <div className="flex flex-col gap-2 items-end">
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                    style={{ background: "rgba(52,211,153,0.1)", color: "#34d399",
+                      border: "1px solid rgba(52,211,153,0.25)" }}>
+                    Email
+                  </span>
+                  <CopyMagicLinkButton req={req} />
+                </div>
               </div>
             ))}
           </div>

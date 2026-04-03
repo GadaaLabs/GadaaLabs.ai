@@ -8,6 +8,7 @@ import {
   getAccessCount,
   getPendingRequests,
   removePendingRequest,
+  getEmailPendingRequests,
 } from "@/lib/datalab-access";
 
 // ---------------------------------------------------------------------------
@@ -28,7 +29,12 @@ export async function GET() {
 
   const users = getAllowedUsers();
   const pending = getPendingRequests();
-  return NextResponse.json({ users, count: getAccessCount(), pending });
+  return NextResponse.json({
+    users,
+    count: getAccessCount(),
+    pending,
+    emailPending: getEmailPendingRequests(),
+  });
 }
 
 // ---------------------------------------------------------------------------
