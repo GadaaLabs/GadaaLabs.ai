@@ -32,6 +32,10 @@ export async function GET(req: NextRequest) {
   return response;
 }
 
+function escHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 function errorHtml(message: string): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Access Error</title>
 <style>body{font-family:system-ui;background:#06060e;color:#e8edf5;display:flex;
@@ -41,6 +45,6 @@ padding:32px;max-width:420px;text-align:center;}
 h1{color:#fb7185;font-size:20px;margin:0 0 12px;}
 p{color:#9ba8bc;font-size:14px;}
 a{color:#8b5cf6;}</style></head>
-<body><div class="card"><h1>Access Error</h1><p>${message}</p>
+<body><div class="card"><h1>Access Error</h1><p>${escHtml(message)}</p>
 <p><a href="/datalab">← Back to DataLab</a></p></div></body></html>`;
 }

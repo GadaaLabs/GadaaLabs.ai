@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { addEmailPendingRequest, checkEmailRateLimit } from "@/lib/datalab-access";
+import { addEmailPendingRequest, checkEmailRateLimit, type AgentScope } from "@/lib/datalab-access";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -28,9 +28,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "reason must be a string (max 300 chars)" }, { status: 400 });
   }
 
-  const scope: string[] = Array.isArray(agentScope) && agentScope.length > 0
-    ? agentScope.filter((s) => typeof s === "string")
+  const VALID_SCOPES = new Set<string>([
+    "data-analyst", "visualization", "ml-expert",
+    "feature-engineer", "nlp-expert", "time-series", "full",
+  ]);
+  const scope: AgentScope[] = Array.isArray(agentScope) && agentScope.length > 0
+    ? agentScope.filter((s): s is AgentScope => typeof s === "string" && VALID_SCOPES.has(s))
     : ["full"];
+  if (scope.length === 0) {
+    return NextResponse.json({ error: "Invalid agentScope values" }, { status: 400 });
+  }
 
   if (!checkEmailRateLimit(email.toLowerCase())) {
     return NextResponse.json(
@@ -43,7 +50,7 @@ export async function POST(req: NextRequest) {
     name: name.trim(),
     email: email.toLowerCase().trim(),
     reason: reason?.trim(),
-    agentScope: scope as import("@/lib/datalab-access").AgentScope[],
+    agentScope: scope,
   });
 
   return NextResponse.json({ ok: true });

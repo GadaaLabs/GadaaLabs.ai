@@ -15,7 +15,8 @@ export async function GET(req: NextRequest) {
   const name = req.nextUrl.searchParams.get("name") ?? "";
   const email = req.nextUrl.searchParams.get("email") ?? "";
   const agentsParam = req.nextUrl.searchParams.get("agents") ?? "full";
-  const days = parseInt(req.nextUrl.searchParams.get("days") ?? "7", 10);
+  const rawDays = parseInt(req.nextUrl.searchParams.get("days") ?? "7", 10);
+  const days = Number.isFinite(rawDays) && rawDays > 0 && rawDays <= 365 ? rawDays : 7;
 
   if (!name || !email) {
     return NextResponse.json({ error: "name and email are required" }, { status: 400 });
