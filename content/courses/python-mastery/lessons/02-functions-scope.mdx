@@ -1,643 +1,1236 @@
 ---
-title: "Functions, Scope & Modules"
-description: "Master Python functions from first principles: parameters, defaults, *args/**kwargs, closures, and scope rules. Build a text statistics analyzer and a reusable utility module."
-duration: 26
+title: "Functions, Scope, Closures & Functional Programming"
+description: "Master Python functions completely — from first principles to closures, decorators, and functional programming patterns. Understand scope, namespaces, and how Python resolves names."
+duration: 32
 order: 2
 ---
 
-## Why Functions Are the Unit of Thought
+## Functions Are First-Class Objects
 
-A function is not just a way to avoid repeating code. It is a named, callable unit of computation that takes inputs, does work, and returns outputs. Good Python code is almost entirely functions and classes working together — understanding them deeply is the single biggest lever you have for writing better code.
+In Python, functions are **first-class objects** — they are values just like integers or strings. You can assign a function to a variable, store it in a list, pass it as an argument, and return it from another function. This is not a trick or an edge case; it is a core design principle of Python that unlocks enormous expressive power.
 
-Python functions are **first-class objects**. They can be stored in variables, passed as arguments, returned from other functions, and stored in data structures. This is not a curiosity — it enables entire programming paradigms: callbacks, decorators, functional pipelines.
-
-## Defining Functions
-
-The `def` keyword creates a function object and binds it to a name. The body runs only when called.
-
-```python
-def greet(name):
+<PythonPlayground code={String.raw`def greet(name):
+    """Return a personalized greeting."""
     return f"Hello, {name}!"
 
-message = greet("Ada")   # calls the function
-print(message)           # Hello, Ada!
-```
+# A function is an object with an identity, type, and value
+print(f"Type:     {type(greet)}")
+print(f"Identity: {id(greet)}")
+print(f"Name:     {greet.__name__}")
+print(f"Docstring:{greet.__doc__}")
 
-A function without an explicit `return` statement returns `None`. Always be intentional about return values.
+# Assign to another name -- both point to the same function object
+say_hello = greet
+print(f"\nsay_hello is greet: {say_hello is greet}")
+print(say_hello("Alice"))
+
+# Store in a data structure
+ops = [greet, str.upper, str.lower]
+for fn in ops:
+    print(fn("world"))
+
+# Pass as an argument
+def apply_twice(func, value):
+    return func(func(value))
+
+print(f"\napply_twice(str.upper, 'hello'): {apply_twice(str.upper, 'hello')}")
+print(f"apply_twice(lambda x: x*2, 3):  {apply_twice(lambda x: x*2, 3)}")
+`} height={380} />
+
+### `def`, `return`, and the Implicit `None`
+
+Every Python function returns a value. If you do not write a `return` statement (or write `return` with no value), Python implicitly returns `None`. This is a common source of bugs — assigning the result of a function that forgets to return.
 
 <PythonPlayground code={String.raw`def add(a, b):
-    """Return the sum of a and b."""
     return a + b
 
-def describe(value):
-    """Print the type and value — returns None implicitly."""
-    print(f"Value: {value!r}, Type: {type(value).__name__}")
+def greet_print(name):
+    print(f"Hello, {name}")      # prints but does NOT return
 
-result = add(3, 4)
-print(result)            # 7
+def early_return(n):
+    if n < 0:
+        return "negative"        # early exit
+    if n == 0:
+        return "zero"
+    return "positive"
 
-describe(42)
-describe("hello")
-describe([1, 2, 3])
+# Normal return
+print(add(3, 4))
 
-# Functions are objects — you can inspect them
-print(add.__name__)      # add
-print(add.__doc__)       # Return the sum of a and b.
-`} title="Basic function definition" />
+# Forgetting to capture the return value -- very common bug
+result = greet_print("Alice")    # prints "Hello, Alice"
+print(f"result = {result!r}")    # None -- the function printed, didn't return
 
-### Docstrings
+# Multiple return values -- actually returns a tuple
+def minmax(lst):
+    return min(lst), max(lst)    # packs into a tuple
 
-Every non-trivial function should have a docstring. Python treats the first string literal in a function body as its documentation. Tools like `help()`, IDEs, and documentation generators read it automatically.
+data = [3, 1, 4, 1, 5, 9, 2, 6]
+lo, hi = minmax(data)           # unpack the tuple
+print(f"\nMin: {lo}, Max: {hi}")
 
-```python
-def calculate_bmi(weight_kg, height_m):
+also_works = minmax(data)        # keep as tuple
+print(f"Tuple: {also_works}")
+print(f"Type:  {type(also_works)}")
+`} height={360} />
+
+### Docstrings — PEP 257
+
+Docstrings are string literals placed immediately after the function definition. They become the `__doc__` attribute and are shown by `help()`. Write them for every public function.
+
+<PythonPlayground code={String.raw`def calculate_area(length, width):
     """
-    Calculate Body Mass Index.
+    Calculate the area of a rectangle.
 
     Args:
-        weight_kg: Weight in kilograms.
-        height_m: Height in metres.
+        length (float): The length of the rectangle. Must be positive.
+        width  (float): The width of the rectangle. Must be positive.
 
     Returns:
-        BMI as a float, rounded to 1 decimal place.
+        float: The area (length * width).
+
+    Raises:
+        ValueError: If either dimension is non-positive.
+
+    Examples:
+        >>> calculate_area(5, 3)
+        15
+        >>> calculate_area(2.5, 4.0)
+        10.0
     """
-    return round(weight_kg / height_m ** 2, 1)
-```
+    if length <= 0 or width <= 0:
+        raise ValueError(f"Dimensions must be positive, got {length} x {width}")
+    return length * width
 
-## Parameters: The Full Picture
+# Access the docstring programmatically
+print(calculate_area.__doc__)
 
-Python has five distinct parameter types. Most Python developers only use three, but knowing all five prevents confusion when you encounter them.
+# help() formats it nicely
+help(calculate_area)
+`} height={380} />
+
+---
+
+## All Parameter Types — A Complete Guide
+
+Python has five distinct parameter types. Understanding the rules for combining them prevents confusing `TypeError` messages.
 
 ### Positional and Keyword Arguments
-
-Any parameter can be passed positionally (by order) or by keyword (by name). Keyword arguments can appear in any order.
 
 <PythonPlayground code={String.raw`def connect(host, port, timeout):
     print(f"Connecting to {host}:{port} (timeout={timeout}s)")
 
-# Positional — order matters
-connect("localhost", 5432, 30)
+# Positional: order matters
+connect("localhost", 8080, 30)
 
-# Keyword — order doesn't matter
-connect(timeout=30, host="localhost", port=5432)
+# Keyword: order does not matter
+connect(timeout=30, host="localhost", port=8080)
 
-# Mix: positional first, then keyword
-connect("localhost", timeout=30, port=5432)
-`} title="Positional vs keyword arguments" />
+# Mixed: positional must come first
+connect("localhost", timeout=30, port=8080)
 
-### Default Parameter Values
+# This would fail: positional after keyword
+# connect(host="localhost", 8080, 30)  # SyntaxError
+`} height={240} />
 
-Parameters with defaults are optional at the call site. Always put defaulted parameters after non-defaulted ones.
+### Default Values — The Mutable Default Trap
 
-**Critical rule**: Never use a mutable object (list, dict) as a default value. Python creates the default object once when the function is defined, not each time it is called.
+Default values are evaluated **once** when the `def` statement executes — NOT each time the function is called. Mutable defaults (lists, dicts) are shared across all calls. This is one of Python's most famous gotchas.
 
-<PythonPlayground code={String.raw`# CORRECT: use None and create inside the function
-def append_item(item, collection=None):
+<PythonPlayground code={String.raw`# THE TRAP: mutable default argument
+def add_item_BAD(item, collection=[]):
+    collection.append(item)
+    return collection
+
+print(add_item_BAD("apple"))   # ['apple']
+print(add_item_BAD("banana"))  # ['apple', 'banana'] -- NOT ['banana']!
+print(add_item_BAD("cherry"))  # ['apple', 'banana', 'cherry']
+
+# The default list is shared across ALL calls -- it persists between calls!
+print(f"\nThe default list: {add_item_BAD.__defaults__}")
+
+# THE FIX: use None as sentinel, create a new list inside the function
+def add_item_GOOD(item, collection=None):
     if collection is None:
-        collection = []
+        collection = []         # new list created on each call
     collection.append(item)
     return collection
 
-# Each call gets a fresh list
-a = append_item(1)
-b = append_item(2)
-print(a)   # [1]
-print(b)   # [2]  — correct!
+print("\nFixed version:")
+print(add_item_GOOD("apple"))   # ['apple']
+print(add_item_GOOD("banana"))  # ['banana']  -- correct!
+print(add_item_GOOD("cherry"))  # ['cherry']  -- correct!
 
-# WRONG pattern (demonstrated here for illustration):
-def broken_append(item, collection=[]):  # DON'T do this
-    collection.append(item)
-    return collection
+# Passing an explicit list still works
+my_list = [1, 2]
+print(add_item_GOOD(3, my_list))   # [1, 2, 3]
+`} height={400} />
 
-x = broken_append(1)
-y = broken_append(2)
-print(x)   # [1, 2]  — WRONG, shared mutable default!
-print(y)   # [1, 2]  — same list!
-`} title="Default values — the mutable default trap" />
+### `*args` and `**kwargs`
 
-### *args and **kwargs
+`*args` collects extra positional arguments into a **tuple**. `**kwargs` collects extra keyword arguments into a **dict**.
 
-`*args` collects extra positional arguments into a tuple. `**kwargs` collects extra keyword arguments into a dict. They let you write functions that accept a variable number of arguments.
+<PythonPlayground code={String.raw`# *args -- variable positional arguments
+def total(*args):
+    print(f"args type: {type(args)}, value: {args}")
+    return sum(args)
 
-<PythonPlayground code={String.raw`def summarize(*args, **kwargs):
-    """Accept any positional and keyword arguments."""
-    print(f"Positional: {args}")
-    print(f"Keyword:    {kwargs}")
+print(total(1, 2, 3))
+print(total(10, 20, 30, 40, 50))
+print(total())            # empty tuple -- sum([]) = 0
 
-summarize(1, 2, 3, name="Ada", year=1815)
+# **kwargs -- variable keyword arguments
+def display_info(**kwargs):
+    print(f"kwargs type: {type(kwargs)}")
+    for key, value in kwargs.items():
+        print(f"  {key}: {value}")
 
-# Real use case: flexible logging
-def log(level, *messages, sep=" ", prefix=""):
-    joined = sep.join(str(m) for m in messages)
-    print(f"[{level.upper()}] {prefix}{joined}")
+display_info(name="Alice", age=30, city="NYC")
 
-log("info", "Server", "started", "OK")
-log("error", "File not found", sep=" | ", prefix=">> ")
+# Combining all parameter types
+def full_example(a, b, *args, keyword_only, **kwargs):
+    print(f"a={a}, b={b}")
+    print(f"args={args}")
+    print(f"keyword_only={keyword_only}")
+    print(f"kwargs={kwargs}")
 
-# Unpacking into a function call
-def add3(a, b, c):
-    return a + b + c
+full_example(1, 2, 3, 4, 5, keyword_only="required", extra="yes", debug=True)
+
+# Unpacking with * and ** when CALLING a function
+def add(x, y, z):
+    return x + y + z
 
 nums = [1, 2, 3]
-opts = {"a": 10, "b": 20, "c": 30}
-print(add3(*nums))   # unpack list as positional args
-print(add3(**opts))  # unpack dict as keyword args
-`} title="*args and **kwargs" />
+print(f"\nadd(*nums) = {add(*nums)}")     # unpack list as positional args
+
+cfg = {"x": 10, "y": 20, "z": 30}
+print(f"add(**cfg) = {add(**cfg)}")       # unpack dict as keyword args
+`} height={440} />
 
 ### Keyword-Only and Positional-Only Parameters
 
-Parameters after a bare `*` are keyword-only. Parameters before a `/` are positional-only. These are useful for designing clean APIs.
+Python 3 added syntax to force certain parameters to be passed only as keywords (after `*`) or only as positionals (before `/`):
 
-<PythonPlayground code={String.raw`# Keyword-only: must be passed as keyword=value
-def create_user(name, *, role="viewer", active=True):
-    return {"name": name, "role": role, "active": active}
+<PythonPlayground code={String.raw`# Keyword-only: parameters AFTER bare * MUST be passed by keyword
+def draw_line(start, end, *, color="black", width=1, dashed=False):
+    print(f"Line from {start} to {end}: color={color}, width={width}, dashed={dashed}")
 
-user = create_user("Ada", role="admin")
-print(user)
+draw_line((0,0), (10,10))                                    # defaults
+draw_line((0,0), (10,10), color="red", width=2)              # explicit
+# draw_line((0,0), (10,10), "red")  # TypeError: positional!
 
-# This would raise TypeError:
-# create_user("Ada", "admin")  # role must be keyword
+# Positional-only: parameters BEFORE / MUST be passed by position (Python 3.8+)
+def fast_divide(numerator, denominator, /):
+    return numerator / denominator
 
-# Positional-only (Python 3.8+): cannot use as keyword
-def magnitude(x, y, /):
-    return (x**2 + y**2) ** 0.5
+print(fast_divide(10, 2))   # fine
 
-print(magnitude(3, 4))   # 5.0
-# magnitude(x=3, y=4) would raise TypeError
-`} title="Keyword-only and positional-only parameters" />
+# Combined: pos-only / normal * keyword-only
+def complex_sig(pos_only, /, normal, *, kw_only):
+    print(f"pos_only={pos_only}, normal={normal}, kw_only={kw_only}")
 
-## Scope: The LEGB Rule
+complex_sig(1, 2, kw_only=3)                  # positional for first two
+complex_sig(1, normal=2, kw_only=3)           # normal can be keyword
+# complex_sig(pos_only=1, normal=2, kw_only=3)  # TypeError
 
-When Python encounters a name, it searches four scopes in order: **L**ocal, **E**nclosing, **G**lobal, **B**uilt-in. This is the LEGB rule. Understanding it eliminates an entire class of bugs.
+# Parameter ordering rule:
+# positional-only / positional-or-keyword *args keyword-only **kwargs
+def everything(a, b, /, c, d, *args, e, f=10, **kwargs):
+    print(f"a={a}, b={b}, c={c}, d={d}, args={args}, e={e}, f={f}, kwargs={kwargs}")
 
-- **Local** — names defined inside the current function
-- **Enclosing** — names in the enclosing function (for nested functions)
-- **Global** — names defined at module level
-- **Built-in** — Python's built-in names (`len`, `print`, `range`, etc.)
+everything(1, 2, 3, 4, 5, 6, e=7, g=8)
+`} height={400} />
 
-<PythonPlayground code={String.raw`x = "global"           # Global scope
+---
+
+## Scope and the LEGB Rule
+
+When Python encounters a name like `x`, it searches for it in a specific order: **L**ocal → **E**nclosing → **G**lobal → **B**uilt-in. The first match wins.
+
+<PythonPlayground code={String.raw`x = "global"          # Global scope
 
 def outer():
-    x = "enclosing"    # Enclosing scope (relative to inner)
+    x = "enclosing"   # Enclosing scope (for inner)
 
     def inner():
-        x = "local"    # Local scope — shadows the others
-        print(f"inner sees: {x}")
+        x = "local"   # Local scope
+        print(f"inner sees: {x}")   # "local"
 
     inner()
-    print(f"outer sees: {x}")
+    print(f"outer sees: {x}")       # "enclosing"
 
 outer()
-print(f"module sees: {x}")
+print(f"module sees: {x}")          # "global"
 
-# Built-in scope — len, print, range etc. are always available
-print(len("hello"))    # built-in len
-`} title="LEGB scope rules" />
+# Built-in scope -- Python's built-in names live here
+print(f"\nBuilt-in 'len': {len}")
 
-### global and nonlocal
+# You can (but should not) shadow built-ins
+def bad_example():
+    len = lambda x: "I broke len!"   # shadows the built-in
+    print(len([1, 2, 3]))             # calls our lambda, not the built-in
 
-Use `global` to rebind a module-level name from inside a function. Use `nonlocal` to rebind an enclosing function's name. Both are code smells in large programs — prefer returning values or using classes — but they have legitimate uses.
+bad_example()
+print(len([1, 2, 3]))                 # module scope still has the real len
 
-<PythonPlayground code={String.raw`# global keyword
-counter = 0
+# The LEGB lookup at work:
+y = "global y"
 
-def increment():
-    global counter   # declare we want the module-level counter
+def show_legb():
+    # y is not defined locally or in enclosing scope
+    # Python looks up LEGB and finds it in Global
+    print(f"Found y in global scope: {y}")
+
+show_legb()
+
+# Built-in as fallback
+def show_builtin():
+    # 'print' is not defined locally, globally, or in any enclosing scope
+    # Python finds it in the Built-in scope
+    print("Found 'print' in built-in scope")
+
+show_builtin()
+`} height={440} />
+
+### `global` and `nonlocal` Statements
+
+Without a declaration, assignment inside a function creates a **local** variable, even if a global with the same name exists. Use `global` or `nonlocal` to modify outer variables.
+
+<PythonPlayground code={String.raw`counter = 0        # global
+
+# This would cause UnboundLocalError:
+# def increment_BAD():
+#     counter = counter + 1   # Python sees assignment, treats as local,
+#                              # but it's not defined locally yet
+
+def increment_GOOD():
+    global counter           # declare we want the global
     counter += 1
 
-increment()
-increment()
-print(counter)   # 2
+increment_GOOD()
+increment_GOOD()
+increment_GOOD()
+print(f"counter after 3 increments: {counter}")
 
-# nonlocal keyword — the clean way to build accumulators
+# nonlocal -- modify enclosing (non-global) scope
 def make_counter(start=0):
     count = start
 
     def increment(step=1):
-        nonlocal count
+        nonlocal count        # modify the enclosing count
         count += step
         return count
 
-    return increment
+    def reset():
+        nonlocal count
+        count = start
 
-c = make_counter(10)
-print(c())    # 11
-print(c(5))   # 16
-print(c())    # 17
-`} title="global and nonlocal" />
+    return increment, reset
 
-## Closures: Functions That Remember
+inc, rst = make_counter(10)
+print(f"\nCounter: {inc()}")     # 11
+print(f"Counter: {inc()}")       # 12
+print(f"Counter: {inc(5)}")      # 17
+rst()
+print(f"After reset: {inc()}")   # 11
 
-A closure is a function that captures variables from its enclosing scope even after that scope has finished executing. The function object carries a reference to those variables.
+# Inspect namespace dicts -- useful for debugging
+def demo_namespaces():
+    local_var = "I am local"
+    another = 42
+    print(f"locals() keys: {list(locals().keys())}")
 
-This is how Python implements things like decorators, factory functions, and stateful callbacks without needing a class.
+demo_namespaces()
+print(f"globals() has 'counter': {'counter' in globals()}")
+`} height={440} />
 
-<PythonPlayground code={String.raw`def make_multiplier(factor):
-    """Returns a function that multiplies by factor."""
-    def multiply(x):
-        return x * factor   # factor is captured from enclosing scope
-    return multiply
+---
+
+## Closures — The Deep Dive
+
+A **closure** is a function that remembers the variables from the scope in which it was created, even after that scope has finished executing. It "closes over" those free variables, keeping them alive in special **cell objects**.
+
+<PythonPlayground code={String.raw`def make_multiplier(n):
+    # n lives in the enclosing scope of inner
+    def inner(x):
+        return x * n    # inner captures n from the enclosing scope
+    return inner        # return inner WITH its reference to n
 
 double = make_multiplier(2)
 triple = make_multiplier(3)
+times10 = make_multiplier(10)
 
 print(double(5))    # 10
 print(triple(5))    # 15
-print(double(triple(4)))  # double(12) = 24
+print(times10(7))   # 70
 
-# Inspect what the closure captures
-print(double.__closure__[0].cell_contents)  # 2
-print(triple.__closure__[0].cell_contents)  # 3
+# Each closure has its own captured 'n' stored in a cell object
+print(f"\ndouble.__closure__:  {double.__closure__}")
+print(f"double's n:          {double.__closure__[0].cell_contents}")
+print(f"triple's n:          {triple.__closure__[0].cell_contents}")
 
-# Real-world use: parameterized validators
-def make_range_validator(min_val, max_val):
-    def validate(value):
-        if not (min_val <= value <= max_val):
-            raise ValueError(f"{value} must be between {min_val} and {max_val}")
-        return value
-    return validate
+# The free variables a closure references
+print(f"\ndouble.__code__.co_freevars: {double.__code__.co_freevars}")
 
-validate_age = make_range_validator(0, 150)
-validate_score = make_range_validator(0, 100)
+# Practical closure: private state (pre-OOP style)
+def make_bank_account(balance=0):
+    _balance = balance
 
-print(validate_age(25))     # 25
-print(validate_score(87))   # 87
-try:
-    validate_age(200)
-except ValueError as e:
-    print(e)
-`} title="Closures and factory functions" />
+    def deposit(amount):
+        nonlocal _balance
+        if amount <= 0:
+            raise ValueError("Deposit must be positive")
+        _balance += amount
+        return _balance
 
-## First-Class Functions
+    def withdraw(amount):
+        nonlocal _balance
+        if amount > _balance:
+            raise ValueError(f"Insufficient funds: have {_balance}, want {amount}")
+        _balance -= amount
+        return _balance
 
-Because functions are objects, you can do anything with them that you can do with any other value.
+    def get_balance():
+        return _balance
 
-<PythonPlayground code={String.raw`# Store functions in a list
-def celsius_to_fahrenheit(c):
-    return c * 9/5 + 32
+    return deposit, withdraw, get_balance
 
-def fahrenheit_to_celsius(f):
-    return (f - 32) * 5/9
+deposit, withdraw, balance = make_bank_account(100)
+print(f"\nBalance: {balance()}")
+print(f"After deposit 50:   {deposit(50)}")
+print(f"After withdraw 30:  {withdraw(30)}")
+print(f"Final balance:      {balance()}")
+`} height={480} />
 
-def kelvin_to_celsius(k):
-    return k - 273.15
+### The Loop Variable Capture Gotcha and Its Fix
 
-converters = [celsius_to_fahrenheit, fahrenheit_to_celsius, kelvin_to_celsius]
+Closures capture **variables**, not values. In a loop, all closures share the same loop variable — after the loop ends, they all see its final value.
 
-# Call each
-for fn in converters:
-    print(f"{fn.__name__}(100) = {fn(100):.2f}")
+<PythonPlayground code={String.raw`# THE TRAP: loop variable capture -- late binding
+funcs_BAD = []
+for i in range(5):
+    funcs_BAD.append(lambda x: x + i)   # all capture the same 'i' variable
 
-# Pass a function as an argument
-def apply_twice(func, value):
-    return func(func(value))
+# After the loop, i == 4, so ALL lambdas add 4
+results = [fn(10) for fn in funcs_BAD]
+print(f"Bad (late binding): {results}")   # [14, 14, 14, 14, 14]
 
-def add_ten(x):
-    return x + 10
+# FIX 1: default argument -- captures the value at definition time
+funcs_DEFAULT = []
+for i in range(5):
+    funcs_DEFAULT.append(lambda x, captured=i: x + captured)
 
-print(apply_twice(add_ten, 5))   # add_ten(add_ten(5)) = 25
+results = [fn(10) for fn in funcs_DEFAULT]
+print(f"Fixed (default arg): {results}")  # [10, 11, 12, 13, 14]
 
-# Built-in higher-order functions
-numbers = [3, 1, 4, 1, 5, 9, 2, 6]
+# FIX 2: factory function -- most explicit and readable
+def make_adder(n):
+    def adder(x):
+        return x + n
+    return adder
 
-sorted_nums = sorted(numbers)                         # default
-reverse_sorted = sorted(numbers, reverse=True)        # reversed
-abs_sorted = sorted([-3, 1, -4, 2], key=abs)          # by absolute value
+funcs_FACTORY = [make_adder(i) for i in range(5)]
+results = [fn(10) for fn in funcs_FACTORY]
+print(f"Fixed (factory): {results}")      # [10, 11, 12, 13, 14]
 
-print(sorted_nums)
-print(reverse_sorted)
-print(abs_sorted)
+# FIX 3: immediately-invoked lambda (unusual but valid)
+funcs_IIFE = [(lambda n: lambda x: x + n)(i) for i in range(5)]
+results = [fn(10) for fn in funcs_IIFE]
+print(f"Fixed (IIFE):    {results}")      # [10, 11, 12, 13, 14]
+`} height={400} />
 
-# filter and map
-evens = list(filter(lambda x: x % 2 == 0, numbers))
-doubled = list(map(lambda x: x * 2, numbers))
-print(evens)
-print(doubled)
-`} title="First-class functions and higher-order functions" />
+---
 
-## Lambda Expressions
+## Lambda Functions
 
-A lambda is an anonymous function limited to a single expression. It is syntactic sugar — everything a lambda can do, a regular `def` can do better. Use lambdas only for short throwaway functions passed to `sorted`, `map`, `filter`, or similar.
+Lambdas are **anonymous single-expression functions**. They are syntactically restricted: one expression, no statements, no assignments. Use them when a full `def` would be overkill — primarily as the `key=` argument to sort functions or with `map`/`filter`.
 
-**When NOT to use lambda**: if the body is complex, if you need a docstring, if you need to name it and reuse it, or if it would be clearer as a `def`.
+<PythonPlayground code={String.raw`# Lambda syntax: lambda params: expression
+square   = lambda x: x ** 2
+add      = lambda a, b: a + b
 
-<PythonPlayground code={String.raw`# Good lambda use: short key functions
+print(square(5))     # 25
+print(add(3, 4))     # 7
+
+# Best use case: key= argument for sorting
 students = [
-    {"name": "Alice", "grade": 92},
-    {"name": "Bob", "grade": 85},
-    {"name": "Carol", "grade": 97},
+    {"name": "Alice", "gpa": 3.9, "age": 22},
+    {"name": "Bob",   "gpa": 3.5, "age": 25},
+    {"name": "Carol", "gpa": 3.9, "age": 20},
+    {"name": "Dave",  "gpa": 3.7, "age": 22},
 ]
 
-# Sort by grade descending
-by_grade = sorted(students, key=lambda s: s["grade"], reverse=True)
-for s in by_grade:
-    print(f"{s['name']}: {s['grade']}")
+# Sort by GPA descending, then name ascending (multi-key sort)
+by_gpa = sorted(students, key=lambda s: (-s["gpa"], s["name"]))
+print("\nBy GPA desc, name asc:")
+for s in by_gpa:
+    print(f"  {s['name']}: GPA={s['gpa']}, age={s['age']}")
 
-# Lambda in sorted with multiple criteria
-data = [("Alice", 25), ("Bob", 20), ("Carol", 25), ("Dave", 20)]
-# Sort by age, then by name within same age
-sorted_data = sorted(data, key=lambda x: (x[1], x[0]))
-print(sorted_data)
+# Lambda with map and filter
+nums = list(range(10))
+squares    = list(map(lambda x: x**2, nums))
+even_sqr   = list(filter(lambda x: x % 2 == 0, squares))
+print(f"\nSquares:      {squares}")
+print(f"Even squares: {even_sqr}")
 
-# When lambda hurts readability — prefer def
-# BAD:
-transform = lambda x: x ** 2 + 2 * x + 1
+# Prefer list comprehension (more readable):
+even_sqr2 = [x**2 for x in range(10) if x**2 % 2 == 0]
+print(f"Comprehension:{even_sqr2}")
 
-# BETTER:
-def transform_v2(x):
-    """Compute x^2 + 2x + 1 (i.e., (x+1)^2)."""
-    return x ** 2 + 2 * x + 1
-`} title="Lambda expressions — good and bad uses" />
+# Conditional in lambda using ternary
+clamp = lambda x, lo, hi: lo if x < lo else hi if x > hi else x
+for val in [-3, 5, 15]:
+    print(f"clamp({val:3d}, 0, 10) = {clamp(val, 0, 10)}")
+`} height={460} />
 
-## Modules: Organizing Code
+---
 
-A module is simply a Python file. When you write `import math`, Python finds `math.py` in its search path (`sys.path`), executes it, and binds the resulting module object to the name `math` in your current namespace.
+## Functional Programming Patterns
 
-```python
-import math                    # import the whole module
-from math import sqrt, pi      # import specific names
-from math import sqrt as sq    # alias to avoid name conflicts
-import numpy as np             # conventional alias
+### `map()`, `filter()`, `reduce()`
+
+<PythonPlayground code={String.raw`from functools import reduce
+
+nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+# map(function, iterable) -- apply function to every element
+doubled = list(map(lambda x: x * 2, nums))
+print(f"map doubled:      {doubled}")
+
+# map with a named function (cleaner)
+def fahrenheit_to_celsius(f):
+    return round((f - 32) * 5/9, 1)
+
+temps_f = [32, 68, 98.6, 212, -40]
+temps_c = list(map(fahrenheit_to_celsius, temps_f))
+print(f"Temps F: {temps_f}")
+print(f"Temps C: {temps_c}")
+
+# map with multiple iterables
+a = [1, 2, 3, 4]
+b = [10, 20, 30, 40]
+products = list(map(lambda x, y: x * y, a, b))
+print(f"\nmap products:     {products}")
+
+# filter(predicate, iterable) -- keep elements where predicate is True
+evens = list(filter(lambda x: x % 2 == 0, nums))
+print(f"\nfilter evens:     {evens}")
+
+# filter with None removes falsy values
+mixed = [0, 1, "", "hello", None, 42, [], [1,2], False, True]
+truthy = list(filter(None, mixed))
+print(f"filter(None, ..): {truthy}")
+
+# reduce(function, iterable) -- fold to single value
+total    = reduce(lambda acc, x: acc + x, nums)
+product  = reduce(lambda acc, x: acc * x, nums)
+max_val  = reduce(lambda a, b: a if a > b else b, nums)
+print(f"\nreduce sum:       {total}")
+print(f"reduce product:   {product}")
+print(f"reduce max:       {max_val}")
+
+# Comprehension vs map/filter -- comprehensions are usually preferred
+result_map  = list(map(lambda x: x**2, filter(lambda x: x % 2 == 0, nums)))
+result_comp = [x**2 for x in nums if x % 2 == 0]
+print(f"\nmap/filter: {result_map}")
+print(f"comprehend: {result_comp}")
+`} height={500} />
+
+### `functools` — Essential Utilities
+
+<PythonPlayground code={String.raw`from functools import partial, lru_cache, wraps
+import time
+
+# --- partial(): create new function with some arguments pre-filled ---
+def power(base, exponent):
+    return base ** exponent
+
+square = partial(power, exponent=2)
+cube   = partial(power, exponent=3)
+print(f"square(5) = {square(5)}")
+print(f"cube(4)   = {cube(4)}")
+
+# Useful: create specialized versions of generic functions
+import os
+join_data = partial(os.path.join, "/data")
+print(f"join_data('users'): {join_data('users')}")
+print(f"join_data('logs'):  {join_data('logs')}")
+
+# --- lru_cache(): automatic memoization ---
+@lru_cache(maxsize=None)
+def fib(n):
+    if n < 2:
+        return n
+    return fib(n-1) + fib(n-2)
+
+# Without cache: O(2^n) redundant calls. With cache: O(n) unique calls.
+result = fib(40)
+info = fib.cache_info()
+print(f"\nfib(40) = {result}")
+print(f"Cache: hits={info.hits}, misses={info.misses}, size={info.currsize}")
+
+# --- wraps(): preserve function metadata in decorators ---
+def my_decorator(func):
+    # Without @wraps: func.__name__ and __doc__ would be 'wrapper'
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        print(f"[Calling {func.__name__}]")
+        result = func(*args, **kwargs)
+        print(f"[Done]")
+        return result
+    return wrapper
+
+@my_decorator
+def important_function(x):
+    """This docstring is preserved by @wraps."""
+    return x * 2
+
+print(f"\nName: {important_function.__name__}")
+print(f"Doc:  {important_function.__doc__}")
+important_function(21)
+
+# --- partial vs lambda for the same task ---
+# These are equivalent, but partial is cleaner for simple cases:
+double_partial = partial(lambda x, n: x * n, n=2)
+double_lambda  = lambda x: x * 2
+print(f"\npartial: {double_partial(5)}, lambda: {double_lambda(5)}")
+`} height={480} />
+
+---
+
+## Recursion — When and How
+
+A recursive function calls itself. Every recursive solution has two parts: a **base case** that stops the recursion, and a **recursive case** that reduces the problem to a smaller version of itself.
+
+<PythonPlayground code={String.raw`import sys
+
+# Classic: factorial
+def factorial_recursive(n):
+    if n <= 1:          # base case
+        return 1
+    return n * factorial_recursive(n - 1)   # recursive case
+
+def factorial_iterative(n):
+    result = 1
+    for i in range(2, n + 1):
+        result *= i
+    return result
+
+print(f"10! recursive: {factorial_recursive(10)}")
+print(f"10! iterative: {factorial_iterative(10)}")
+
+# Visualize the call stack
+def factorial_traced(n, depth=0):
+    indent = "  " * depth
+    print(f"{indent}factorial({n}) called")
+    if n <= 1:
+        print(f"{indent}base case -> 1")
+        return 1
+    result = n * factorial_traced(n - 1, depth + 1)
+    print(f"{indent}factorial({n}) = {n} * ... = {result}")
+    return result
+
+print("\nTraced factorial(4):")
+factorial_traced(4)
+
+# Python's recursion limit
+print(f"\nRecursion limit: {sys.getrecursionlimit()}")
+
+# Binary search -- a natural recursive algorithm
+def binary_search(arr, target, low=0, high=None):
+    if high is None:
+        high = len(arr) - 1
+    if low > high:
+        return -1    # not found
+    mid = (low + high) // 2
+    if arr[mid] == target:
+        return mid
+    elif arr[mid] < target:
+        return binary_search(arr, target, mid + 1, high)
+    else:
+        return binary_search(arr, target, low, mid - 1)
+
+data = sorted([3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5])
+unique = sorted(set(data))
+print(f"\nData: {unique}")
+for target in [5, 7, 1]:
+    idx = binary_search(unique, target)
+    print(f"binary_search({target}) = {idx}")
+`} height={520} />
+
+### Memoization with `lru_cache`
+
+Without memoization, recursive Fibonacci has exponential time complexity because it recomputes the same subproblems millions of times. With memoization, each subproblem is solved exactly once.
+
+<PythonPlayground code={String.raw`from functools import lru_cache
+import time
+
+# WITHOUT memoization: recomputes fib(n-2) for every single call
+call_count = [0]
+
+def fib_slow(n):
+    call_count[0] += 1
+    if n < 2: return n
+    return fib_slow(n-1) + fib_slow(n-2)
+
+call_count[0] = 0
+result = fib_slow(30)
+print(f"fib_slow(30) = {result}")
+print(f"Function calls: {call_count[0]:,}")
+
+# WITH lru_cache: each value computed exactly once
+@lru_cache(maxsize=None)
+def fib_fast(n):
+    if n < 2: return n
+    return fib_fast(n-1) + fib_fast(n-2)
+
+result = fib_fast(100)
+info = fib_fast.cache_info()
+print(f"\nfib_fast(100) = {result}")
+print(f"Cache: hits={info.hits}, misses={info.misses}")
+print(f"Total calls needed: {info.misses} (one per unique n)")
+
+# Timing comparison for fib(30)
+t0 = time.perf_counter()
+fib_slow(30)
+slow_ms = (time.perf_counter() - t0) * 1000
+
+fib_fast.cache_clear()
+t0 = time.perf_counter()
+fib_fast(30)
+fast_ms = (time.perf_counter() - t0) * 1000
+
+print(f"\nfib(30) without cache: {slow_ms:.2f}ms")
+print(f"fib(30) with cache:    {fast_ms:.4f}ms")
+if fast_ms > 0:
+    print(f"Speedup: ~{slow_ms/fast_ms:.0f}x")
+
+# Why Python doesn't optimize tail recursion:
+# Python intentionally keeps every frame on the stack to preserve
+# tracebacks. Guido van Rossum has explicitly stated he does not want TCO.
+# Solution: convert to iteration or use trampolining for deep recursion.
+print("\nFor deep recursion, convert to iteration:")
+def fib_iterative(n):
+    if n < 2: return n
+    a, b = 0, 1
+    for _ in range(n - 1):
+        a, b = b, a + b
+    return b
+
+print(f"fib_iterative(100) = {fib_iterative(100)}")
+`} height={480} />
+
+### Tower of Hanoi — Classic Recursive Problem
+
+<PythonPlayground code={String.raw`def hanoi(n, source, target, auxiliary, moves=None):
+    """
+    Move n disks from source peg to target peg using auxiliary peg.
+    Key insight: to move n disks,
+    1. Move top n-1 disks to auxiliary (out of the way)
+    2. Move the biggest disk to target
+    3. Move n-1 disks from auxiliary to target (on top of biggest)
+    Minimum moves required: 2^n - 1
+    """
+    if moves is None:
+        moves = []
+    if n == 1:
+        moves.append(f"Disk 1: {source} -> {target}")
+        return moves
+    hanoi(n-1, source, auxiliary, target, moves)
+    moves.append(f"Disk {n}: {source} -> {target}")
+    hanoi(n-1, auxiliary, target, source, moves)
+    return moves
+
+for num_disks in [2, 3, 4]:
+    move_list = hanoi(num_disks, "A", "C", "B")
+    print(f"\n{num_disks} disks ({len(move_list)} moves, optimal={2**num_disks - 1}):")
+    if num_disks <= 3:
+        for m in move_list:
+            print(f"  {m}")
+    else:
+        print(f"  (first 3 of {len(move_list)}: {move_list[:3]})")
+
+# Verify: always exactly 2^n - 1 moves
+print("\nVerification:")
+for n in range(1, 10):
+    moves = hanoi(n, "A", "C", "B")
+    expected = 2**n - 1
+    check = "OK" if len(moves) == expected else "WRONG"
+    print(f"  n={n}: {len(moves)} moves (expected {expected}) [{check}]")
+`} height={480} />
+
+---
+
+## Project: Recursive Expression Calculator
+
+This project implements a complete arithmetic expression calculator using **recursive descent parsing** — the same technique used in real compilers and interpreters. It handles operator precedence, parentheses, and unary negation.
+
+The grammar:
+```
+expression := term (('+' | '-') term)*
+term       := factor (('*' | '/') factor)*
+factor     := unary ('^' unary)*
+unary      := '-' unary | primary
+primary    := number | '(' expression ')'
 ```
 
-### The `__name__ == "__main__"` Guard
+Each grammar rule maps directly to one recursive function — that is what makes this technique so elegant.
 
-When Python runs a file directly, it sets `__name__` to `"__main__"`. When a file is imported as a module, `__name__` is set to the module's name. The guard lets you write code that only runs when the file is executed directly, not when imported.
+<PythonPlayground code={String.raw`class Token:
+    def __init__(self, kind, value):
+        self.kind  = kind
+        self.value = value
+    def __repr__(self):
+        return f"Token({self.kind}, {self.value!r})"
 
-<PythonPlayground code={String.raw`# Simulating what a module structure looks like at runtime
-import math
-import random
-import sys
+def tokenize(text):
+    tokens = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch.isspace():
+            i += 1
+        elif ch.isdigit() or (ch == "." and i+1 < len(text) and text[i+1].isdigit()):
+            j = i
+            while j < len(text) and (text[j].isdigit() or text[j] == "."):
+                j += 1
+            tokens.append(Token("NUM", float(text[i:j])))
+            i = j
+        elif ch == "+": tokens.append(Token("PLUS",   ch)); i += 1
+        elif ch == "-": tokens.append(Token("MINUS",  ch)); i += 1
+        elif ch == "*": tokens.append(Token("MUL",    ch)); i += 1
+        elif ch == "/": tokens.append(Token("DIV",    ch)); i += 1
+        elif ch == "^": tokens.append(Token("POW",    ch)); i += 1
+        elif ch == "(": tokens.append(Token("LPAREN", ch)); i += 1
+        elif ch == ")": tokens.append(Token("RPAREN", ch)); i += 1
+        else: raise ValueError(f"Unknown character: {ch!r}")
+    tokens.append(Token("EOF", None))
+    return tokens
 
-print(f"math module: {math}")
-print(f"pi = {math.pi:.10f}")
-print(f"e  = {math.e:.10f}")
+class Parser:
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.pos    = 0
 
-# Some useful math functions
-print(math.sqrt(2))
-print(math.log(math.e))    # natural log
-print(math.log10(1000))    # log base 10
-print(math.factorial(10))
+    def peek(self):
+        return self.tokens[self.pos]
 
-# random module
-random.seed(42)  # reproducible
-sample = [random.randint(1, 100) for _ in range(5)]
-print(f"Random sample: {sample}")
-print(f"Choice: {random.choice(sample)}")
-shuffled = sample[:]
-random.shuffle(shuffled)
-print(f"Shuffled: {shuffled}")
+    def eat(self, kind):
+        tok = self.peek()
+        if tok.kind != kind:
+            raise ValueError(f"Expected {kind}, got {tok.kind!r} ({tok.value!r})")
+        self.pos += 1
+        return tok
 
-# Check __name__ (in this playground it won't be __main__,
-# but this is what the guard looks like)
-print(f"__name__ = {__name__!r}")
-`} title="Modules and the standard library" />
+    def parse(self):
+        result = self.expression()
+        self.eat("EOF")
+        return result
 
-## The Standard Library Highlights
+    # Grammar rule: expression := term (('+' | '-') term)*
+    def expression(self):
+        result = self.term()
+        while self.peek().kind in ("PLUS", "MINUS"):
+            if self.peek().kind == "PLUS":
+                self.eat("PLUS");  result += self.term()
+            else:
+                self.eat("MINUS"); result -= self.term()
+        return result
 
-Python's standard library is enormous. Here are the modules you will use constantly:
+    # Grammar rule: term := factor (('*' | '/') factor)*
+    def term(self):
+        result = self.factor()
+        while self.peek().kind in ("MUL", "DIV"):
+            if self.peek().kind == "MUL":
+                self.eat("MUL"); result *= self.factor()
+            else:
+                self.eat("DIV")
+                right = self.factor()
+                if right == 0: raise ZeroDivisionError("Division by zero")
+                result /= right
+        return result
 
-<PythonPlayground code={String.raw`from collections import Counter, defaultdict, deque
-import itertools
-import datetime
+    # Grammar rule: factor := unary ('^' unary)*  [right-associative]
+    def factor(self):
+        base = self.unary()
+        if self.peek().kind == "POW":
+            self.eat("POW")
+            exp = self.factor()   # right-recursive gives right-associativity
+            return base ** exp
+        return base
 
-# --- collections.Counter ---
-words = "the quick brown fox jumps over the lazy dog the fox".split()
-freq = Counter(words)
-print("Word frequencies:", freq)
-print("Top 3:", freq.most_common(3))
+    # Grammar rule: unary := '-' unary | primary
+    def unary(self):
+        if self.peek().kind == "MINUS":
+            self.eat("MINUS")
+            return -self.unary()  # recursive: handles --5 = 5
+        return self.primary()
 
-# --- collections.defaultdict ---
-# Never get a KeyError for missing keys
-groups = defaultdict(list)
-data = [("fruit", "apple"), ("veg", "carrot"), ("fruit", "banana"), ("veg", "broccoli")]
-for category, item in data:
-    groups[category].append(item)
-print(dict(groups))
+    # Grammar rule: primary := number | '(' expression ')'
+    def primary(self):
+        tok = self.peek()
+        if tok.kind == "NUM":
+            self.eat("NUM")
+            return tok.value
+        elif tok.kind == "LPAREN":
+            self.eat("LPAREN")
+            result = self.expression()
+            self.eat("RPAREN")
+            return result
+        raise ValueError(f"Unexpected token: {tok!r}")
 
-# --- collections.deque ---
-# O(1) append and pop from both ends (list is O(n) for left operations)
-queue = deque([1, 2, 3])
-queue.appendleft(0)   # O(1) — list.insert(0, x) would be O(n)
-queue.append(4)
-print(list(queue))
-queue.popleft()       # O(1) — list.pop(0) would be O(n)
-print(list(queue))
+def calc(expr):
+    return Parser(tokenize(expr)).parse()
 
-# --- itertools ---
-# chain: iterate over multiple iterables as one
-combined = list(itertools.chain([1, 2], [3, 4], [5]))
-print("chain:", combined)
+# Test suite
+tests = [
+    ("2 + 3",                  5),
+    ("10 - 4 * 2",             2),
+    ("(10 - 4) * 2",           12),
+    ("2 ^ 10",                 1024),
+    ("2 ^ 3 ^ 2",              512),      # right-assoc: 2^(3^2) = 2^9
+    ("-5 + 3",                 -2),
+    ("--5",                    5),
+    ("100 / 4 / 5",            5),
+    ("3.14 * 2 * 2",           12.56),
+    ("2 * (3 + (4 - 1))",      12),
+    ("(2+3)*(4-1)^2",          45),
+]
 
-# islice: lazy slice (no copy)
-first_five = list(itertools.islice(range(1000000), 5))
-print("islice:", first_five)
+print("Expression Calculator")
+print("=" * 50)
+all_pass = True
+for expr, expected in tests:
+    try:
+        result = calc(expr)
+        passed = abs(result - expected) < 1e-9
+        status = "PASS" if passed else "FAIL"
+        if not passed: all_pass = False
+        print(f"  {status}  {expr:<28} = {result:.6g}  (expected {expected})")
+    except Exception as e:
+        print(f"  ERROR {expr}: {e}")
+        all_pass = False
 
-# groupby: group consecutive elements
-data2 = [1, 1, 2, 2, 3, 1]
-groups2 = [(k, list(v)) for k, v in itertools.groupby(data2)]
-print("groupby:", groups2)
+print("=" * 50)
+print(f"All tests: {'PASS' if all_pass else 'FAIL'}")
+`} height={680} />
 
-# --- datetime ---
-now = datetime.datetime.now()
-print(f"Now: {now:%Y-%m-%d %H:%M:%S}")
-tomorrow = now + datetime.timedelta(days=1)
-print(f"Tomorrow: {tomorrow:%Y-%m-%d}")
-`} title="collections, itertools, datetime" />
+---
 
-## PROJECT: Text Statistics Analyzer
+## Exercises
 
-A real utility that computes several statistics about a piece of text — demonstrating functions, `collections.Counter`, string methods, and module-level organization.
+### Exercise 1 — Default Argument Trap (Easy)
 
-<PythonPlayground code={String.raw`from collections import Counter
-import re
+**Task:** Identify and fix the mutable default argument bug in each function.
 
-def word_count(text):
-    """Count total words in text."""
-    return len(text.split())
+<PythonPlayground code={String.raw`# Bug 1: mutable default
+def make_list(value, result=[]):
+    result.append(value)
+    return result
 
-def unique_words(text):
-    """Return the set of unique words (lowercased, punctuation stripped)."""
-    words = re.findall(r"[a-zA-Z']+", text.lower())
-    return set(words)
+print(make_list(1))   # should be [1]
+print(make_list(2))   # should be [2], but shows [1, 2]
+print(make_list(3))   # should be [3], but shows [1, 2, 3]
 
-def most_common_words(text, n=10):
-    """Return the n most common words as a list of (word, count) tuples."""
-    words = re.findall(r"[a-zA-Z']+", text.lower())
-    return Counter(words).most_common(n)
+# Fix make_list below:
+def make_list_fixed(value, result=None):
+    pass  # TODO
 
-def average_word_length(text):
-    """Return the average length of words in the text."""
-    words = re.findall(r"[a-zA-Z']+", text)
-    if not words:
-        return 0.0
-    return round(sum(len(w) for w in words) / len(words), 2)
+# Bug 2: loop variable capture (late binding)
+callbacks = [lambda: i for i in range(5)]
+print([cb() for cb in callbacks])   # [4, 4, 4, 4, 4] -- all see i=4
 
-def sentence_count(text):
-    """Count sentences (splits on . ! ?)."""
-    sentences = re.split(r'[.!?]+', text.strip())
-    return len([s for s in sentences if s.strip()])
+# Fix: create callbacks that each capture their own value of i
+callbacks_fixed = []
+for i in range(5):
+    pass  # TODO
 
-def reading_time(text, wpm=250):
-    """Estimate reading time in minutes and seconds."""
-    total_words = word_count(text)
-    minutes = total_words / wpm
-    whole_minutes = int(minutes)
-    seconds = int((minutes - whole_minutes) * 60)
-    return whole_minutes, seconds
+# print([cb() for cb in callbacks_fixed])   # should print [0, 1, 2, 3, 4]
+`} height={340} />
 
-def analyze(text):
-    """Run all statistics and return a dict."""
-    wc = word_count(text)
-    uw = unique_words(text)
-    mc = most_common_words(text, 10)
-    awl = average_word_length(text)
-    sc = sentence_count(text)
-    mins, secs = reading_time(text)
-    return {
-        "word_count": wc,
-        "unique_word_count": len(uw),
-        "lexical_diversity": round(len(uw) / wc, 3) if wc else 0,
-        "most_common": mc,
-        "avg_word_length": awl,
-        "sentence_count": sc,
-        "reading_time": f"{mins}m {secs}s",
-    }
+### Exercise 2 — LEGB Scope Explorer (Easy)
 
-def print_report(stats):
-    """Pretty-print the analysis report."""
-    print("=" * 50)
-    print("TEXT STATISTICS REPORT")
-    print("=" * 50)
-    print(f"  Words            : {stats['word_count']}")
-    print(f"  Unique words     : {stats['unique_word_count']}")
-    print(f"  Lexical diversity: {stats['lexical_diversity']:.1%}")
-    print(f"  Avg word length  : {stats['avg_word_length']} chars")
-    print(f"  Sentences        : {stats['sentence_count']}")
-    print(f"  Reading time     : {stats['reading_time']} @ 250 wpm")
-    print()
-    print("Top 10 words:")
-    for word, count in stats['most_common']:
-        bar = '#' * count
-        print(f"  {word:<15} {count:>3}  {bar}")
+**Task:** Without running the code, predict what each `print` outputs. Then run it to verify.
 
-# --- Demo ---
-sample_text = """
-Python is a high-level, general-purpose programming language. Its design
-philosophy emphasizes code readability through significant indentation.
-Python is dynamically typed and garbage-collected. It supports multiple
-programming paradigms, including structured, object-oriented and functional
-programming. Python is often described as a batteries included language
-due to its comprehensive standard library. Python was created by Guido van
-Rossum and first released in 1991. Python consistently ranks as one of the
-most popular programming languages. Python is used in web development,
-scientific computing, data analysis, artificial intelligence, and more.
-"""
+<PythonPlayground code={String.raw`x = "global x"
+y = "global y"
 
-stats = analyze(sample_text)
-print_report(stats)
-`} title="PROJECT: Text Statistics Analyzer" />
+def outer():
+    x = "outer x"
 
-## PROJECT: Utility Module Structure
+    def inner():
+        y = "inner y"
+        print(f"inner: x={x!r}, y={y!r}")   # predict: ?
 
-In a real project, you would organize reusable functions into a module. Here is what a utility module looks like — the structure and import patterns:
+    inner()
+    print(f"outer: x={x!r}, y={y!r}")       # predict: ?
 
-<PythonPlayground code={String.raw`# --- textutils.py (what the module would contain) ---
-# We define everything in this playground to simulate importing it.
+outer()
+print(f"module: x={x!r}, y={y!r}")          # predict: ?
 
-def slugify(text):
-    """Convert text to URL-friendly slug: 'Hello World' -> 'hello-world'."""
-    import re
-    text = text.lower().strip()
-    text = re.sub(r'[^\w\s-]', '', text)
-    text = re.sub(r'[\s_]+', '-', text)
-    text = re.sub(r'-+', '-', text)
-    return text
+# Part 2
+val = 10
 
-def truncate(text, max_length=100, ellipsis="..."):
-    """Truncate text at a word boundary."""
-    if len(text) <= max_length:
-        return text
-    truncated = text[:max_length - len(ellipsis)]
-    last_space = truncated.rfind(' ')
-    if last_space > 0:
-        truncated = truncated[:last_space]
-    return truncated + ellipsis
+def modify():
+    val = 20
+    print(f"inside: {val}")      # predict: ?
 
-def camel_to_snake(name):
-    """Convert 'CamelCase' to 'snake_case'."""
-    import re
-    s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1_\2', name)
-    return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+modify()
+print(f"outside: {val}")         # predict: ?
 
-def snake_to_camel(name):
-    """Convert 'snake_case' to 'CamelCase'."""
-    return ''.join(word.capitalize() for word in name.split('_'))
+# Part 3
+def modify_global():
+    global val
+    val = 30
 
-def pluralize(word, count):
-    """Naive English pluralization."""
-    if count == 1:
-        return word
-    if word.endswith(('s', 'sh', 'ch', 'x', 'z')):
-        return word + 'es'
-    if word.endswith('y') and not word[-2] in 'aeiou':
-        return word[:-1] + 'ies'
-    return word + 's'
+modify_global()
+print(f"after global: {val}")    # predict: ?
+`} height={380} />
 
-# --- Demonstrate usage ---
-print("slugify:")
-print(" ", slugify("Hello World! Python is Great."))
-print(" ", slugify("  My Blog Post #1  "))
+### Exercise 3 — Closure Factory (Medium)
 
-print("truncate:")
-print(" ", truncate("The quick brown fox jumps over the lazy dog", max_length=25))
+**Task:** Create a `make_validator` factory that returns a validator function.
 
-print("case conversions:")
-print(" ", camel_to_snake("HTTPSResponseCode"))
-print(" ", camel_to_snake("getUserByEmail"))
-print(" ", snake_to_camel("get_user_by_email"))
+<PythonPlayground code={String.raw`def make_validator(min_val, max_val, name="value"):
+    """
+    Return a function that validates a number is in [min_val, max_val].
+    The returned function should:
+    - Return True if valid, False if not
+    - Print a message either way: 'age 25 is valid (0-150)' or
+      'age 200 is out of range (0-150)'
+    """
+    # TODO: implement using a closure
+    pass
 
-print("pluralize:")
-for n in [0, 1, 2, 5]:
-    print(f"  {n} {pluralize('item', n)}")
-    print(f"  {n} {pluralize('box', n)}")
-    print(f"  {n} {pluralize('city', n)}")
-`} title="PROJECT: Utility module" />
+# Test
+validate_age   = make_validator(0, 150, "age")
+validate_score = make_validator(0, 100, "score")
+validate_temp  = make_validator(-273.15, 1e6, "temperature")
 
-## Challenge
+print(validate_age(25))       # True
+print(validate_age(200))      # False
+print(validate_score(85))     # True
+print(validate_score(105))    # False
+print(validate_temp(-300))    # False
+`} height={300} />
 
-Test your understanding with these exercises:
+### Exercise 4 — Decorators from Scratch (Medium)
 
-1. **Memoization from scratch** — write a `memoize(func)` function that wraps any function and caches its results in a dict. Call `memoize(fibonacci)(35)` and compare the speed to the naive recursive version.
+**Task:** Implement two decorators: `timer` (measures execution time) and `retry` (retries on exception up to N times).
 
-2. **Partial application** — implement your own `partial(func, *partial_args)` function (then compare to `functools.partial`). Use it to create `double` and `triple` from a `multiply(a, b)` function.
+<PythonPlayground code={String.raw`from functools import wraps
+import time, random
 
-3. **Scope puzzle** — predict what this prints before running it:
-```python
-x = 1
-def f():
-    x = 2
-    def g():
-        print(x)
-    return g
-f()()
-```
+def timer(func):
+    """Decorator: print how long the function takes."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        # TODO: measure and print elapsed time
+        pass
+    return wrapper
 
-4. **Text analyzer extension** — add a `flesch_reading_ease` score to the Text Statistics Analyzer. The formula is:
-```
-206.835 - 1.015 * (words/sentences) - 84.6 * (syllables/words)
-```
-Estimate syllable count by counting vowel groups per word.
+def retry(max_attempts=3, delay=0):
+    """Decorator factory: retry on exception up to max_attempts times."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # TODO: retry logic with attempt count
+            # If all fail, re-raise the last exception
+            pass
+        return wrapper
+    return decorator
 
-5. **Module design** — design a `validators` module with functions: `is_email`, `is_url`, `is_phone_number`, `is_strong_password`. Each returns `True`/`False`. Add a `validate(value, *validator_fns)` function that runs all validators and returns a list of failures.
+@timer
+def slow_sum(n):
+    """Sum numbers 1 to n."""
+    return sum(range(n + 1))
 
-## Key Takeaways
+result = slow_sum(1_000_000)
+print(f"Sum: {result}")
 
-- Functions are objects — storing, passing, and returning them unlocks powerful patterns
-- The LEGB rule governs every name lookup; understanding it eliminates mysterious bugs
-- Never use mutable default arguments — use `None` and create inside the function
-- `*args` and `**kwargs` make APIs flexible; keyword-only parameters make them safe
-- Closures capture variables from enclosing scope — they are the foundation of decorators and factory functions
-- Lambda is for short, throwaway key functions — reach for `def` otherwise
-- The `__name__ == "__main__"` guard separates executable scripts from importable modules
-- `collections.Counter`, `collections.defaultdict`, and `itertools` solve 90% of common iteration problems elegantly
+random.seed(42)
+
+@retry(max_attempts=5)
+@timer
+def flaky():
+    """Fails 70% of the time."""
+    if random.random() < 0.7:
+        raise ConnectionError("Network error")
+    return "Success!"
+
+try:
+    print(flaky())
+except ConnectionError as e:
+    print(f"All attempts failed: {e}")
+`} height={400} />
+
+### Exercise 5 — `*args`/`**kwargs` Mastery (Medium)
+
+**Task:** Write a `format_table` function that accepts rows as positional arguments and formatting options as keyword arguments.
+
+<PythonPlayground code={String.raw`def format_table(*rows, headers=None, separator="|", padding=1):
+    """
+    Format rows of data as a text table.
+    *rows: each row is a tuple/list of values
+    headers: optional column headers
+    separator: column separator character (default '|')
+    padding: spaces around each value (default 1)
+    Returns: formatted table string
+    """
+    # TODO: implement
+    # Steps:
+    # 1. Determine column widths (max width per column across all rows + headers)
+    # 2. Build format string: pad each cell to its column width
+    # 3. Add header row and separator line if headers provided
+    pass
+
+table = format_table(
+    ("Alice", 95, "A"),
+    ("Bob", 87, "B"),
+    ("Carol", 92, "A"),
+    headers=["Name", "Score", "Grade"],
+)
+print(table)
+# Expected:
+# | Name  | Score | Grade |
+# |-------|-------|-------|
+# | Alice |    95 | A     |
+# | Bob   |    87 | B     |
+# | Carol |    92 | A     |
+`} height={360} />
+
+### Exercise 6 — Functional Pipeline (Medium)
+
+**Task:** Build a `pipeline` function that composes functions left-to-right into a single callable.
+
+<PythonPlayground code={String.raw`from functools import reduce
+
+def pipeline(*functions):
+    """
+    pipeline(f, g, h)(x) == h(g(f(x)))
+    Apply functions left-to-right.
+    """
+    # TODO: implement using reduce or a loop
+    pass
+
+def pipeline_apply(data, *functions):
+    """Apply a sequence of functions to data."""
+    # TODO: implement
+    pass
+
+# Test: string normalization pipeline
+normalize = pipeline(
+    str.strip,
+    str.lower,
+    lambda s: s.replace(" ", "_"),
+    lambda s: s.replace("-", "_"),
+)
+
+inputs = ["  Hello World  ", "  MY-KEY-NAME  ", "  Some String Here  "]
+for inp in inputs:
+    print(f"  {inp!r:25} -> {normalize(inp)!r}")
+
+# Test: data transformation pipeline
+data = [1, -2, 3, -4, 5, -6]
+result = pipeline_apply(
+    data,
+    lambda lst: [abs(x) for x in lst],
+    lambda lst: sorted(lst),
+    lambda lst: [x**2 for x in lst],
+    sum,
+)
+print(f"\nResult: {result}")   # sum of [1, 4, 9, 16, 25, 36] = 91
+`} height={360} />
+
+### Exercise 7 — Recursive Flatten (Hard)
+
+**Task:** Write `flatten` to recursively flatten a nested list of any depth.
+
+<PythonPlayground code={String.raw`def flatten(nested):
+    """
+    Recursively flatten a nested list of any depth.
+    flatten([1, [2, [3, 4], 5]]) -> [1, 2, 3, 4, 5]
+    """
+    # TODO: recursive implementation
+    pass
+
+def flatten_gen(nested):
+    """Generator version using 'yield from'."""
+    # TODO: use yield from for elegance
+    pass
+
+# Test cases
+tests = [
+    [1, 2, 3],
+    [1, [2, 3], 4],
+    [1, [2, [3, [4, [5]]]]],
+    [[1, 2], [3, [4, 5]], [6, [7, [8, 9]]]],
+    [],
+    [[], [[]], [[[]]]],
+    [1, "hello", [2, "world", [3, True]]],
+]
+
+print("flatten (recursive):")
+for test in tests:
+    print(f"  {str(test):40} -> {flatten(test)}")
+
+print("\nflatten_gen (generator):")
+for test in tests[:4]:
+    print(f"  {str(test):40} -> {list(flatten_gen(test))}")
+`} height={360} />
+
+### Exercise 8 — Memoized Dynamic Programming (Hard)
+
+**Task:** Implement three classic DP problems using `lru_cache`.
+
+<PythonPlayground code={String.raw`from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def coin_change(amount, coins):
+    """
+    Minimum number of coins to make 'amount'.
+    coins: tuple of denominations (must be tuple for hashability).
+    Return -1 if impossible.
+    """
+    # Base cases: amount==0 -> 0 coins; amount < 0 -> impossible
+    # Recursive: try each coin, pick minimum
+    pass   # TODO
+
+@lru_cache(maxsize=None)
+def lcs_length(s1, s2):
+    """Length of longest common subsequence of s1 and s2."""
+    # Base case: either empty -> 0
+    # If last chars match: 1 + lcs(s1[:-1], s2[:-1])
+    # Else: max(lcs(s1[:-1], s2), lcs(s1, s2[:-1]))
+    pass   # TODO
+
+@lru_cache(maxsize=None)
+def count_paths(m, n):
+    """
+    Number of unique paths from top-left to bottom-right
+    of an m x n grid (can only move right or down).
+    """
+    # Base case: 1 row or 1 column -> only one path
+    # Recursive: paths(m, n) = paths(m-1, n) + paths(m, n-1)
+    pass   # TODO
+
+# Test coin_change
+print("Coin Change:")
+for amount in [0, 11, 30, 41, 3]:
+    result = coin_change(amount, (1, 5, 10, 25))
+    print(f"  {amount:3d} cents -> {result} coins")
+
+# Test LCS
+print("\nLongest Common Subsequence:")
+for s1, s2 in [("ABCBDAB", "BDCAB"), ("AGGTAB", "GXTXAYB")]:
+    print(f"  LCS('{s1}', '{s2}') = {lcs_length(s1, s2)}")
+
+# Test count_paths
+print("\nUnique Grid Paths:")
+for m, n in [(2,2), (3,3), (3,7)]:
+    print(f"  {m}x{n} grid: {count_paths(m, n)} paths")
+`} height={460} />
+
+---
+
+**Excellent work.** You now understand Python functions at a depth most engineers never reach — first-class functions, the mutable default trap, the LEGB rule, closures and cell objects, memoization, and recursive descent parsing. The next lesson covers Python's built-in data structures with the same rigor.

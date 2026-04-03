@@ -1,370 +1,1239 @@
 ---
 title: "NLP & Transformers — From Tokenization to Fine-Tuning"
-description: "Natural language processing from bag-of-words to transformers: tokenization, embeddings, attention, and HuggingFace fine-tuning. Build a sentiment analyzer and text classifier."
-duration: 32
+description: "Master NLP in Python — text preprocessing, classical NLP, word embeddings, the transformer architecture, using HuggingFace models, and fine-tuning LLMs on custom data."
+duration: 38
 order: 16
 ---
 
 ## The Text Pipeline
 
-Every NLP system starts with raw text and ends with numbers. The pipeline is always:
+Every NLP system transforms raw human language into numbers a model can reason about. The canonical pipeline:
 
 ```
-Raw text → Normalize → Tokenize → Vectorize → Model → Decode
+Raw text → Normalize → Tokenize → Vectorize → Model → Decode → Output
 ```
 
-Understanding each step matters because each introduces tradeoffs: information loss, computational cost, and sensitivity to domain.
+Each stage makes tradeoffs. Normalization loses information (case, punctuation) but reduces noise. Tokenization determines vocabulary size and OOV handling. Vectorization decides whether words carry semantic meaning. Understanding these tradeoffs is the difference between engineers who copy-paste transformers and engineers who can debug why their model underperforms on domain-specific text.
 
-## Text Preprocessing
+## Part 1: Text Preprocessing Pipeline
+
+### Normalization, Tokenization, Stop Words
+
+The first stage of any NLP pipeline cleans and standardizes raw text. These transforms run in Pyodide — no external libraries needed.
 
 <PythonPlayground code={String.raw`import re
-import numpy as np
+import unicodedata
 
-# ── Normalization ─────────────────────────────────────────────────────────────
+# ── Unicode normalization ──────────────────────────────────────────────────────
+def unicode_normalize(text):
+    """NFC: compose characters (e.g. e + combining accent → é)."""
+    return unicodedata.normalize("NFC", text)
+
+# ── Contraction expansion ──────────────────────────────────────────────────────
+CONTRACTIONS = {
+    "don't": "do not", "won't": "will not", "can't": "cannot",
+    "it's": "it is", "i'm": "i am", "i've": "i have",
+    "i'll": "i will", "i'd": "i would", "you're": "you are",
+    "you've": "you have", "he's": "he is", "she's": "she is",
+    "they're": "they are", "we're": "we are", "that's": "that is",
+    "there's": "there is", "isn't": "is not", "aren't": "are not",
+    "wasn't": "was not", "weren't": "were not", "hasn't": "has not",
+    "haven't": "have not", "didn't": "did not", "doesn't": "does not",
+    "couldn't": "could not", "shouldn't": "should not", "wouldn't": "would not",
+}
+
+def expand_contractions(text):
+    pattern = re.compile(r'\b(' + '|'.join(re.escape(k) for k in CONTRACTIONS) + r')\b')
+    return pattern.sub(lambda m: CONTRACTIONS[m.group(0)], text.lower())
+
+# ── Full normalization pipeline ────────────────────────────────────────────────
 def normalize(text):
-    text = text.lower()
-    text = re.sub(r"http\S+|www\.\S+", " ", text)        # Remove URLs
-    text = re.sub(r"[^a-z0-9\s'.,!?]", " ", text)        # Keep alphanumeric + punctuation
-    text = re.sub(r"\s+", " ", text).strip()              # Collapse whitespace
+    text = unicode_normalize(text)
+    text = expand_contractions(text)
+    text = re.sub(r"http\S+|www\.\S+", " URL ", text)          # Replace URLs
+    text = re.sub(r"@\w+", " USER ", text)                      # Replace @mentions
+    text = re.sub(r"#(\w+)", r" \1 ", text)                     # Unpack hashtags
+    text = re.sub(r"[^a-z0-9\s.,!?'-]", " ", text)             # Remove noise chars
+    text = re.sub(r"\s+", " ", text).strip()                    # Collapse whitespace
     return text
 
-# ── Simple tokenizer ──────────────────────────────────────────────────────────
-def tokenize(text):
-    # Word tokenization: split on word boundaries
-    tokens = re.findall(r"\b[a-z]{2,}\b", text)
-    return tokens
-
-# ── Stop words ────────────────────────────────────────────────────────────────
+# ── Stop words (comprehensive, no nltk) ───────────────────────────────────────
 STOP_WORDS = {
-    "the", "a", "an", "is", "it", "in", "on", "at", "to", "for",
-    "of", "and", "or", "but", "not", "this", "that", "was", "are",
-    "with", "be", "by", "from", "as", "he", "she", "they", "we",
-    "you", "i", "my", "your", "its", "our", "their", "have", "has"
+    "a","an","the","is","it","in","on","at","to","for","of","and","or","but",
+    "not","this","that","was","are","with","be","by","from","as","he","she",
+    "they","we","you","i","my","your","its","our","their","have","has","had",
+    "do","does","did","will","would","could","should","may","might","shall",
+    "been","being","am","so","if","then","than","when","where","which","who",
+    "what","how","all","each","every","both","few","more","most","other",
+    "some","such","no","nor","too","very","just","about","above","after",
+    "before","between","into","through","during","he","him","his","her","up",
 }
 
 def remove_stopwords(tokens):
     return [t for t in tokens if t not in STOP_WORDS]
 
-# ── Stemming (rule-based suffix removal) ─────────────────────────────────────
+# ── Word tokenizer ─────────────────────────────────────────────────────────────
+def word_tokenize(text):
+    return re.findall(r"\b[a-z][a-z'-]*[a-z]\b|\b[a-z]\b", text)
+
+# ── Sentence tokenizer (regex-based, no nltk) ─────────────────────────────────
+def sent_tokenize(text):
+    sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text.strip())
+    return [s.strip() for s in sentences if s.strip()]
+
+# ── Demo ───────────────────────────────────────────────────────────────────────
+samples = [
+    "The model doesn't work! It's throwing a ValueError.",
+    "Check https://pytorch.org — it's the best framework. We're using it here.",
+    "@DrAndrew I've seen your paper on #NeuralNetworks. Can't wait to try it!",
+    "ABSOLUTELY AMAZING results! The accuracy wasn't expected to be this high.",
+]
+
+print("=== Full Preprocessing Pipeline ===\n")
+for raw in samples:
+    normalized = normalize(raw)
+    tokens = word_tokenize(normalized)
+    filtered = remove_stopwords(tokens)
+    print(f"  Raw:      {raw[:70]}")
+    print(f"  Norm:     {normalized[:70]}")
+    print(f"  Tokens:   {tokens[:8]}")
+    print(f"  Filtered: {filtered[:8]}")
+    print()
+
+# Sentence tokenization
+long_text = "Python is a versatile language. It excels at data science! But can it match Java's speed? Many engineers say yes."
+sentences = sent_tokenize(long_text)
+print("=== Sentence Tokenization ===")
+for i, s in enumerate(sentences):
+    print(f"  Sentence {i+1}: {s}")
+`} height={500} title="Normalization, Tokenization, Stop Words" />
+
+### Stemming, Lemmatization, and N-grams
+
+Stemming aggressively chops suffixes. Lemmatization uses morphological rules to return dictionary base forms. N-grams capture local word context.
+
+<PythonPlayground code={String.raw`import re
+from collections import defaultdict
+
+# ── Rule-based stemmer (Porter-inspired) ──────────────────────────────────────
 def stem(word):
-    """Simple Porter-inspired stemmer."""
-    for suffix, replacement in [("tion","t"), ("ing",""), ("ness",""), ("ly",""),
-                                  ("ed",""), ("er",""), ("est",""), ("ies","y")]:
+    """
+    Simplified Porter stemmer — removes common English suffixes.
+    Not perfect, but no dependencies needed.
+    """
+    if len(word) <= 3:
+        return word
+    # Step 1: plurals and -ed/-ing
+    rules = [
+        ("sses", "ss"), ("ies", "i"), ("ss", "ss"), ("s", ""),
+        ("eed", "ee"), ("ed", ""), ("ing", ""),
+        # Step 2: other suffixes
+        ("ational", "ate"), ("tional", "tion"), ("enci", "ence"),
+        ("anci", "ance"), ("izer", "ize"), ("alism", "al"),
+        ("ation", "ate"), ("ator", "ate"), ("alism", "al"),
+        ("ness", ""), ("ment", ""), ("ful", ""), ("ly", ""),
+        ("ive", ""), ("ize", ""), ("ous", ""), ("al", ""),
+    ]
+    for suffix, replacement in rules:
         if word.endswith(suffix) and len(word) - len(suffix) >= 3:
             return word[:-len(suffix)] + replacement
     return word
 
-# ── Demo ──────────────────────────────────────────────────────────────────────
-samples = [
-    "The movie was absolutely AMAZING! A truly incredible experience.",
-    "Terrible film. Boring and predictable. Wasted my time completely.",
-    "Check this out: https://example.com/movie - it's worth watching!",
+# ── Rule-based lemmatizer (irregular forms + suffix rules) ────────────────────
+IRREGULAR = {
+    "are": "be", "is": "be", "was": "be", "were": "be", "been": "be",
+    "has": "have", "had": "have", "having": "have",
+    "does": "do", "did": "do", "doing": "do",
+    "went": "go", "gone": "go", "going": "go",
+    "men": "man", "women": "woman", "children": "child",
+    "feet": "foot", "teeth": "tooth", "mice": "mouse",
+    "geese": "goose", "oxen": "ox", "running": "run",
+    "better": "good", "best": "good", "worse": "bad", "worst": "bad",
+}
+
+def lemmatize(word):
+    if word in IRREGULAR:
+        return IRREGULAR[word]
+    # Simple suffix rules
+    for suffix, base in [("ves","f"),("ies","y"),("oes","o"),("ses","s"),("s","")]:
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            candidate = word[:-len(suffix)] + base
+            return candidate
+    return stem(word)   # Fall back to stemmer
+
+# ── N-gram generation ──────────────────────────────────────────────────────────
+def ngrams(tokens, n):
+    return [tuple(tokens[i:i+n]) for i in range(len(tokens) - n + 1)]
+
+def ngram_freq(tokens, n):
+    freq = defaultdict(int)
+    for gram in ngrams(tokens, n):
+        freq[gram] += 1
+    return dict(sorted(freq.items(), key=lambda x: -x[1]))
+
+# ── Demo ───────────────────────────────────────────────────────────────────────
+words = [
+    "running", "runs", "ran", "happily", "happiness", "organization",
+    "national", "tokenization", "generalization", "flies", "went",
+    "are", "better", "teeth", "children", "having",
 ]
 
-for text in samples:
-    normalized = normalize(text)
-    tokens = tokenize(normalized)
-    filtered = remove_stopwords(tokens)
-    stemmed = [stem(t) for t in filtered]
-    print(f"Original:  {text[:60]}")
-    print(f"Tokens:    {tokens}")
-    print(f"Filtered:  {filtered}")
-    print(f"Stemmed:   {stemmed}")
-    print()
-`} packages={["numpy"]} height={420} title="Text Preprocessing Pipeline" />
+print("=== Stem vs Lemmatize ===")
+print(f"{'Word':20s} {'Stem':20s} {'Lemma':20s}")
+print("-" * 62)
+for w in words:
+    print(f"{w:20s} {stem(w):20s} {lemmatize(w):20s}")
 
-## Bag of Words and TF-IDF
+text = "the quick brown fox jumps over the lazy dog and runs away fast"
+tokens = text.split()
 
-<PythonPlayground code={String.raw`import numpy as np
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+print("\n=== N-gram Analysis ===")
+print(f"Tokens: {tokens}")
 
-corpus = [
-    "the cat sat on the mat",
-    "the cat ate the rat",
-    "the dog sat on the log",
-    "the cat and the dog are friends",
-]
+bigrams = ngrams(tokens, 2)
+trigrams = ngrams(tokens, 3)
+print(f"\nBigrams  ({len(bigrams)}): {bigrams[:5]}")
+print(f"Trigrams ({len(trigrams)}): {trigrams[:5]}")
 
-# ── Bag of Words ──────────────────────────────────────────────────────────────
-bow = CountVectorizer()
-X_bow = bow.fit_transform(corpus).toarray()
-print("=== Bag of Words ===")
-print(f"Vocabulary size: {len(bow.vocabulary_)}")
-print(f"Feature names: {bow.get_feature_names_out()}")
-print("Document-term matrix:")
-for i, row in enumerate(X_bow):
-    nonzero = [(bow.get_feature_names_out()[j], v) for j, v in enumerate(row) if v > 0]
-    print(f"  Doc {i}: {dict(nonzero)}")
+# Frequency analysis on longer text
+sample = ("machine learning models need lots of data "
+          "machine learning is hard machine learning requires careful tuning "
+          "data preprocessing is important data quality matters")
+toks = sample.split()
+bg_freq = ngram_freq(toks, 2)
+print("\nTop bigrams by frequency:")
+for gram, count in list(bg_freq.items())[:6]:
+    print(f"  {' '.join(gram):30s}: {count}")
+`} height={520} title="Stemming, Lemmatization, N-grams" />
 
-# ── TF-IDF ────────────────────────────────────────────────────────────────────
-# TF-IDF(t,d) = TF(t,d) * log(N / df(t))
-# Words appearing in every document get low IDF; rare words get high IDF
-tfidf = TfidfVectorizer()
-X_tfidf = tfidf.fit_transform(corpus).toarray()
+### Vocabulary Building and Text Vectorization from Scratch
 
-print("\\n=== TF-IDF ===")
-print("Word weights (higher = more distinctive):")
-feature_names = tfidf.get_feature_names_out()
-# Show mean TF-IDF per word (across documents)
-mean_tfidf = X_tfidf.mean(axis=0)
-sorted_idx = np.argsort(mean_tfidf)[::-1]
-for i in sorted_idx[:8]:
-    print(f"  {feature_names[i]:12s}: {mean_tfidf[i]:.4f}")
+<PythonPlayground code={String.raw`import re
+import math
+from collections import Counter
 
-# ── Cosine similarity ─────────────────────────────────────────────────────────
+# ── Vocabulary builder ─────────────────────────────────────────────────────────
+class Vocabulary:
+    def __init__(self, max_size=None, min_freq=1, special_tokens=None):
+        self.max_size = max_size
+        self.min_freq = min_freq
+        self.special_tokens = special_tokens or ["<PAD>", "<UNK>", "<BOS>", "<EOS>"]
+        self.word2idx = {}
+        self.idx2word = {}
+        self.freq = Counter()
+
+    def build(self, tokenized_docs):
+        for doc in tokenized_docs:
+            self.freq.update(doc)
+        # Filter by min_freq
+        valid = {w: c for w, c in self.freq.items() if c >= self.min_freq}
+        # Sort by frequency descending
+        sorted_words = sorted(valid, key=lambda w: -valid[w])
+        if self.max_size:
+            sorted_words = sorted_words[:self.max_size - len(self.special_tokens)]
+        # Build mappings
+        all_tokens = self.special_tokens + sorted_words
+        self.word2idx = {w: i for i, w in enumerate(all_tokens)}
+        self.idx2word = {i: w for w, i in self.word2idx.items()}
+        return self
+
+    def encode(self, tokens, add_special=False):
+        unk_idx = self.word2idx.get("<UNK>", 1)
+        ids = [self.word2idx.get(t, unk_idx) for t in tokens]
+        if add_special:
+            bos = self.word2idx.get("<BOS>", 2)
+            eos = self.word2idx.get("<EOS>", 3)
+            ids = [bos] + ids + [eos]
+        return ids
+
+    def decode(self, ids):
+        return [self.idx2word.get(i, "<UNK>") for i in ids]
+
+    def __len__(self):
+        return len(self.word2idx)
+
+# ── TF-IDF from scratch ────────────────────────────────────────────────────────
+class TFIDFVectorizer:
+    def __init__(self, max_features=None, ngram_range=(1, 1), min_df=1):
+        self.max_features = max_features
+        self.ngram_range = ngram_range
+        self.min_df = min_df
+        self.vocab = {}
+        self.idf = {}
+
+    def _tokenize(self, text):
+        tokens = re.findall(r"\b[a-z][a-z]*\b", text.lower())
+        if self.ngram_range == (1, 1):
+            return tokens
+        result = list(tokens)
+        if self.ngram_range[1] >= 2:
+            result += ["_".join(tokens[i:i+2]) for i in range(len(tokens)-1)]
+        if self.ngram_range[1] >= 3:
+            result += ["_".join(tokens[i:i+3]) for i in range(len(tokens)-2)]
+        return result
+
+    def fit(self, docs):
+        N = len(docs)
+        # Count document frequencies
+        df = Counter()
+        tokenized = [self._tokenize(d) for d in docs]
+        for tokens in tokenized:
+            df.update(set(tokens))
+        # Filter by min_df and sort by df descending
+        vocab_terms = [t for t, c in df.items() if c >= self.min_df]
+        vocab_terms.sort(key=lambda t: -df[t])
+        if self.max_features:
+            vocab_terms = vocab_terms[:self.max_features]
+        self.vocab = {t: i for i, t in enumerate(vocab_terms)}
+        # Compute IDF: log((N+1)/(df+1)) + 1  (sklearn smooth IDF)
+        for term in self.vocab:
+            self.idf[term] = math.log((N + 1) / (df[term] + 1)) + 1
+        return self
+
+    def transform(self, docs):
+        matrix = []
+        for doc in docs:
+            tokens = self._tokenize(doc)
+            tf = Counter(tokens)
+            total = len(tokens) or 1
+            row = [0.0] * len(self.vocab)
+            for term, idx in self.vocab.items():
+                if term in tf:
+                    row[idx] = (tf[term] / total) * self.idf[term]
+            # L2 normalize
+            norm = math.sqrt(sum(x*x for x in row)) or 1.0
+            row = [x / norm for x in row]
+            matrix.append(row)
+        return matrix
+
+    def fit_transform(self, docs):
+        return self.fit(docs).transform(docs)
+
+# ── Cosine similarity ──────────────────────────────────────────────────────────
 def cosine_sim(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
+    dot = sum(x*y for x, y in zip(a, b))
+    na = math.sqrt(sum(x*x for x in a))
+    nb = math.sqrt(sum(y*y for y in b))
+    return dot / (na * nb + 1e-9)
 
-print("\\n=== Document Similarity (TF-IDF cosine) ===")
-for i in range(len(corpus)):
-    for j in range(i+1, len(corpus)):
-        sim = cosine_sim(X_tfidf[i], X_tfidf[j])
-        print(f"  Doc {i} vs Doc {j}: {sim:.4f}  [{corpus[i][:20]}...] vs [{corpus[j][:20]}...]")
-`} packages={["numpy", "scikit-learn"]} height={420} title="Bag of Words and TF-IDF" />
+# ── Demo ───────────────────────────────────────────────────────────────────────
+corpus = [
+    "machine learning transforms data into predictions using algorithms",
+    "deep learning neural networks learn hierarchical representations",
+    "natural language processing enables computers to understand text",
+    "data science combines statistics machine learning and programming",
+    "transformers revolutionized natural language processing with attention",
+    "the stock market crashed badly due to economic uncertainty",
+    "investors sold shares as interest rates rose sharply",
+]
 
-## Word Embeddings — Intuition
+# Vocabulary
+tokenized = [re.findall(r"\b[a-z]+\b", doc.lower()) for doc in corpus]
+vocab = Vocabulary(min_freq=1)
+vocab.build(tokenized)
+print(f"Vocabulary size: {len(vocab)}")
+print(f"Top 10 words: {list(vocab.word2idx.keys())[4:14]}")
 
-Before transformers, **Word2Vec** (2013) was the standard way to represent words as dense vectors. The key insight: words that appear in similar contexts should have similar vectors.
+# Encode/decode round-trip
+sample = tokenized[0]
+ids = vocab.encode(sample, add_special=True)
+decoded = vocab.decode(ids)
+print(f"\nEncode: {sample[:5]} → {ids[:7]}")
+print(f"Decode: {decoded}")
+
+# TF-IDF + similarity
+vec = TFIDFVectorizer(max_features=50)
+X = vec.fit_transform(corpus)
+
+query = "neural network deep learning attention transformers"
+q_vec = vec.transform([query])[0]
+
+print(f"\nQuery: '{query}'")
+print("Cosine similarity to corpus:")
+sims = [(cosine_sim(q_vec, x), doc) for x, doc in zip(X, corpus)]
+for sim, doc in sorted(sims, reverse=True):
+    print(f"  {sim:.4f}  {doc[:60]}")
+`} height={600} title="Vocabulary Builder + TF-IDF from Scratch" />
+
+## Part 2: Classical NLP
+
+### Word Frequency Analysis and Zipf's Law
+
+Zipf's Law is one of the most surprising facts in language: word frequency is inversely proportional to rank. The most common word appears roughly twice as often as the second, three times as often as the third.
+
+<PythonPlayground code={String.raw`import re
+import math
+from collections import Counter
+
+# ── Zipf's Law demonstration ───────────────────────────────────────────────────
+sample_text = """
+To be or not to be that is the question whether tis nobler in the
+mind to suffer the slings and arrows of outrageous fortune or to
+take arms against a sea of troubles and by opposing end them to die
+to sleep no more and by a sleep to say we end the heartache and the
+thousand natural shocks that flesh is heir to tis a consummation
+devoutly to be wished to die to sleep to sleep perchance to dream
+ay there is the rub for in that sleep of death what dreams may come
+when we have shuffled off this mortal coil must give us pause there
+is the respect that makes calamity of so long life for who would
+bear the whips and scorns of time the oppressors wrong the proud
+mans contumely the pangs of despised love the laws delay the
+insolence of office and the spurns that patient merit of the
+unworthy takes when he himself might his quietus make with a bare
+bodkin who would fardels bear to grunt and sweat under a weary life
+"""
+
+tokens = re.findall(r'\b[a-z]+\b', sample_text.lower())
+freq = Counter(tokens)
+N = len(tokens)
+V = len(freq)   # Vocabulary size (unique tokens)
+
+print(f"Tokens: {N}, Vocabulary (unique): {V}")
+print(f"Type-Token Ratio (TTR): {V/N:.3f}  (lexical richness)")
+
+# Rank-frequency relationship
+ranked = freq.most_common()
+print("\n=== Zipf's Law: Rank × Frequency ≈ constant ===")
+print(f"{'Rank':>6}  {'Word':>12}  {'Freq':>6}  {'Rank*Freq':>10}  {'Predicted':>10}")
+print("-" * 55)
+# C ≈ freq[1] * 1 (the most frequent word at rank 1)
+C = ranked[0][1] * 1
+for rank in [1, 2, 3, 5, 10, 20, 50]:
+    if rank <= len(ranked):
+        word, count = ranked[rank-1]
+        predicted = C / rank
+        print(f"{rank:>6}  {word:>12}  {count:>6}  {rank*count:>10}  {predicted:>10.1f}")
+
+# Vocabulary richness metrics
+print("\n=== Vocabulary Richness ===")
+hapax = sum(1 for _, c in freq.items() if c == 1)
+print(f"  Hapax legomena (words appearing once): {hapax} ({hapax/V:.1%} of vocab)")
+print(f"  Top-10 words cover: {sum(c for _,c in ranked[:10])/N:.1%} of all tokens")
+print(f"  Top-50 words cover: {sum(c for _,c in ranked[:50])/N:.1%} of all tokens")
+print(f"  Vocabulary density: {V/N:.3f}")
+
+# Log-log relationship (Zipf expects linear on log-log scale)
+print("\n=== Log-Rank vs Log-Frequency (should be linear) ===")
+print(f"  Correlation check on log scale (r should be ~ -1.0):")
+log_ranks = [math.log(i+1) for i in range(min(100, len(ranked)))]
+log_freqs = [math.log(ranked[i][1]) for i in range(min(100, len(ranked)))]
+n = len(log_ranks)
+mean_r = sum(log_ranks) / n
+mean_f = sum(log_freqs) / n
+cov = sum((r - mean_r)*(f - mean_f) for r, f in zip(log_ranks, log_freqs)) / n
+std_r = math.sqrt(sum((r - mean_r)**2 for r in log_ranks) / n)
+std_f = math.sqrt(sum((f - mean_f)**2 for f in log_freqs) / n)
+pearson_r = cov / (std_r * std_f + 1e-9)
+print(f"  Pearson r on log-log: {pearson_r:.4f}  (Zipf predicts -1.0)")
+`} height={520} title="Word Frequency Analysis and Zipf's Law" />
+
+### Named Entity Recognition and Sentiment Analysis from Scratch
+
+<PythonPlayground code={String.raw`import re
+from collections import defaultdict
+
+# ── Lexicon-based NER (no external library) ────────────────────────────────────
+PERSON_TITLES = {"dr", "mr", "mrs", "ms", "prof", "sir", "president", "senator"}
+LOCATION_SUFFIXES = {"city", "town", "river", "mountain", "lake", "bay", "island", "county"}
+ORG_SUFFIXES = {"inc", "ltd", "corp", "llc", "co", "group", "foundation", "institute"}
+COUNTRY_NAMES = {
+    "usa", "uk", "france", "germany", "china", "japan", "india",
+    "brazil", "canada", "australia", "russia", "italy", "spain",
+    "united states", "united kingdom",
+}
+
+def simple_ner(text):
+    entities = []
+    words = text.split()
+
+    i = 0
+    while i < len(words):
+        word = words[i]
+        word_clean = re.sub(r'[^a-z]', '', word.lower())
+        word_upper = re.sub(r'[^a-zA-Z]', '', word)
+
+        # Person: Title + Capitalized word(s)
+        if word_clean in PERSON_TITLES and i+1 < len(words):
+            name_parts = [word]
+            j = i + 1
+            while j < len(words) and words[j][0].isupper() and len(words[j]) > 1:
+                name_parts.append(words[j])
+                j += 1
+            entities.append((" ".join(name_parts), "PERSON"))
+            i = j
+            continue
+
+        # Capitalized sequence (possible named entity)
+        if word_upper and word_upper[0].isupper() and len(word_upper) > 1 and i > 0:
+            entity_words = [word]
+            j = i + 1
+            while j < len(words):
+                next_clean = re.sub(r'[^a-zA-Z]', '', words[j])
+                if next_clean and next_clean[0].isupper() and len(next_clean) > 1:
+                    entity_words.append(words[j])
+                    j += 1
+                else:
+                    break
+            entity_str = " ".join(entity_words)
+            entity_lower = entity_str.lower().rstrip('.,;')
+
+            last_word = re.sub(r'[^a-z]', '', entity_words[-1].lower())
+            if entity_lower in COUNTRY_NAMES:
+                entities.append((entity_str, "GPE"))
+            elif last_word in LOCATION_SUFFIXES:
+                entities.append((entity_str, "LOC"))
+            elif last_word in ORG_SUFFIXES:
+                entities.append((entity_str, "ORG"))
+            else:
+                entities.append((entity_str, "ENTITY"))
+            i = j
+            continue
+        i += 1
+    return entities
+
+# ── Lexicon-based sentiment analysis ──────────────────────────────────────────
+POSITIVE_WORDS = {
+    "amazing", "excellent", "fantastic", "wonderful", "brilliant", "outstanding",
+    "superb", "exceptional", "incredible", "magnificent", "perfect", "love",
+    "great", "good", "best", "happy", "joy", "nice", "pleasant", "impressive",
+    "innovative", "powerful", "efficient", "fast", "accurate", "reliable",
+    "beautiful", "elegant", "smart", "clever", "intuitive", "helpful",
+}
+NEGATIVE_WORDS = {
+    "terrible", "horrible", "awful", "dreadful", "disaster", "failure", "broken",
+    "slow", "buggy", "poor", "bad", "worst", "useless", "frustrating", "annoying",
+    "complicated", "confusing", "unreliable", "disappointing", "mediocre", "ugly",
+    "difficult", "painful", "problematic", "flawed", "inferior", "weak",
+}
+NEGATION_WORDS = {"not", "no", "never", "neither", "nor", "hardly", "barely", "doesn't", "isn't", "wasn't", "aren't"}
+INTENSIFIERS = {"very": 1.5, "extremely": 2.0, "quite": 1.2, "somewhat": 0.7, "rather": 1.1}
+
+def sentiment_score(text):
+    tokens = re.findall(r"\b[a-z']+\b", text.lower())
+    score = 0.0
+    negated = False
+    intensity = 1.0
+
+    for i, token in enumerate(tokens):
+        if token in NEGATION_WORDS:
+            negated = True
+            continue
+        if token in INTENSIFIERS:
+            intensity = INTENSIFIERS[token]
+            continue
+
+        if token in POSITIVE_WORDS:
+            contribution = intensity * (1.0 if not negated else -0.8)
+            score += contribution
+        elif token in NEGATIVE_WORDS:
+            contribution = intensity * (-1.0 if not negated else 0.8)
+            score += contribution
+        else:
+            # Reset negation/intensity after non-sentiment non-function word
+            pass
+
+        if token not in INTENSIFIERS and token not in NEGATION_WORDS:
+            negated = False
+            intensity = 1.0
+
+    return score
+
+# ── Demo ───────────────────────────────────────────────────────────────────────
+test_sentences = [
+    "Dr. Jane Smith published her findings at MIT in Cambridge.",
+    "Apple Inc. and Microsoft Corp. announced a partnership.",
+    "The Amazon River flows through Brazil and Peru.",
+    "This product is absolutely amazing and very efficient!",
+    "The software is not bad but somewhat slow and confusing.",
+    "Terrible horrible product. Never buying from this company again.",
+    "The new feature is quite good but the UI is extremely confusing.",
+]
+
+print("=== Named Entity Recognition ===")
+for text in test_sentences[:4]:
+    entities = simple_ner(text)
+    print(f"  Text: {text[:60]}")
+    print(f"  NER:  {entities}")
+    print()
+
+print("=== Sentiment Analysis ===")
+for text in test_sentences[3:]:
+    score = sentiment_score(text)
+    label = "POSITIVE" if score > 0.3 else "NEGATIVE" if score < -0.3 else "NEUTRAL"
+    print(f"  [{label:8s} {score:+.2f}] {text[:65]}")
+`} height={580} title="Rule-Based NER + Lexicon Sentiment" />
+
+### Naive Bayes Text Classifier from Scratch
+
+Naive Bayes is the workhorse of classical text classification. "Naive" because it assumes feature independence — which is false for text — but works surprisingly well anyway.
+
+The math: given a document *d* and class *c*:
 
 ```
-king - man + woman ≈ queen    (famous word analogy)
-paris - france + italy ≈ rome (geographic analogy)
+P(c|d) ∝ P(c) × Π P(w|c)   for each word w in d
 ```
 
-This emerges from training on billions of words with a simple self-supervised objective: predict neighboring words.
+In log space (to avoid underflow):
 
-**GloVe** extends this by factorizing the word co-occurrence matrix. Both produce vectors where semantic relationships become geometric relationships.
+```
+log P(c|d) ∝ log P(c) + Σ log P(w|c)
+```
 
-The critical limitation: **one vector per word**. "Bank" (financial) and "bank" (river) get the same embedding. Transformers solve this with contextual embeddings.
+<PythonPlayground code={String.raw`import re
+import math
+from collections import Counter, defaultdict
 
-## The Attention Mechanism
+class NaiveBayesClassifier:
+    """
+    Multinomial Naive Bayes for text classification.
+    Uses Laplace (add-1) smoothing to handle unseen words.
+    """
+    def __init__(self, alpha=1.0):
+        self.alpha = alpha        # Laplace smoothing
+        self.class_log_prior = {}
+        self.feature_log_prob = {}
+        self.classes = []
+        self.vocab = set()
 
-Attention lets each token directly access information from every other token in the sequence:
+    def _tokenize(self, text):
+        return re.findall(r'\b[a-z]+\b', text.lower())
+
+    def fit(self, X_texts, y):
+        """X_texts: list of strings, y: list of class labels."""
+        N = len(X_texts)
+        class_counts = Counter(y)
+        self.classes = sorted(class_counts.keys())
+
+        # Log prior: P(c) = count(c) / N
+        for c in self.classes:
+            self.class_log_prior[c] = math.log(class_counts[c] / N)
+
+        # Aggregate word counts per class
+        class_word_counts = defaultdict(Counter)
+        for text, label in zip(X_texts, y):
+            tokens = self._tokenize(text)
+            class_word_counts[label].update(tokens)
+            self.vocab.update(tokens)
+
+        V = len(self.vocab)   # Vocabulary size for smoothing denominator
+
+        # Log likelihood: P(w|c) with Laplace smoothing
+        self.feature_log_prob = {}
+        for c in self.classes:
+            total = sum(class_word_counts[c].values()) + self.alpha * V
+            self.feature_log_prob[c] = {}
+            for word in self.vocab:
+                count = class_word_counts[c].get(word, 0) + self.alpha
+                self.feature_log_prob[c][word] = math.log(count / total)
+            # Store log prob for unknown words
+            self.feature_log_prob[c]["<UNK>"] = math.log(self.alpha / total)
+        return self
+
+    def predict_log_proba(self, text):
+        tokens = self._tokenize(text)
+        scores = {}
+        for c in self.classes:
+            score = self.class_log_prior[c]
+            for token in tokens:
+                score += self.feature_log_prob[c].get(token,
+                         self.feature_log_prob[c]["<UNK>"])
+            scores[c] = score
+        return scores
+
+    def predict(self, texts):
+        return [max(self.predict_log_proba(t), key=self.predict_log_proba(t).get)
+                for t in texts]
+
+    def top_features(self, class_label, n=10):
+        """Words most predictive of this class (highest log-likelihood)."""
+        lp = self.feature_log_prob[class_label]
+        sorted_words = sorted(
+            [(w, lp[w]) for w in self.vocab],
+            key=lambda x: -x[1]
+        )
+        return sorted_words[:n]
+
+# ── Training data ──────────────────────────────────────────────────────────────
+training_data = [
+    # Technology
+    ("python code algorithm function class object method", "tech"),
+    ("machine learning neural network training dataset model", "tech"),
+    ("javascript typescript react frontend component api", "tech"),
+    ("database sql query table index performance optimization", "tech"),
+    ("docker kubernetes cloud deployment container orchestration", "tech"),
+    ("compiler runtime garbage collection memory management heap", "tech"),
+    ("git version control branch merge pull request repository", "tech"),
+    # Sports
+    ("football touchdown quarterback receiver field goal season", "sports"),
+    ("basketball player dribble shoot three pointer championship", "sports"),
+    ("soccer goalkeeper penalty kick league tournament stadium", "sports"),
+    ("tennis serve backhand forehand match set tournament grand slam", "sports"),
+    ("baseball pitcher batter home run innings strikeout playoff", "sports"),
+    ("athlete training coach fitness sprint endurance competition", "sports"),
+    # Finance
+    ("stock market investment portfolio dividend earnings revenue", "finance"),
+    ("cryptocurrency bitcoin blockchain wallet transaction fee", "finance"),
+    ("interest rate inflation federal reserve monetary policy", "finance"),
+    ("startup venture capital funding valuation equity dilution", "finance"),
+    ("hedge fund derivatives options futures contract risk", "finance"),
+    ("quarterly earnings revenue profit margin shareholder value", "finance"),
+]
+
+texts = [t for t, _ in training_data]
+labels = [l for _, l in training_data]
+
+clf = NaiveBayesClassifier(alpha=0.5)
+clf.fit(texts, labels)
+
+# ── Evaluation ─────────────────────────────────────────────────────────────────
+test_examples = [
+    ("deep neural network loss function backpropagation gradient", "tech"),
+    ("premier league goals scored penalty shootout extra time", "sports"),
+    ("annual return compound interest bond yield maturity", "finance"),
+    ("kubernetes pod cluster node service load balancer", "tech"),
+    ("world cup goalkeeper penalty kick championship final", "sports"),
+    ("short selling margin call broker leverage risk management", "finance"),
+]
+
+print("=== Naive Bayes Text Classifier ===\n")
+correct = 0
+for text, true_label in test_examples:
+    pred = clf.predict([text])[0]
+    log_probs = clf.predict_log_proba(text)
+    correct += (pred == true_label)
+    status = "OK" if pred == true_label else "WRONG"
+    print(f"  [{status}] Pred={pred:8s} True={true_label:8s}  {text[:50]}")
+
+print(f"\nAccuracy: {correct}/{len(test_examples)} = {correct/len(test_examples):.1%}")
+
+print("\n=== Top Predictive Words Per Class ===")
+for c in clf.classes:
+    top = clf.top_features(c, n=6)
+    words = [f"{w}({p:.2f})" for w, p in top]
+    print(f"  {c:8s}: {', '.join(words)}")
+`} height={560} title="Naive Bayes Text Classifier from Scratch" />
+
+### Levenshtein Edit Distance for Spelling Correction
+
+<PythonPlayground code={String.raw`# ── Levenshtein distance (dynamic programming) ────────────────────────────────
+def levenshtein(s1, s2):
+    """
+    Minimum edit distance between two strings.
+    Operations: insert (cost 1), delete (cost 1), substitute (cost 1).
+    O(|s1| * |s2|) time and space.
+    """
+    m, n = len(s1), len(s2)
+    # dp[i][j] = edit distance between s1[:i] and s2[:j]
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+
+    # Base cases: empty string requires i/j insertions
+    for i in range(m + 1):
+        dp[i][0] = i
+    for j in range(n + 1):
+        dp[0][j] = j
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if s1[i-1] == s2[j-1]:
+                dp[i][j] = dp[i-1][j-1]      # No operation needed
+            else:
+                dp[i][j] = 1 + min(
+                    dp[i-1][j],               # Delete from s1
+                    dp[i][j-1],               # Insert into s1
+                    dp[i-1][j-1]              # Substitute
+                )
+    return dp[m][n]
+
+def spell_correct(word, dictionary, max_dist=2):
+    """Find closest words in dictionary by edit distance."""
+    candidates = []
+    for candidate in dictionary:
+        dist = levenshtein(word.lower(), candidate.lower())
+        if dist <= max_dist:
+            candidates.append((dist, candidate))
+    return sorted(candidates)[:5]
+
+# ── Demo ───────────────────────────────────────────────────────────────────────
+DICTIONARY = [
+    "python", "machine", "learning", "algorithm", "function", "variable",
+    "network", "neural", "training", "language", "model", "token",
+    "transformer", "attention", "embedding", "vector", "matrix", "tensor",
+    "gradient", "optimizer", "batch", "epoch", "loss", "accuracy",
+    "classification", "regression", "clustering", "feature", "parameter",
+]
+
+misspellings = [
+    "pytho", "machin", "learing", "algoritm", "nueral", "traning",
+    "transfomer", "attentoin", "embeding", "gradiant",
+]
+
+print("=== Spell Correction via Edit Distance ===\n")
+for typo in misspellings:
+    suggestions = spell_correct(typo, DICTIONARY)
+    top = [f"{w}(d={d})" for d, w in suggestions[:3]]
+    print(f"  '{typo}' → {', '.join(top)}")
+
+print("\n=== Edit Distance Matrix (sample) ===")
+words_a = ["python", "pythan", "pithon", "pythom"]
+words_b = ["python"]
+print(f"{'':10s}", end="")
+for w in words_b:
+    print(f"{w:10s}", end="")
+print()
+for wa in words_a:
+    print(f"{wa:10s}", end="")
+    for wb in words_b:
+        d = levenshtein(wa, wb)
+        print(f"{d:10d}", end="")
+    print()
+
+print("\n=== Jaro-Winkler (for short strings) ===")
+def jaro(s1, s2):
+    if s1 == s2:
+        return 1.0
+    l1, l2 = len(s1), len(s2)
+    match_dist = max(l1, l2) // 2 - 1
+    if match_dist < 0:
+        match_dist = 0
+    s1_matches = [False] * l1
+    s2_matches = [False] * l2
+    matches = 0
+    transpositions = 0
+    for i in range(l1):
+        start = max(0, i - match_dist)
+        end = min(i + match_dist + 1, l2)
+        for j in range(start, end):
+            if s2_matches[j] or s1[i] != s2[j]:
+                continue
+            s1_matches[i] = s2_matches[j] = True
+            matches += 1
+            break
+    if matches == 0:
+        return 0.0
+    k = 0
+    for i in range(l1):
+        if not s1_matches[i]:
+            continue
+        while not s2_matches[k]:
+            k += 1
+        if s1[i] != s2[k]:
+            transpositions += 1
+        k += 1
+    return (matches/l1 + matches/l2 + (matches - transpositions/2)/matches) / 3
+
+pairs = [("martha","marhta"),("dixon","dicksonx"),("jellyfish","smellyfish"),("python","pyhton")]
+for a, b in pairs:
+    print(f"  jaro('{a}', '{b}') = {jaro(a, b):.4f}  |  levenshtein = {levenshtein(a, b)}")
+`} height={560} title="Edit Distance and Spell Correction" />
+
+## Part 3: Word Embeddings
+
+Before transformers, dense vector representations solved the fundamental problem with bag-of-words: **no semantic meaning**. In BoW, "cat" and "feline" are completely unrelated — they share zero vocabulary overlap.
+
+### Why BoW Fails
 
 ```python
-# Scaled dot-product attention (the core operation in every transformer)
+# Two semantically identical sentences get very different BoW vectors:
+doc1 = "The automobile is fast"
+doc2 = "The car is rapid"
+
+# BoW with these 6 unique words:
+# [automobile, fast, car, rapid, the, is]
+# doc1: [1, 1, 0, 0, 1, 1]
+# doc2: [0, 0, 1, 1, 1, 1]
+# Cosine similarity ≈ 0.5  (not even close to 1.0)
+```
+
+Word embeddings fix this by placing semantically similar words near each other in a continuous vector space.
+
+### Word2Vec: CBOW and Skip-gram
+
+Word2Vec (Mikolov et al., 2013) trains on a simple self-supervised task using a sliding context window over text:
+
+**Skip-gram**: Given center word, predict context words.
+- Input: "bank" → predict: ["river", "flows", "near", "the"]
+- Good for rare words
+
+**CBOW (Continuous Bag of Words)**: Given context, predict center word.
+- Input: ["river", "flows", "near", "the"] → predict: "bank"
+- Faster, good for frequent words
+
+The embeddings are never directly supervised — they emerge as a byproduct of the prediction task. After training billions of sentences, semantic structure emerges geometrically.
+
+```python
+# Using gensim (requires pip install gensim)
+from gensim.models import Word2Vec
+import gensim.downloader as api
+
+# Train from scratch on custom text
+sentences = [
+    ["machine", "learning", "models", "learn", "from", "data"],
+    ["deep", "learning", "neural", "networks", "transform", "features"],
+    ["python", "code", "runs", "machine", "learning", "algorithms"],
+]
+
+model = Word2Vec(
+    sentences,
+    vector_size=100,   # Embedding dimension
+    window=5,          # Context window size
+    min_count=1,       # Minimum word frequency
+    workers=4,         # Parallel training threads
+    sg=1,              # 1=Skip-gram, 0=CBOW
+    epochs=100,
+)
+
+# Word similarity
+print(model.wv.most_similar("machine", topn=5))
+# [('learning', 0.98), ('deep', 0.91), ('algorithms', 0.88), ...]
+
+# Word analogy: king - man + woman = queen
+result = model.wv.most_similar(
+    positive=["king", "woman"],
+    negative=["man"],
+    topn=1,
+)
+print(result)  # [('queen', 0.89)]
+
+# Load pre-trained Google News embeddings (300-dim, 3M words)
+wv = api.load("word2vec-google-news-300")
+print(wv.most_similar("transformer", topn=5))
+```
+
+### GloVe and fastText
+
+**GloVe** (Pennington et al., 2014) factorizes the global word co-occurrence matrix. The loss function directly optimizes for the log-ratio of co-occurrence probabilities — encoding meaning as a consequence of corpus statistics rather than local context windows.
+
+**fastText** (Bojanowski et al., 2017) represents words as sums of their character n-gram embeddings. This solves the OOV (out-of-vocabulary) problem:
+
+```python
+from gensim.models import FastText
+
+model = FastText(sentences, vector_size=100, window=5, min_count=1)
+
+# fastText can embed words it never saw in training:
+# "transformerized" → sum of character n-grams including "transform"
+vec = model.wv["transformerized"]   # Works even though unseen!
+```
+
+## Part 4: The Transformer Architecture
+
+### Attention Mechanism from Scratch
+
+The transformer (Vaswani et al., 2017) replaces recurrence with attention. Every token can directly attend to every other token — no information bottleneck.
+
+**Scaled dot-product attention:**
+
+```
+Attention(Q, K, V) = softmax(QKᵀ / √d_k) × V
+```
+
+- Q (queries): what this token is looking for
+- K (keys): what each token offers
+- V (values): what each token actually contains
+- `/ √d_k`: prevents softmax saturation in high dimensions
+
+<PythonPlayground code={String.raw`import math
+
+# ── Pure Python matrix operations (no numpy) ──────────────────────────────────
+def matmul(A, B):
+    """Matrix multiplication A (m×k) @ B (k×n) → (m×n)."""
+    m, k = len(A), len(A[0])
+    n = len(B[0])
+    C = [[0.0]*n for _ in range(m)]
+    for i in range(m):
+        for j in range(n):
+            for p in range(k):
+                C[i][j] += A[i][p] * B[p][j]
+    return C
+
+def transpose(A):
+    return [[A[j][i] for j in range(len(A))] for i in range(len(A[0]))]
+
+def softmax_row(row):
+    max_v = max(row)
+    exps = [math.exp(x - max_v) for x in row]
+    total = sum(exps)
+    return [e / total for e in exps]
+
+def softmax_matrix(A):
+    return [softmax_row(row) for row in A]
+
+def scalar_mul(A, s):
+    return [[x * s for x in row] for row in A]
+
+def add_matrices(A, B):
+    return [[A[i][j] + B[i][j] for j in range(len(A[0]))] for i in range(len(A))]
+
+# ── Scaled Dot-Product Attention ───────────────────────────────────────────────
 def attention(Q, K, V, mask=None):
-    d_k = Q.shape[-1]
-    scores = Q @ K.transpose(-2, -1) / math.sqrt(d_k)  # Scale by sqrt(d_k)
+    """
+    Q: (seq_len, d_k)
+    K: (seq_len, d_k)
+    V: (seq_len, d_v)
+    Returns: (seq_len, d_v) weighted value vectors
+    """
+    d_k = len(Q[0])
+    scale = 1.0 / math.sqrt(d_k)
+
+    # Compute attention scores: QK^T / sqrt(d_k)
+    scores = matmul(Q, transpose(K))           # (seq_len, seq_len)
+    scores = scalar_mul(scores, scale)
+
     if mask is not None:
-        scores = scores.masked_fill(mask == 0, -1e9)
-    weights = torch.softmax(scores, dim=-1)             # Probability distribution
-    return weights @ V, weights                         # Weighted sum of values
+        # Apply mask: set masked positions to -1e9 (becomes ~0 after softmax)
+        for i in range(len(scores)):
+            for j in range(len(scores[i])):
+                if mask[i][j] == 0:
+                    scores[i][j] = -1e9
+
+    # Softmax along key dimension
+    weights = softmax_matrix(scores)           # (seq_len, seq_len)
+
+    # Weighted sum of values
+    output = matmul(weights, V)                # (seq_len, d_v)
+    return output, weights
+
+# ── Positional Encoding ────────────────────────────────────────────────────────
+def positional_encoding(seq_len, d_model):
+    """
+    PE(pos, 2i)   = sin(pos / 10000^(2i/d_model))
+    PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
+    """
+    pe = [[0.0] * d_model for _ in range(seq_len)]
+    for pos in range(seq_len):
+        for i in range(0, d_model, 2):
+            angle = pos / (10000 ** (2 * i / d_model))
+            pe[pos][i] = math.sin(angle)
+            if i + 1 < d_model:
+                pe[pos][i + 1] = math.cos(angle)
+    return pe
+
+# ── Demo: 4 tokens, d_k=4, d_v=4 ─────────────────────────────────────────────
+# Simulating: ["the", "cat", "sat", "mat"]
+seq_len = 4
+d_k = 4
+d_v = 4
+
+# Toy Q, K, V (in practice these come from learned projections)
+import random
+random.seed(42)
+Q = [[random.gauss(0, 0.5) for _ in range(d_k)] for _ in range(seq_len)]
+K = [[random.gauss(0, 0.5) for _ in range(d_k)] for _ in range(seq_len)]
+V = [[random.gauss(0, 0.5) for _ in range(d_v)] for _ in range(seq_len)]
+
+print("=== Scaled Dot-Product Attention ===")
+print(f"Sequence length: {seq_len}, d_k={d_k}, d_v={d_v}")
+
+output, weights = attention(Q, K, V)
+
+print("\nAttention weight matrix (rows=query tokens, cols=key tokens):")
+tokens = ["the", "cat", "sat", "mat"]
+print(f"        {'':>6}", end="")
+for t in tokens:
+    print(f"{t:>9}", end="")
+print()
+for i, (row, tok) in enumerate(zip(weights, tokens)):
+    print(f"query[{i}] {tok:>5}", end="")
+    for w in row:
+        print(f"{w:9.4f}", end="")
+    print(f"  sum={sum(row):.4f}")
+
+print("\nOutput representations (contextualized token vectors):")
+for i, (vec, tok) in enumerate(zip(output, tokens)):
+    vals = [f"{v:+.3f}" for v in vec]
+    print(f"  {tok:5s}: [{', '.join(vals)}]")
+
+# Causal mask (GPT-style: can only attend to past)
+print("\n=== Causal (GPT) Mask ===")
+causal_mask = [[1 if j <= i else 0 for j in range(seq_len)] for i in range(seq_len)]
+print("Mask (1=attend, 0=blocked):")
+for row in causal_mask:
+    print("  ", row)
+_, causal_weights = attention(Q, K, V, mask=causal_mask)
+print("\nCausal attention weights (upper triangle is ~0):")
+for i, (row, tok) in enumerate(zip(causal_weights, tokens)):
+    print(f"  {tok:5s}: [{', '.join(f'{w:.3f}' for w in row)}]  sum={sum(row):.3f}")
+
+# Positional encoding
+pe = positional_encoding(seq_len=6, d_model=8)
+print("\n=== Positional Encoding (seq=6, d=8) ===")
+print("Position encodings (alternating sin/cos):")
+for pos in range(6):
+    vals = [f"{v:+.3f}" for v in pe[pos]]
+    print(f"  pos {pos}: [{', '.join(vals)}]")
+`} height={600} title="Attention Mechanism + Positional Encoding from Scratch" />
+
+### The Full Transformer Block
+
+```
+┌─────────────────────────────────────────────┐
+│              Transformer Block               │
+│                                             │
+│  Input x ─────────────────────────────┐    │
+│      ↓                                │    │
+│  MultiHead Attention (x, x, x)        │    │
+│      ↓                                │    │
+│  Add & LayerNorm ←─────────────────── x    │
+│      ↓                                │    │
+│  Feed-Forward Network                 │    │
+│   (Linear → ReLU → Linear)            │    │
+│      ↓                                │    │
+│  Add & LayerNorm ←─────────────────── ┘    │
+│      ↓                                     │
+│  Output (same shape as Input)              │
+└─────────────────────────────────────────────┘
 ```
 
-Interpretation: for each token (Q), compute how much it should attend to every other token (K), then retrieve a weighted mixture of their values (V).
+**Why Add & Norm?**
+- **Residual connection** (`x + sublayer(x)`): prevents vanishing gradients, allows gradients to flow directly from output to early layers
+- **Layer normalization**: normalizes across the feature dimension (not batch), stabilizes training regardless of sequence length
 
-**Multi-head attention** runs this in parallel with different learned projections, letting the model attend to different types of relationships simultaneously.
-
-## Transformer Architecture
+**Multi-head attention** runs H attention heads in parallel, each with different learned projections. Each head can specialize — one might track syntactic dependencies, another coreference, another semantic similarity. Outputs are concatenated and projected:
 
 ```
-Input tokens → Token Embeddings + Positional Encoding
-    ↓
-[Multi-Head Self-Attention → Add & Norm → Feed-Forward → Add & Norm] × N
-    ↓
-Output (contextualized representations)
+MultiHead(Q,K,V) = Concat(head₁,...,headₕ) × Wᴼ
+where headᵢ = Attention(Q×Wᵢᴼ, K×Wᵢᴷ, V×Wᵢᵛ)
 ```
 
-**Positional encoding** injects position information since attention is order-invariant. The original transformer uses sinusoidal functions; modern models learn position embeddings.
+**BERT vs GPT architecture:**
 
-**BERT vs GPT:**
-
-| Property | BERT | GPT |
+| Property | BERT (Encoder-only) | GPT (Decoder-only) |
 |---|---|---|
-| Direction | Bidirectional | Left-to-right only |
-| Training | Masked LM + NSP | Next token prediction |
-| Best for | Classification, NER, QA | Generation, completion |
-| Key idea | See full context | Autoregressive |
+| Attention | Bidirectional (full) | Causal (masked) |
+| Training | Masked Language Model | Next-token prediction |
+| Best for | Classification, NER, QA | Text generation |
+| Example | distilbert-base-uncased | gpt2, llama-3 |
 
-## Tokenization Deep Dive
+## Part 5: HuggingFace Transformers
 
-Modern tokenizers operate on **subword units**, not whole words:
+The `transformers` library provides a consistent API over thousands of pre-trained models. The AutoClass pattern loads the right architecture from a model name:
 
-- **BPE (Byte-Pair Encoding)**: merge frequent byte pairs iteratively. Used by GPT, RoBERTa.
-- **WordPiece**: similar to BPE but maximizes language model likelihood. Used by BERT.
-- **SentencePiece**: language-agnostic, works on raw text. Used by T5, LLaMA.
+### AutoTokenizer and Input Encoding
 
 ```python
 from transformers import AutoTokenizer
 
 tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-text = "The quick brown fox jumped over the lazy dogs."
 
-tokens = tokenizer(text, return_tensors="pt")
-print(tokenizer.convert_ids_to_tokens(tokens.input_ids[0]))
-# ['[CLS]', 'the', 'quick', 'brown', 'fox', 'jumped', 'over', 'the', 'lazy', 'dogs', '.', '[SEP]']
+# Single sentence
+text = "The model didn't converge during training."
+encoding = tokenizer(
+    text,
+    return_tensors="pt",      # PyTorch tensors
+    padding=True,
+    truncation=True,
+    max_length=128,
+)
+print(encoding.keys())
+# dict_keys(['input_ids', 'token_type_ids', 'attention_mask'])
 
-# Subword splitting for unknown/rare words
-rare_text = "Pneumonoultramicroscopicsilicovolcanoconiosis is challenging."
-rare_tokens = tokenizer.tokenize(rare_text)
-print(rare_tokens)
-# ['pneumon', '##oul', '##tra', '##micro', '##scop', '##ics', '##ili', ...]
+# input_ids: integer token IDs
+# attention_mask: 1 for real tokens, 0 for padding
+# token_type_ids: 0 for sentence A, 1 for sentence B (BERT sentence pairs)
+
+ids = encoding["input_ids"][0].tolist()
+tokens = tokenizer.convert_ids_to_tokens(ids)
+print(tokens)
+# ['[CLS]', 'the', 'model', 'didn', "'", 't', 'converge', 'during', 'training', '.', '[SEP]']
+
+# Batch encoding (handles padding automatically)
+batch = tokenizer(
+    ["Short text.", "A longer piece of text that needs padding."],
+    return_tensors="pt",
+    padding=True,       # Pad shorter sequences
+    truncation=True,
+    max_length=32,
+)
+print(batch["input_ids"].shape)   # torch.Size([2, 12])
+
+# BPE subword splitting (handles OOV words)
+rare = "Supercalifragilisticexpialidocious and transformerization"
+toks = tokenizer.tokenize(rare)
+print(toks)
+# ['super', '##cali', '##fra', '##gil', '##istic', '##ex', '##pia', ...]
 ```
 
-Special tokens encode structural information:
-- `[CLS]` — classification token (BERT); its final representation used for classification
-- `[SEP]` — separates sequences in BERT
-- `[PAD]` — padding to equalize sequence lengths
-- `[MASK]` — masked token in BERT pre-training
+### Pipeline API — Inference in One Line
 
-## TF-IDF Sentiment Classifier
+```python
+from transformers import pipeline
 
-<PythonPlayground code={String.raw`import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedKFold, cross_val_score
-from sklearn.pipeline import Pipeline
-
-# ── Generate synthetic movie review dataset ───────────────────────────────────
-rng = np.random.default_rng(42)
-
-positive_phrases = [
-    "absolutely fantastic movie", "loved every minute of it",
-    "brilliant acting and direction", "masterpiece of cinema",
-    "highly recommend to everyone", "incredible storytelling",
-    "wonderful performances throughout", "beautifully crafted film",
-    "outstanding achievement in filmmaking", "emotionally powerful",
-    "gripping from start to finish", "superb cinematography",
-    "unforgettable characters", "thoroughly enjoyed this",
-    "one of the best films", "excellent in every way",
-]
-
-negative_phrases = [
-    "terrible waste of time", "boring and predictable",
-    "awful acting throughout", "completely disappointed",
-    "worst movie ever seen", "painfully slow and dull",
-    "horrible script and direction", "avoid at all costs",
-    "could not stay awake", "extremely disappointing film",
-    "poorly written characters", "a complete disaster",
-    "two hours of nothing", "so bad it hurts",
-    "total waste of money", "dreadful in every way",
-]
-
-def make_review(phrases, is_positive, n):
-    reviews = []
-    for _ in range(n):
-        n_phrases = rng.integers(2, 5)
-        chosen = rng.choice(phrases, n_phrases, replace=True)
-        # Add some noise words
-        noise = rng.choice(["the", "a", "it", "was", "really", "quite", "very"],
-                            rng.integers(3, 8))
-        words = list(chosen) + list(noise)
-        rng.shuffle(words)
-        review = " ".join(words)
-        reviews.append(review)
-    return reviews
-
-pos_reviews = make_review(positive_phrases, True, 250)
-neg_reviews = make_review(negative_phrases, False, 250)
-
-reviews = pos_reviews + neg_reviews
-labels  = [1]*250 + [0]*250
-
-# Shuffle
-idx = rng.permutation(500)
-reviews = [reviews[i] for i in idx]
-labels  = [labels[i] for i in idx]
-labels_arr = np.array(labels)
-
-print(f"Dataset: {len(reviews)} reviews, {labels_arr.mean():.0%} positive")
-print(f"Sample positive: {pos_reviews[0][:80]}")
-print(f"Sample negative: {neg_reviews[0][:80]}")
-
-# ── Build TF-IDF + Logistic Regression pipeline ────────────────────────────────
-pipeline = Pipeline([
-    ("tfidf", TfidfVectorizer(
-        ngram_range=(1, 2),    # Unigrams and bigrams
-        max_features=5000,
-        min_df=2,              # Ignore terms in fewer than 2 documents
-        sublinear_tf=True,     # Apply log(TF+1) instead of raw TF
-    )),
-    ("clf", LogisticRegression(C=1.0, max_iter=1000, random_state=42)),
+# Sentiment analysis
+classifier = pipeline("sentiment-analysis",
+                      model="distilbert-base-uncased-finetuned-sst-2-english")
+results = classifier([
+    "This movie was absolutely fantastic!",
+    "I hated every minute of this terrible film.",
 ])
+# [{'label': 'POSITIVE', 'score': 0.9998}, {'label': 'NEGATIVE', 'score': 0.9994}]
 
-# ── Cross-validation ──────────────────────────────────────────────────────────
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-for metric in ["accuracy", "precision", "recall", "f1"]:
-    scores = cross_val_score(pipeline, reviews, labels_arr, cv=cv, scoring=metric)
-    print(f"  {metric:12s}: {scores.mean():.4f} +/- {scores.std():.4f}")
+# Named Entity Recognition
+ner = pipeline("ner",
+               model="dslim/bert-base-NER",
+               aggregation_strategy="simple")
+entities = ner("Elon Musk founded SpaceX in California.")
+# [{'entity_group': 'PER', 'word': 'Elon Musk', 'score': 0.998},
+#  {'entity_group': 'ORG', 'word': 'SpaceX', 'score': 0.993}, ...]
 
-# ── Fit and inspect ───────────────────────────────────────────────────────────
-pipeline.fit(reviews, labels_arr)
+# Zero-shot classification (no fine-tuning needed)
+zero_shot = pipeline("zero-shot-classification",
+                     model="facebook/bart-large-mnli")
+result = zero_shot(
+    "The interest rate hike will slow economic growth.",
+    candidate_labels=["finance", "sports", "technology", "politics"],
+)
+# {'labels': ['finance', 'politics', 'technology', 'sports'],
+#  'scores': [0.89, 0.07, 0.02, 0.01]}
 
-test_sentences = [
-    "This movie was absolutely fantastic and brilliant",
-    "Terrible waste of time completely awful",
-    "The acting was okay but the story was boring",
-    "Outstanding performance loved every minute",
-]
-preds = pipeline.predict(test_sentences)
-probas = pipeline.predict_proba(test_sentences)
+# Summarization
+summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+text = "..." * 500   # Long article text
+summary = summarizer(text, max_length=150, min_length=40, do_sample=False)
+print(summary[0]["summary_text"])
 
-print("\\nPredictions:")
-for text, pred, prob in zip(test_sentences, preds, probas):
-    sentiment = "POSITIVE" if pred == 1 else "NEGATIVE"
-    print(f"  [{sentiment} {prob[pred]:.2%}] {text[:55]}")
-`} packages={["numpy", "scikit-learn"]} height={480} title="TF-IDF Sentiment Classifier" />
+# Question answering
+qa = pipeline("question-answering",
+              model="distilbert-base-cased-distilled-squad")
+result = qa(
+    question="What year did BERT come out?",
+    context="BERT was published in 2018 by Google. It transformed NLP tasks."
+)
+# {'answer': '2018', 'score': 0.94, 'start': 25, 'end': 29}
 
-<PythonPlayground code={String.raw`import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+# Text generation (GPT-style)
+generator = pipeline("text-generation", model="gpt2")
+output = generator("Deep learning is", max_new_tokens=50, num_return_sequences=2)
 
-# Multi-class text classifier: 4 topic categories
-rng = np.random.default_rng(99)
+# Fill-mask (BERT-style)
+fill_mask = pipeline("fill-mask", model="bert-base-uncased")
+result = fill_mask("Paris is the [MASK] of France.")
+# [{'sequence': 'Paris is the capital of France.', 'score': 0.97, ...}]
 
-categories = {
-    "tech":    ["software code algorithm neural network machine learning python data",
-                "computer programming database cloud API server deployment docker"],
-    "sports":  ["football basketball soccer player team game championship match score",
-                "athlete training coach tournament winner stadium league season"],
-    "finance": ["stock market investment portfolio dividend earnings revenue profit",
-                "economy inflation interest rate banking fund hedge equity bonds"],
-    "health":  ["medical doctor patient hospital treatment therapy diagnosis symptoms",
-                "medicine surgery vaccine nutrition exercise fitness wellness diet"],
-}
+# Translation
+translator = pipeline("translation_en_to_fr",
+                       model="Helsinki-NLP/opus-mt-en-fr")
+result = translator("Machine learning transforms everything.")
+print(result[0]["translation_text"])  # "L'apprentissage automatique transforme tout."
+```
 
-texts, label_names = [], []
-for cat, word_sets in categories.items():
-    for _ in range(120):
-        all_words = " ".join(word_sets).split()
-        n_words = rng.integers(8, 20)
-        text = " ".join(rng.choice(all_words, n_words))
-        texts.append(text)
-        label_names.append(cat)
+## Part 6: Fine-Tuning with HuggingFace
 
-from sklearn.preprocessing import LabelEncoder
-le = LabelEncoder()
-labels = le.fit_transform(label_names)
+### When to Fine-tune vs Prompt Engineer
 
-pipeline = Pipeline([
-    ("tfidf", TfidfVectorizer(ngram_range=(1,2), max_features=3000)),
-    ("clf",   MultinomialNB(alpha=0.1)),
-])
+| Approach | When to use | Data needed | Cost |
+|---|---|---|---|
+| Zero-shot prompting | Flexible task, LLM available | None | API cost |
+| Few-shot prompting | Need format control | 5-20 examples | API cost |
+| Fine-tuning small model | High volume, low latency | 1K-100K examples | GPU time |
+| Fine-tuning large model | Specialized domain | 10K+ examples | Significant |
 
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-scores = cross_val_score(pipeline, texts, labels, cv=cv, scoring="f1_weighted")
-print(f"Naive Bayes 4-class CV F1: {scores.mean():.4f} +/- {scores.std():.4f}")
+**Rule of thumb**: Try prompting first. Only fine-tune when:
+- You need consistent output format (prompting is unreliable)
+- You're making millions of API calls (cost prohibitive)
+- Your domain is highly specialized (medical, legal, scientific)
+- You need sub-100ms latency
 
-pipeline.fit(texts, labels)
-test = [
-    "machine learning algorithm neural network training",
-    "football championship team winning the league",
-    "stock market investment portfolio returns",
-    "medical treatment patient hospital diagnosis",
-]
-preds = le.inverse_transform(pipeline.predict(test))
-probas = pipeline.predict_proba(test)
-for text, pred, prob in zip(test, preds, probas):
-    confidence = max(prob)
-    print(f"  [{pred:8s} {confidence:.2%}] {text[:50]}")
-`} packages={["numpy", "scikit-learn"]} height={400} title="Naive Bayes Multi-Class Text Classifier" />
-
-## Fine-Tuning BERT with HuggingFace
-
-This code runs in a Python environment with PyTorch and `transformers` installed:
+### Complete Fine-tuning Pipeline
 
 ```python
 from datasets import load_dataset
@@ -373,268 +1242,628 @@ from transformers import (
     AutoModelForSequenceClassification,
     TrainingArguments,
     Trainer,
+    DataCollatorWithPadding,
 )
 import numpy as np
 from sklearn.metrics import accuracy_score, f1_score
 
-# Load dataset
-dataset = load_dataset("imdb")
+# ── 1. Load dataset ────────────────────────────────────────────────────────────
+dataset = load_dataset("imdb")  # 50K movie reviews, binary sentiment
 
-# Tokenizer
-tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+# ── 2. Tokenize ────────────────────────────────────────────────────────────────
+checkpoint = "distilbert-base-uncased"   # 66M params, 40% smaller than BERT
+tokenizer = AutoTokenizer.from_pretrained(checkpoint)
 
-def tokenize(batch):
+def tokenize_fn(batch):
     return tokenizer(
         batch["text"],
         truncation=True,
-        max_length=512,
-        padding="max_length",
+        max_length=256,    # Truncate at 256 tokens to save memory
     )
 
-tokenized = dataset.map(tokenize, batched=True, batch_size=1000)
-tokenized.set_format("torch", columns=["input_ids", "attention_mask", "label"])
+tokenized = dataset.map(tokenize_fn, batched=True, batch_size=1000,
+                        remove_columns=["text"])
+tokenized = tokenized.rename_column("label", "labels")
 
-# Model: DistilBERT is 40% smaller than BERT, 60% faster, retains 97% accuracy
+# ── 3. Data collator (dynamic padding per batch, more efficient) ───────────────
+data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+
+# ── 4. Load model ──────────────────────────────────────────────────────────────
 model = AutoModelForSequenceClassification.from_pretrained(
-    "distilbert-base-uncased",
-    num_labels=2
+    checkpoint,
+    num_labels=2,
+    id2label={0: "negative", 1: "positive"},
+    label2id={"negative": 0, "positive": 1},
 )
 
-# Metrics
+# ── 5. Metrics ─────────────────────────────────────────────────────────────────
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
     preds = np.argmax(logits, axis=-1)
     return {
         "accuracy": accuracy_score(labels, preds),
-        "f1": f1_score(labels, preds, average="binary"),
+        "f1":       f1_score(labels, preds, average="binary"),
     }
 
-# Training arguments
+# ── 6. Training arguments ──────────────────────────────────────────────────────
 args = TrainingArguments(
-    output_dir="./results",
+    output_dir="imdb-distilbert",
     num_train_epochs=3,
-    per_device_train_batch_size=16,
-    per_device_eval_batch_size=32,
-    warmup_ratio=0.1,
-    weight_decay=0.01,
-    learning_rate=2e-5,
+    per_device_train_batch_size=32,
+    per_device_eval_batch_size=64,
+    learning_rate=2e-5,              # Standard for fine-tuning: 1e-5 to 5e-5
+    warmup_ratio=0.1,               # Warm up for 10% of steps
+    weight_decay=0.01,              # L2 regularization
     evaluation_strategy="epoch",
     save_strategy="epoch",
     load_best_model_at_end=True,
-    fp16=True,       # Mixed precision for speed
+    metric_for_best_model="f1",
+    fp16=True,                      # Mixed precision: 2x faster on modern GPUs
+    dataloader_num_workers=4,
+    report_to="none",               # Disable wandb/tensorboard for demo
 )
 
+# ── 7. Trainer ─────────────────────────────────────────────────────────────────
 trainer = Trainer(
     model=model,
     args=args,
-    train_dataset=tokenized["train"].select(range(5000)),   # Subset for demo
-    eval_dataset=tokenized["test"].select(range(1000)),
+    train_dataset=tokenized["train"].select(range(10000)),  # Subset for demo
+    eval_dataset=tokenized["test"].select(range(2000)),
+    tokenizer=tokenizer,
+    data_collator=data_collator,
     compute_metrics=compute_metrics,
 )
 
 trainer.train()
-# Fine-tuned BERT reaches ~93% accuracy on IMDB vs ~90% for TF-IDF + LR
+# Epoch 1/3: loss=0.28, accuracy=0.898, f1=0.897
+# Epoch 2/3: loss=0.19, accuracy=0.921, f1=0.920
+# Epoch 3/3: loss=0.14, accuracy=0.931, f1=0.930
+
+# ── 8. Save and push to hub ────────────────────────────────────────────────────
+trainer.save_model("imdb-distilbert-final")
+tokenizer.save_pretrained("imdb-distilbert-final")
+
+# Push to HuggingFace Hub
+# model.push_to_hub("your-username/imdb-distilbert")
+# tokenizer.push_to_hub("your-username/imdb-distilbert")
 ```
 
-## Embeddings for Similarity Search
+### Parameter-Efficient Fine-Tuning (PEFT/LoRA)
+
+For large models (7B+ parameters), full fine-tuning is impractical. LoRA (Low-Rank Adaptation) freezes the base model and trains only tiny adapter matrices:
 
 ```python
-from sentence_transformers import SentenceTransformer
-import numpy as np
+from peft import LoraConfig, get_peft_model, TaskType
 
-model = SentenceTransformer("all-MiniLM-L6-v2")   # 80MB, fast, excellent quality
+config = LoraConfig(
+    task_type=TaskType.SEQ_CLS,
+    r=16,               # Rank of adapter matrices (lower = fewer params)
+    lora_alpha=32,      # Scaling factor
+    lora_dropout=0.05,
+    target_modules=["q_lin", "k_lin", "v_lin"],   # Which layers to adapt
+)
 
-docs = [
-    "Python is a high-level programming language",
-    "Machine learning requires lots of data",
-    "Neural networks are inspired by the brain",
-    "The stock market crashed yesterday",
-    "Interest rates affect mortgage payments",
-]
+peft_model = get_peft_model(model, config)
+peft_model.print_trainable_parameters()
+# trainable params: 147,456 || all params: 67,091,458 || trainable%: 0.22
 
-doc_embeddings = model.encode(docs, normalize_embeddings=True)
-
-query = "deep learning with neural nets"
-query_embedding = model.encode(query, normalize_embeddings=True)
-
-# Cosine similarity is just dot product when vectors are normalized
-similarities = doc_embeddings @ query_embedding
-
-print("Semantic similarity to:", query)
-for doc, sim in sorted(zip(docs, similarities), key=lambda x: -x[1]):
-    print(f"  {sim:.4f}: {doc}")
-# Output correctly ranks neural networks > ML > Python > finance docs
+# Train with standard Trainer — same API as full fine-tuning
+# LoRA adds ~0.22% parameters but recovers most of full fine-tuning performance
 ```
 
-## PROJECT: Sentiment Analyzer
+## Part 7: Working with LLM APIs
 
-<PythonPlayground code={String.raw`import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
-from sklearn.metrics import classification_report
-import re
-
-rng = np.random.default_rng(7)
-
-# ── Richer synthetic dataset (500 reviews) ────────────────────────────────────
-POSITIVE = [
-    "brilliant masterpiece film loved every second",
-    "fantastic performances outstanding direction beautiful story",
-    "absolutely amazing movie incredible experience wonderful",
-    "gripping emotional journey excellent acting highly recommend",
-    "stunning visuals perfect pacing loved the characters",
-    "one of the best films I have ever seen amazing",
-    "deeply moving and thought provoking brilliant screenplay",
-    "outstanding ensemble cast superb writing loved it",
-    "thoroughly entertaining from start to finish recommend",
-    "beautiful touching story excellent in every way",
-]
-NEGATIVE = [
-    "terrible boring waste time awful disappointed",
-    "horrible acting dreadful plot completely unwatchable",
-    "worst film ever made avoid disaster embarrassing",
-    "painfully slow and dull could not finish it",
-    "absolutely dreadful waste money bad script direction",
-    "poor direction terrible dialogue boring predictable",
-    "awful disappointing mess incoherent storyline",
-    "disgraceful production terrible performances avoid",
-    "tedious and pointless complete waste of time",
-    "extremely bad poor quality disappointing in every way",
-]
-
-def augment(phrases, n):
-    reviews = []
-    for _ in range(n):
-        base = rng.choice(phrases)
-        words = base.split()
-        # Random word dropout
-        keep = rng.random(len(words)) > 0.15
-        words = [w for w, k in zip(words, keep) if k]
-        # Random word repeat
-        if len(words) > 2:
-            idx = rng.integers(len(words))
-            words.insert(idx, words[idx])
-        reviews.append(" ".join(words))
-    return reviews
-
-pos = augment(POSITIVE, 250)
-neg = augment(NEGATIVE, 250)
-reviews = pos + neg
-labels = np.array([1]*250 + [0]*250)
-idx = rng.permutation(500)
-reviews = [reviews[i] for i in idx]
-labels = labels[idx]
-
-print(f"Dataset: {len(reviews)} reviews")
-print(f"Class balance: {labels.mean():.0%} positive")
-
-# ── Model ─────────────────────────────────────────────────────────────────────
-pipeline = Pipeline([
-    ("tfidf", TfidfVectorizer(
-        ngram_range=(1, 3),
-        max_features=8000,
-        sublinear_tf=True,
-        min_df=1,
-    )),
-    ("clf", LogisticRegression(C=2.0, solver="lbfgs", max_iter=2000, random_state=42)),
-])
-
-# ── Cross-validation ──────────────────────────────────────────────────────────
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-for metric in ["accuracy", "f1", "roc_auc"]:
-    s = cross_val_score(pipeline, reviews, labels, cv=cv, scoring=metric)
-    print(f"  {metric:12s}: {s.mean():.4f} +/- {s.std():.4f}")
-
-# ── Train and evaluate ────────────────────────────────────────────────────────
-X_train, X_test, y_train, y_test = train_test_split(
-    reviews, labels, test_size=0.2, stratify=labels, random_state=42
-)
-pipeline.fit(X_train, y_train)
-y_pred = pipeline.predict(X_test)
-print("\\n" + classification_report(y_test, y_pred, target_names=["Negative","Positive"]))
-
-# ── Most predictive words ─────────────────────────────────────────────────────
-tfidf = pipeline.named_steps["tfidf"]
-clf   = pipeline.named_steps["clf"]
-feature_names = np.array(tfidf.get_feature_names_out())
-coef = clf.coef_[0]
-
-print("Top positive words/phrases:")
-for idx in np.argsort(coef)[-10:][::-1]:
-    print(f"  +{coef[idx]:.3f}  {feature_names[idx]}")
-
-print("\\nTop negative words/phrases:")
-for idx in np.argsort(coef)[:10]:
-    print(f"  {coef[idx]:.3f}  {feature_names[idx]}")
-
-# ── Sample predictions ────────────────────────────────────────────────────────
-test_reviews = [
-    "This was a brilliant and moving experience highly recommend",
-    "Terrible boring film waste of time awful",
-    "Not bad but could be better mixed feelings",
-    "Absolutely stunning masterpiece loved every moment",
-]
-probas = pipeline.predict_proba(test_reviews)
-print("\\nSample predictions:")
-for text, prob in zip(test_reviews, probas):
-    label = "POSITIVE" if prob[1] > 0.5 else "NEGATIVE"
-    print(f"  [{label} {max(prob):.1%}] {text[:55]}")
-`} packages={["numpy", "scikit-learn"]} height={560} title="Sentiment Analyzer — Full Project" />
-
-## Prompt Engineering for Generative Models
+### Groq and OpenAI-Compatible APIs
 
 ```python
 from groq import Groq
+import json
+import time
 
-client = Groq()
+client = Groq()  # Reads GROQ_API_KEY from env
 
-# ── System prompt pattern ─────────────────────────────────────────────────────
+# ── Basic completion ───────────────────────────────────────────────────────────
 response = client.chat.completions.create(
     model="llama-3.3-70b-versatile",
     messages=[
-        {
-            "role": "system",
-            "content": "You are a sentiment analysis expert. Analyze text and return JSON only."
-        },
-        {
-            "role": "user",
-            "content": "Analyze: 'The film had stunning visuals but a weak plot.'"
-        }
+        {"role": "system", "content": "You are an expert NLP engineer."},
+        {"role": "user",   "content": "Explain BPE tokenization in 3 bullet points."},
+    ],
+    temperature=0.3,    # Low temperature for factual/technical content
+    max_tokens=300,
+)
+text = response.choices[0].message.content
+cost_in = response.usage.prompt_tokens
+cost_out = response.usage.completion_tokens
+print(f"Response ({cost_in}+{cost_out} tokens):\n{text}")
+
+# ── Prompt engineering patterns ────────────────────────────────────────────────
+# 1. Zero-shot
+zero_shot = [{"role": "user", "content": "Classify: 'Shipment delayed by storm.' → category:"}]
+
+# 2. Few-shot (3 examples train the format)
+few_shot = [
+    {"role": "system",    "content": "Classify customer support tickets."},
+    {"role": "user",      "content": "My login stopped working yesterday."},
+    {"role": "assistant", "content": "AUTH_ISSUE"},
+    {"role": "user",      "content": "Invoice shows wrong amount charged."},
+    {"role": "assistant", "content": "BILLING_ISSUE"},
+    {"role": "user",      "content": "The dashboard loads slowly."},
+    {"role": "assistant", "content": "PERFORMANCE_ISSUE"},
+    {"role": "user",      "content": "I can't export my report to PDF."},  # New query
+]
+
+# 3. Chain-of-thought (improves complex reasoning by 30-50%)
+cot = """
+<task>Classify the sentiment of this review.</task>
+<review>The product works well overall but the documentation is confusing.</review>
+<thinking>
+Think step by step:
+1. Positive signals: "works well", "overall"
+2. Negative signals: "documentation is confusing"
+3. The positive aspects describe core functionality, negative is secondary
+4. Overall tone: mixed, slightly positive
+</thinking>
+<output>{"sentiment": "mixed", "positive_score": 0.6, "aspects": ["functionality+", "docs-"]}</output>
+"""
+
+# ── JSON mode (structured output) ─────────────────────────────────────────────
+struct_response = client.chat.completions.create(
+    model="llama-3.3-70b-versatile",
+    messages=[
+        {"role": "system", "content": "Extract entities. Return JSON only."},
+        {"role": "user",   "content": "Elon Musk's SpaceX launched Falcon 9 from Cape Canaveral."},
     ],
     response_format={"type": "json_object"},
 )
+data = json.loads(struct_response.choices[0].message.content)
+# {"persons": ["Elon Musk"], "organizations": ["SpaceX"], "rockets": ["Falcon 9"], ...}
 
-# ── Few-shot pattern ──────────────────────────────────────────────────────────
-few_shot = [
-    {"role": "user",      "content": "Classify: 'The model crashed.' → "},
-    {"role": "assistant", "content": "TECHNICAL_ISSUE"},
-    {"role": "user",      "content": "Classify: 'Payment declined.' → "},
-    {"role": "assistant", "content": "BILLING_ISSUE"},
-    {"role": "user",      "content": "Classify: 'Cannot login to account.' → "},
-]
+# ── Retry with exponential backoff ────────────────────────────────────────────
+def call_with_retry(client, messages, model="llama-3.3-70b-versatile",
+                    max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            return client.chat.completions.create(model=model, messages=messages)
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise
+            wait = 2 ** attempt   # 1s, 2s, 4s
+            print(f"Attempt {attempt+1} failed: {e}. Retrying in {wait}s...")
+            time.sleep(wait)
 
-# ── Chain-of-thought ──────────────────────────────────────────────────────────
-cot_prompt = """
-<task>Classify the customer support ticket below.</task>
-<instructions>
-1. Identify the core problem described
-2. Consider which department handles this type of issue
-3. Rate urgency from 1-5
-4. Output JSON: {"category": "...", "urgency": N, "summary": "..."}
-</instructions>
-<ticket>My API key stopped working and I have a demo in 2 hours!</ticket>
-"""
+# ── Embeddings API ─────────────────────────────────────────────────────────────
+# (Using OpenAI for embeddings — Groq doesn't offer embeddings API)
+from openai import OpenAI
+openai_client = OpenAI()
+
+def embed(texts, model="text-embedding-3-small"):
+    response = openai_client.embeddings.create(input=texts, model=model)
+    return [item.embedding for item in response.data]
+
+doc_embeddings = embed(["Python is great", "I love coding", "The market crashed"])
+# Each embedding: list of 1536 floats
+# Semantic search: cosine_similarity(query_embedding, doc_embeddings)
 ```
+
+## Part 8: Production NLP Patterns
+
+### Batched Inference and Quantization
+
+```python
+# ── Batched inference: process many texts efficiently ─────────────────────────
+from transformers import pipeline
+import torch
+
+# Use batch_size parameter for throughput
+classifier = pipeline(
+    "text-classification",
+    model="distilbert-base-uncased-finetuned-sst-2-english",
+    device=0 if torch.cuda.is_available() else -1,
+    batch_size=32,    # Process 32 texts per forward pass
+)
+
+texts = ["text1", "text2", ...] * 1000   # 1000 texts
+results = classifier(texts)   # ~8x faster than batch_size=1
+
+# ── Quantization with bitsandbytes ────────────────────────────────────────────
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+
+# INT8 quantization: ~2x memory reduction, minimal quality loss
+quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+
+# INT4 quantization: ~4x memory reduction
+quantization_config_4bit = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_compute_dtype=torch.float16,
+    bnb_4bit_use_double_quant=True,   # Nested quantization
+    bnb_4bit_quant_type="nf4",        # NormalFloat4 — better than uniform INT4
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-3.2-3B",
+    quantization_config=quantization_config_4bit,
+    device_map="auto",
+)
+# 3B model: 12GB FP16 → 3GB INT4
+
+# ── Embedding caching ─────────────────────────────────────────────────────────
+import hashlib
+import json
+import os
+
+class EmbeddingCache:
+    def __init__(self, cache_dir=".embedding_cache"):
+        self.cache_dir = cache_dir
+        os.makedirs(cache_dir, exist_ok=True)
+
+    def _key(self, text, model):
+        return hashlib.md5(f"{model}:{text}".encode()).hexdigest()
+
+    def get(self, text, model):
+        path = os.path.join(self.cache_dir, self._key(text, model) + ".json")
+        if os.path.exists(path):
+            with open(path) as f:
+                return json.load(f)
+        return None
+
+    def set(self, text, model, embedding):
+        path = os.path.join(self.cache_dir, self._key(text, model) + ".json")
+        with open(path, "w") as f:
+            json.dump(embedding, f)
+
+# ── Long document handling: chunking strategies ───────────────────────────────
+def chunk_fixed(text, chunk_size=512, overlap=50):
+    """Fixed-size chunking with overlap."""
+    words = text.split()
+    chunks = []
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk = " ".join(words[i:i + chunk_size])
+        chunks.append(chunk)
+    return chunks
+
+def chunk_sentences(text, max_tokens=200):
+    """Sentence-boundary chunking."""
+    import re
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    chunks = []
+    current = []
+    current_len = 0
+    for sent in sentences:
+        sent_len = len(sent.split())
+        if current_len + sent_len > max_tokens and current:
+            chunks.append(" ".join(current))
+            current = [sent]
+            current_len = sent_len
+        else:
+            current.append(sent)
+            current_len += sent_len
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
+```
+
+## PROJECT: Complete Text Classification System
+
+Build a full text classification system from scratch — no sklearn, no transformers. Pure Python + math.
+
+<PythonPlayground code={String.raw`import re
+import math
+from collections import Counter, defaultdict
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 1. PREPROCESSING PIPELINE
+# ════════════════════════════════════════════════════════════════════════════════
+STOP_WORDS = {
+    "a","an","the","is","it","in","on","at","to","for","of","and","or","but",
+    "not","this","that","was","are","with","be","by","from","as","he","she",
+    "they","we","you","i","my","your","its","our","their","have","has","had",
+    "do","does","did","will","would","could","should","may","might","been",
+    "am","so","if","then","than","when","where","which","all","some","very"
+}
+
+def preprocess(text):
+    text = text.lower()
+    text = re.sub(r"http\S+", " ", text)
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    tokens = text.split()
+    tokens = [t for t in tokens if t not in STOP_WORDS and len(t) > 2]
+    return tokens
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 2. TF-IDF VECTORIZER
+# ════════════════════════════════════════════════════════════════════════════════
+class TFIDFVectorizer:
+    def __init__(self, max_features=500):
+        self.max_features = max_features
+        self.vocab = {}
+        self.idf_vals = {}
+
+    def fit(self, tokenized_docs):
+        N = len(tokenized_docs)
+        df = Counter()
+        for doc in tokenized_docs:
+            df.update(set(doc))
+        top_terms = [t for t, _ in df.most_common(self.max_features)]
+        self.vocab = {t: i for i, t in enumerate(top_terms)}
+        for term in self.vocab:
+            self.idf_vals[term] = math.log((N + 1) / (df[term] + 1)) + 1
+        return self
+
+    def vectorize(self, tokens):
+        vec = [0.0] * len(self.vocab)
+        tf = Counter(tokens)
+        total = len(tokens) or 1
+        for term, idx in self.vocab.items():
+            if term in tf:
+                vec[idx] = (tf[term] / total) * self.idf_vals[term]
+        # L2 normalize
+        norm = math.sqrt(sum(x*x for x in vec)) or 1.0
+        return [x / norm for x in vec]
+
+    def transform(self, tokenized_docs):
+        return [self.vectorize(doc) for doc in tokenized_docs]
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 3. NAIVE BAYES CLASSIFIER
+# ════════════════════════════════════════════════════════════════════════════════
+class MultinomialNaiveBayes:
+    def __init__(self, alpha=1.0):
+        self.alpha = alpha
+        self.class_log_prior = {}
+        self.feature_log_prob = {}
+        self.classes = []
+
+    def fit(self, X_tokens, y):
+        N = len(X_tokens)
+        class_counts = Counter(y)
+        self.classes = sorted(class_counts.keys())
+        vocab = set(t for doc in X_tokens for t in doc)
+        V = len(vocab)
+        class_word_counts = defaultdict(Counter)
+        for tokens, label in zip(X_tokens, y):
+            class_word_counts[label].update(tokens)
+        for c in self.classes:
+            self.class_log_prior[c] = math.log(class_counts[c] / N)
+            total = sum(class_word_counts[c].values()) + self.alpha * V
+            self.feature_log_prob[c] = {
+                w: math.log((class_word_counts[c].get(w, 0) + self.alpha) / total)
+                for w in vocab
+            }
+            self.feature_log_prob[c]["__UNK__"] = math.log(self.alpha / total)
+        return self
+
+    def predict(self, X_tokens):
+        return [self._predict_one(tokens) for tokens in X_tokens]
+
+    def _predict_one(self, tokens):
+        scores = {}
+        for c in self.classes:
+            score = self.class_log_prior[c]
+            for t in tokens:
+                score += self.feature_log_prob[c].get(t,
+                         self.feature_log_prob[c]["__UNK__"])
+            scores[c] = score
+        return max(scores, key=scores.get)
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 4. EVALUATION METRICS
+# ════════════════════════════════════════════════════════════════════════════════
+def evaluate(y_true, y_pred):
+    classes = sorted(set(y_true))
+    metrics = {}
+    overall_correct = sum(t == p for t, p in zip(y_true, y_pred))
+    accuracy = overall_correct / len(y_true)
+
+    for c in classes:
+        tp = sum(t == c and p == c for t, p in zip(y_true, y_pred))
+        fp = sum(t != c and p == c for t, p in zip(y_true, y_pred))
+        fn = sum(t == c and p != c for t, p in zip(y_true, y_pred))
+        precision = tp / (tp + fp + 1e-9)
+        recall = tp / (tp + fn + 1e-9)
+        f1 = 2 * precision * recall / (precision + recall + 1e-9)
+        metrics[c] = {"precision": precision, "recall": recall, "f1": f1, "support": tp + fn}
+
+    macro_f1 = sum(m["f1"] for m in metrics.values()) / len(classes)
+    return accuracy, macro_f1, metrics
+
+def confusion_matrix(y_true, y_pred, classes):
+    idx = {c: i for i, c in enumerate(classes)}
+    n = len(classes)
+    cm = [[0]*n for _ in range(n)]
+    for t, p in zip(y_true, y_pred):
+        cm[idx[t]][idx[p]] += 1
+    return cm
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 5. DATASET
+# ════════════════════════════════════════════════════════════════════════════════
+import random
+random.seed(42)
+
+raw_data = {
+    "tech": [
+        "python machine learning deep neural network algorithm model training",
+        "code function class object method inheritance polymorphism interface",
+        "database sql query index table join foreign key primary",
+        "docker kubernetes container orchestration deployment microservice",
+        "api rest endpoint authentication token jwt oauth security",
+        "git branch merge commit pull request code review refactor",
+        "tensorflow pytorch gradient descent backpropagation optimizer loss",
+        "cloud aws lambda serverless function trigger event stream",
+        "compiler runtime garbage collection heap stack memory pointer",
+        "javascript typescript react component state props hook render",
+        "linux bash shell script command line terminal permission",
+        "network protocol tcp ip http websocket socket latency",
+    ],
+    "sports": [
+        "football quarterback touchdown receiver field goal interception",
+        "basketball player dribble shoot three pointer championship score",
+        "soccer goalkeeper penalty kick league tournament stadium corner",
+        "tennis serve backhand forehand match set tournament slam winner",
+        "baseball pitcher batter home run innings strikeout playoff hit",
+        "swimming freestyle backstroke butterfly relay medal record lane",
+        "cycling sprint mountain stage peloton breakaway finish podium",
+        "golf swing iron birdie eagle par handicap course fairway",
+        "boxing punch knockout round champion belt heavyweight title",
+        "rugby try conversion scrum lineout tackle tackle penalty try",
+        "athletics sprint marathon hurdle javelin discus long jump",
+        "rowing stroke coxswain blade catch drive finish recovery",
+    ],
+    "finance": [
+        "stock market investment portfolio dividend earnings revenue profit",
+        "cryptocurrency bitcoin blockchain wallet transaction hash mining",
+        "interest rate inflation federal reserve monetary policy bond",
+        "startup venture capital funding valuation equity dilution series",
+        "hedge fund derivatives options futures contract short selling",
+        "quarterly earnings revenue profit margin shareholder value eps",
+        "mortgage loan refinance equity down payment closing rate term",
+        "insurance premium deductible coverage liability claim policy",
+        "retirement pension fund contribution withdrawal benefit annuity",
+        "tax deduction credit bracket filing return audit exemption",
+        "forex currency exchange rate spread pip leverage broker",
+        "mutual fund etf index passive active expense ratio yield",
+    ],
+    "health": [
+        "medical doctor patient hospital treatment therapy diagnosis symptom",
+        "exercise fitness workout gym cardio strength muscle endurance",
+        "nutrition diet protein carbohydrate fat vitamin mineral supplement",
+        "mental health anxiety depression therapy counseling mindfulness",
+        "surgery procedure recovery anesthesia surgeon operating room",
+        "vaccine immunity antibody virus bacteria infection prevention",
+        "sleep rest recovery fatigue energy circadian rhythm insomnia",
+        "blood pressure cholesterol heart disease risk factor screening",
+        "pharmacy prescription drug dosage side effect interaction",
+        "physical therapy rehabilitation injury recovery movement pain",
+        "meditation breathing relaxation stress cortisol wellness",
+        "dentist tooth cavity filling crown root canal hygiene",
+    ],
+}
+
+# Build dataset with augmentation
+all_texts, all_labels = [], []
+for label, phrases in raw_data.items():
+    for phrase in phrases:
+        all_texts.append(phrase)
+        all_labels.append(label)
+        # Augment: add 3 shuffled versions
+        for _ in range(3):
+            words = phrase.split()
+            random.shuffle(words)
+            all_texts.append(" ".join(words))
+            all_labels.append(label)
+
+# Shuffle
+combined = list(zip(all_texts, all_labels))
+random.shuffle(combined)
+all_texts, all_labels = zip(*combined)
+all_texts, all_labels = list(all_texts), list(all_labels)
+
+# Train/test split (80/20 stratified)
+def train_test_split(texts, labels, test_size=0.2, seed=42):
+    random.seed(seed)
+    classes = list(set(labels))
+    train_t, train_l, test_t, test_l = [], [], [], []
+    for c in classes:
+        idx = [i for i, l in enumerate(labels) if l == c]
+        random.shuffle(idx)
+        split = int(len(idx) * test_size)
+        test_idx = set(idx[:split])
+        for i in idx:
+            if i in test_idx:
+                test_t.append(texts[i]); test_l.append(labels[i])
+            else:
+                train_t.append(texts[i]); train_l.append(labels[i])
+    return train_t, test_t, train_l, test_l
+
+X_train, X_test, y_train, y_test = train_test_split(all_texts, all_labels)
+
+print(f"Dataset: {len(all_texts)} total, {len(X_train)} train, {len(X_test)} test")
+print(f"Classes: {sorted(set(all_labels))}")
+
+# ════════════════════════════════════════════════════════════════════════════════
+# 6. TRAIN AND EVALUATE
+# ════════════════════════════════════════════════════════════════════════════════
+# Preprocess
+X_train_tok = [preprocess(t) for t in X_train]
+X_test_tok  = [preprocess(t) for t in X_test]
+
+# TF-IDF
+vec = TFIDFVectorizer(max_features=400)
+vec.fit(X_train_tok)
+
+# Naive Bayes
+clf = MultinomialNaiveBayes(alpha=0.5)
+clf.fit(X_train_tok, y_train)
+
+# Predict
+y_pred = clf.predict(X_test_tok)
+
+# Evaluate
+accuracy, macro_f1, per_class = evaluate(y_test, y_pred)
+print(f"\n{'='*50}")
+print(f"Accuracy:   {accuracy:.4f}")
+print(f"Macro F1:   {macro_f1:.4f}")
+print(f"\nPer-class metrics:")
+print(f"{'Class':12s} {'Precision':>10} {'Recall':>8} {'F1':>8} {'Support':>8}")
+print("-" * 45)
+for c, m in sorted(per_class.items()):
+    print(f"{c:12s} {m['precision']:>10.4f} {m['recall']:>8.4f} {m['f1']:>8.4f} {m['support']:>8}")
+
+# Confusion matrix
+classes = sorted(set(all_labels))
+cm = confusion_matrix(y_test, y_pred, classes)
+print(f"\nConfusion Matrix:")
+print(f"{'':10s}", end="")
+for c in classes:
+    print(f"{c[:6]:>8}", end="")
+print(" (predicted)")
+for i, c in enumerate(classes):
+    print(f"{c[:10]:10s}", end="")
+    for j in range(len(classes)):
+        print(f"{cm[i][j]:>8}", end="")
+    print()
+
+# Test with new examples
+print(f"\nNew text predictions:")
+new_texts = [
+    "gradient descent optimizer learning rate batch size",
+    "world cup final penalty shoot out stadium crowd",
+    "portfolio diversification risk adjusted return sharpe ratio",
+    "vitamin supplement immune system inflammation recovery",
+]
+new_tokens = [preprocess(t) for t in new_texts]
+preds = clf.predict(new_tokens)
+for text, pred in zip(new_texts, preds):
+    print(f"  [{pred:8s}] {text}")
+`} packages={[]} height={700} title="PROJECT: Complete Text Classification System" />
+
+## Exercises
+
+**Exercise 1 (Pyodide):** Extend the `NaiveBayesClassifier` above to output a probability distribution across classes using the softmax of log-probabilities, not just the argmax. Test it on the 4-class dataset.
+
+**Exercise 2 (Pyodide):** Implement a bigram language model. Given a training corpus, compute P(word | previous_word) for all word pairs. Add Laplace smoothing. Use it to compute the perplexity of a test sentence.
+
+**Exercise 3 (Pyodide):** Build a simple keyword extraction system using TF-IDF scores. For a given document, extract the top-N most distinctive words/phrases by comparing the document's TF-IDF against a background corpus.
+
+**Exercise 4 (Pyodide):** Implement the Jaccard similarity between two documents (using token sets). Compare it to cosine similarity on TF-IDF vectors. When do they agree/disagree?
+
+**Exercise 5 (Full library):** Load `bert-base-uncased` with HuggingFace `transformers`. Tokenize 100 sentences from a dataset of your choice. Visualize attention weights from the last layer using matplotlib. Which token pairs have the highest attention?
+
+**Exercise 6 (Full library):** Fine-tune `distilbert-base-uncased` on the AG News dataset (4 topics: World, Sports, Business, Sci/Tech). Target >90% accuracy. Report per-class F1, confusion matrix, and 5 examples the model gets wrong.
+
+**Exercise 7 (Full library):** Use the `sentence-transformers` library with model `all-MiniLM-L6-v2` to build a semantic search engine over a Wikipedia paragraph dump. Given a query, find the top-5 most semantically similar paragraphs.
+
+**Exercise 8 (Full library):** Use Groq's API to build a zero-shot text classifier that categorizes news headlines into 6 categories without any training data. Compare its accuracy to your Naive Bayes classifier from Exercise 1 on the same test set.
 
 ## Key Takeaways
 
-- TF-IDF + logistic regression remains competitive for short-text classification; always establish this baseline before reaching for transformers
-- BERT-style models produce **contextual** embeddings — the same word gets different vectors in different sentences; this resolves polysemy
-- BPE/WordPiece tokenization means out-of-vocabulary words are impossible — every character sequence can be tokenized
-- Fine-tuning requires only 2-5 epochs; too many epochs causes catastrophic forgetting of pre-trained knowledge
-- `[CLS]` token's final-layer embedding is the standard representation for classification tasks
-- Cosine similarity between normalized embeddings is equivalent to dot product — normalize once, then use matrix multiplication for bulk similarity search
-- Use `sentence-transformers` for semantic similarity; avoid fine-tuning BERT from scratch unless you have &gt;10k labeled examples
-- Prompt engineering (system prompts, few-shot examples, chain-of-thought) can substitute for fine-tuning when labeled data is scarce
+- Build a preprocessing pipeline once and reuse it — normalization, tokenization, stop-word removal, and stemming are always the first steps regardless of the final model
+- TF-IDF + Naive Bayes achieves 85–95% accuracy on well-separated topics; always benchmark it before using transformers
+- Attention computes `softmax(QKᵀ/√d_k)V` — this is the core operation of every modern NLP model; understanding its shape transformations is non-negotiable
+- BERT is bidirectional (reads full context), GPT is autoregressive (reads left-to-right only) — choose BERT for classification, GPT for generation
+- Subword tokenization (BPE/WordPiece) makes OOV words impossible — every byte sequence can be encoded
+- Fine-tuning requires only 2–3 epochs on domain data; more epochs causes catastrophic forgetting
+- LoRA fine-tunes 0.1–1% of parameters with ~90% of full fine-tuning quality — use it for models > 1B parameters
+- Cosine similarity on L2-normalized embeddings reduces to a dot product — precompute normalization once for fast batch search

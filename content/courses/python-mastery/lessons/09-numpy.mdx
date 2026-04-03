@@ -1,510 +1,971 @@
 ---
-title: "NumPy — Arrays, Broadcasting & Linear Algebra"
-description: "NumPy from first principles: why it's fast, how vectorization eliminates loops, and the broadcasting rules that make array operations work. Build a matrix operations benchmark and a neural network forward pass from scratch."
-duration: 28
+title: "NumPy — Arrays, Broadcasting, Indexing & Linear Algebra"
+description: "Master NumPy from the ground up — ndarray internals, every creation function, every indexing pattern, universal functions, broadcasting rules with diagrams, linear algebra, and vectorization for performance. Build gradient descent from scratch."
+duration: 38
 order: 9
 ---
 
-## Why NumPy Exists: The Python Performance Problem
+## Why NumPy Exists — The Performance Problem
 
-Python lists are flexible — they can hold any object, any size, any type. But that flexibility has a cost. A Python list is an array of *pointers*, each pointing to a separate heap-allocated Python object. When you sum a list of integers, Python must:
+Python lists store pointers to arbitrary Python objects. Every arithmetic operation involves Python object overhead, type checking, and memory indirection. For numerical computing, this is devastating.
 
-1. Follow a pointer to each integer object
-2. Unbox the C integer from the Python wrapper
-3. Add it
-4. Box the result into a new Python wrapper
-5. Manage garbage collection
+NumPy's `ndarray` stores values in a **contiguous block of typed memory** — exactly like a C array. Operations are dispatched to compiled C/Fortran routines that process entire arrays with no Python overhead per element.
 
-NumPy sidesteps all of this. A NumPy array stores values as a **contiguous block of raw C memory** — 64-bit floats packed one after another, no pointers, no Python object overhead. Operations on this memory:
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+import time
 
-- Are implemented in C (and Fortran for linear algebra)
-- Use **SIMD** (Single Instruction, Multiple Data) CPU instructions to process multiple elements simultaneously
-- Avoid the Python GIL for computation (only the coordination layer is Python)
+# Benchmark: Python loop vs NumPy vectorized operation
+n = 1_000_000
 
-The result: NumPy operations are typically 50–500x faster than equivalent Python loops.
+# Python list approach
+py_list = list(range(n))
+t0 = time.perf_counter()
+py_result = [x * 2 + 1 for x in py_list]
+t1 = time.perf_counter()
 
-<PythonPlayground code={String.raw`import numpy as np
+# NumPy approach
+np_array = np.arange(n)
+t2 = time.perf_counter()
+np_result = np_array * 2 + 1
+t3 = time.perf_counter()
 
-# A NumPy array vs a Python list
-py_list = list(range(1_000_000))
-np_array = np.arange(1_000_000)
+print(f"Python loop: {(t1-t0)*1000:.1f} ms")
+print(f"NumPy ufunc: {(t3-t2)*1000:.1f} ms")
+print(f"Speedup:     {(t1-t0)/(t3-t2):.0f}x")
+print(f"Results match: {np_result[100] == py_result[100]}")
+`} title="NumPy vs Python loop: the performance case" height={320} />
 
-print("Python list:")
-print(f"  type: {type(py_list)}")
-print(f"  element type: {type(py_list[0])}")
+---
 
-print()
-print("NumPy array:")
-print(f"  type: {type(np_array)}")
-print(f"  dtype: {np_array.dtype}")
-print(f"  shape: {np_array.shape}")
-print(f"  ndim: {np_array.ndim}")
-print(f"  size: {np_array.size:,}")
-print(f"  itemsize: {np_array.itemsize} bytes per element")
-print(f"  total memory: {np_array.nbytes / 1024:.1f} KB")
-`} packages={["numpy"]} />
+## The ndarray — Internals
 
-## Creating Arrays
+An `ndarray` has four key attributes that define its structure:
 
-<PythonPlayground code={String.raw`import numpy as np
+- **`dtype`** — the type of each element (int32, float64, bool, etc.)
+- **`shape`** — a tuple of dimension sizes, e.g. `(3, 4)` for a 3×4 matrix
+- **`strides`** — bytes to step in each dimension; enables reshaping without copying
+- **`data`** — pointer to the raw memory buffer
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+
+a = np.array([[1, 2, 3],
+              [4, 5, 6]], dtype=np.float64)
+
+print("dtype:   ", a.dtype)     # float64
+print("shape:   ", a.shape)     # (2, 3)
+print("ndim:    ", a.ndim)      # 2
+print("size:    ", a.size)      # 6  (total elements)
+print("itemsize:", a.itemsize)  # 8  (bytes per float64)
+print("nbytes:  ", a.nbytes)    # 48 (total bytes = 6 * 8)
+print("strides: ", a.strides)   # (24, 8) — step 24 bytes per row, 8 per column
+
+# Strides explained:
+# a[0,0] is at offset 0
+# a[0,1] is at offset 8  (1 column step = 1 * itemsize = 8 bytes)
+# a[1,0] is at offset 24 (1 row step = 3 columns * 8 bytes = 24 bytes)
+# Changing strides = changing the VIEW of the same data (no copy)
+
+# C-order (row-major, default) vs Fortran-order (column-major)
+c_order = np.array([[1,2,3],[4,5,6]], order="C")
+f_order = np.array([[1,2,3],[4,5,6]], order="F")
+print("\nC-order strides:", c_order.strides)    # rows contiguous in memory
+print("F-order strides:", f_order.strides)    # columns contiguous
+`} title="ndarray internals: dtype, shape, strides" height={380} />
+
+---
+
+## Creating Arrays — Every Method
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
 
 # From Python sequences
 a1 = np.array([1, 2, 3, 4, 5])
-a2 = np.array([[1, 2, 3], [4, 5, 6]])          # 2D
-a3 = np.array([[[1,2],[3,4]], [[5,6],[7,8]]])   # 3D
+a2 = np.array([[1, 2, 3], [4, 5, 6]])   # 2D from nested list
+a3 = np.array([1.0, 2, 3])              # dtype inferred as float64
 
-print("1D:", a1, "shape:", a1.shape)
-print("2D:\n", a2, "\nshape:", a2.shape)
-print("3D shape:", a3.shape, "ndim:", a3.ndim)
-print()
+print("1D:", a1)
+print("2D shape:", a2.shape)
 
-# Factory functions
-print("zeros (3x4):\n", np.zeros((3, 4)))
-print()
-print("ones (2x3) float32:\n", np.ones((2, 3), dtype=np.float32))
-print()
-print("identity 4x4:\n", np.eye(4))
-print()
+# Fixed-value arrays
+zeros  = np.zeros((3, 4))         # all zeros, float64
+ones   = np.ones((2, 3))          # all ones
+full   = np.full((2, 4), 7.5)     # filled with value
+empty  = np.empty((3, 3))         # uninitialised (fast, but values are garbage!)
+eye    = np.eye(4)                 # identity matrix
+diag   = np.diag([1, 2, 3, 4])    # diagonal matrix
 
-# Range and linspace
-print("arange(0, 1, 0.2):  ", np.arange(0, 1, 0.2))
-print("linspace(0, 1, 6):  ", np.linspace(0, 1, 6))
-print("logspace(0, 3, 4):  ", np.logspace(0, 3, 4))  # 10^0 to 10^3
-print()
+print("\nzeros (3x4):\n", zeros)
+print("full (2x4, 7.5):\n", full)
+print("identity (4x4):\n", eye)
 
-# Random arrays
-rng = np.random.default_rng(seed=42)  # modern API — reproducible
-print("random uniform (2x3):\n", rng.random((2, 3)).round(4))
-print("random normal (2x3):\n",  rng.standard_normal((2, 3)).round(4))
-print("random integers 0-9 (2x4):\n", rng.integers(0, 10, (2, 4)))
-`} packages={["numpy"]} />
+# Range-like arrays
+arange    = np.arange(0, 10, 2)           # [0, 2, 4, 6, 8] — like range()
+linspace  = np.linspace(0, 1, 6)          # 6 evenly spaced points in [0,1]
+logspace  = np.logspace(0, 3, 4)          # [1, 10, 100, 1000] — log scale
 
-## Indexing, Slicing, and Fancy Indexing
+print("\narange(0,10,2):   ", arange)
+print("linspace(0,1,6):  ", linspace.round(2))
+print("logspace(0,3,4):  ", logspace)
 
-<PythonPlayground code={String.raw`import numpy as np
+# Copy an array with same shape/dtype
+like_zeros = np.zeros_like(a2)    # shape (2,3), all zeros
+like_ones  = np.ones_like(a2)
+print("\nzeros_like a2:\n", like_zeros)
+`} title="Array creation: array(), zeros, ones, arange, linspace" height={460} />
 
-rng = np.random.default_rng(7)
-arr = rng.integers(10, 100, (4, 5))
-print("Original array:\n", arr)
-print()
+---
 
-# Basic slicing — like Python, but multi-dimensional
-print("Row 0:         ", arr[0])
-print("Col 2:         ", arr[:, 2])
-print("Rows 1-2:      \n", arr[1:3])
-print("Top-left 2x2:  \n", arr[:2, :2])
-print("Every other row:\n", arr[::2])
-print()
+## Data Types — Complete Reference
 
-# Fancy indexing — index with arrays of integers
-rows = np.array([0, 2, 3])
-print("Rows 0, 2, 3:\n", arr[rows])
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
 
-# Select specific elements by (row, col) pairs
-row_idx = np.array([0, 1, 2])
-col_idx = np.array([0, 2, 4])
-print("Diagonal-ish elements:", arr[row_idx, col_idx])
-print()
+# NumPy provides many numeric dtypes for precision vs memory trade-offs
+dtypes = {
+    "bool":       np.bool_,
+    "int8":       np.int8,     # -128 to 127
+    "int16":      np.int16,
+    "int32":      np.int32,
+    "int64":      np.int64,
+    "uint8":      np.uint8,    # 0 to 255 — perfect for images!
+    "float16":    np.float16,  # half precision — ML training
+    "float32":    np.float32,  # single precision — GPU default
+    "float64":    np.float64,  # double precision — NumPy default
+    "complex64":  np.complex64,
+    "complex128": np.complex128,
+}
 
-# Boolean indexing — the most useful form
-print("Elements > 50:")
-mask = arr > 50
-print("Mask:\n", mask)
-print("Selected:", arr[mask])
-print()
+for name, dt in dtypes.items():
+    info = np.finfo(dt) if "float" in name else (np.iinfo(dt) if "int" in name or name == "uint8" else None)
+    if info:
+        print(f"{name:<12} itemsize={np.dtype(dt).itemsize}B", end="  ")
+        if hasattr(info, "min"):
+            print(f"range=[{info.min}, {info.max}]")
+        else:
+            print()
+    else:
+        print(f"{name:<12} itemsize={np.dtype(dt).itemsize}B")
 
-# Modify using boolean mask
-arr_copy = arr.copy()
-arr_copy[arr_copy > 70] = 0
-print("Zeroed out > 70:\n", arr_copy)
-`} packages={["numpy"]} />
+# Type casting with astype()
+a = np.array([1.7, 2.9, 3.1])
+print("\nOriginal (float64):", a, a.dtype)
+print("As int32:          ", a.astype(np.int32))    # truncates, does NOT round!
+print("As bool:           ", a.astype(bool))
 
-## Universal Functions and Axis Operations
+# Memory savings: uint8 image vs float64
+image_float = np.random.rand(1920, 1080, 3)         # 3-channel image, float64
+image_uint8 = (image_float * 255).astype(np.uint8)  # convert to 0-255
 
-<PythonPlayground code={String.raw`import numpy as np
+print(f"\nfloat64 image: {image_float.nbytes / 1e6:.1f} MB")
+print(f"uint8   image: {image_uint8.nbytes / 1e6:.1f} MB")
+print(f"Memory saving: {image_float.nbytes / image_uint8.nbytes:.0f}x")
+`} title="NumPy dtypes: sizes, ranges, casting" height={480} />
 
-# ufuncs operate element-wise, extremely fast
-x = np.array([1.0, 4.0, 9.0, 16.0, 25.0])
-print("sqrt:  ", np.sqrt(x))
-print("log:   ", np.log(x).round(4))
-print("exp:   ", np.exp(np.array([0, 1, 2])).round(4))
-print()
+---
 
-# Reduction ufuncs + the axis parameter
-matrix = np.array([
-    [1, 2, 3],
-    [4, 5, 6],
-    [7, 8, 9],
-])
-print("Matrix:\n", matrix)
-print()
+## Indexing and Slicing — Every Pattern
 
-# axis=None (default): reduce everything → scalar
-print(f"sum(all):         {np.sum(matrix)}")
-print(f"mean(all):        {np.mean(matrix):.2f}")
-print()
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
 
-# axis=0: reduce along rows → result shape is (3,) = one value per column
-print(f"sum(axis=0):      {np.sum(matrix, axis=0)}   ← sum each column")
-print(f"max(axis=0):      {np.max(matrix, axis=0)}   ← max of each column")
-print()
+a = np.array([10, 20, 30, 40, 50, 60, 70, 80])
 
-# axis=1: reduce along columns → result shape is (3,) = one value per row
-print(f"sum(axis=1):      {np.sum(matrix, axis=1)}   ← sum each row")
-print(f"mean(axis=1):     {np.mean(matrix, axis=1)}  ← mean of each row")
-print()
+# Basic indexing — returns a SCALAR, no copy
+print(a[0])    # 10
+print(a[-1])   # 80
 
-# keepdims — preserve the reduced axis as size-1
-print(f"sum(axis=1, keepdims=True):\n{np.sum(matrix, axis=1, keepdims=True)}")
-print(f"shape: {np.sum(matrix, axis=1, keepdims=True).shape}")
-`} packages={["numpy"]} />
+# Slicing — returns a VIEW (not a copy!)
+s = a[2:6]
+print("Slice:", s)       # [30 40 50 60]
+s[0] = 999               # modifies the ORIGINAL because s is a view
+print("Original after modifying slice:", a)
 
-## Broadcasting: The Most Powerful (and Confusing) Feature
+# Force a copy with .copy()
+s2 = a[2:6].copy()
+s2[0] = 0
+print("Original after modifying copy:", a)   # unchanged
 
-Broadcasting is the mechanism that lets NumPy operate on arrays of *different shapes*. Understanding it is essential for writing concise, loop-free NumPy code.
+# 2D indexing
+m = np.array([[1, 2, 3],
+              [4, 5, 6],
+              [7, 8, 9]])
 
-**The Broadcasting Rules:**
-1. If the arrays have different number of dimensions, pad the smaller shape on the **left** with 1s
-2. Dimensions of size 1 are **stretched** to match the other array's size in that dimension
-3. If shapes still don't match after stretching, raise an error
+print("\nm[1, 2]:    ", m[1, 2])     # single element: 6
+print("m[0]:       ", m[0])         # entire row 0: [1 2 3]
+print("m[:, 1]:    ", m[:, 1])      # entire column 1: [2 5 8]
+print("m[0:2, 1:]: ", m[0:2, 1:])  # sub-matrix rows 0-1, cols 1-2
+print("m[::2]:     ", m[::2])       # every other row
+`} title="Basic and 2D indexing: views vs copies" height={400} />
 
-<PythonPlayground code={String.raw`import numpy as np
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+
+m = np.array([[1, 2, 3],
+              [4, 5, 6],
+              [7, 8, 9]])
+
+# --- BOOLEAN INDEXING ---
+# Returns a NEW array (copy) — all elements where condition is True
+flat = m.ravel()
+print("Elements > 5:", flat[flat > 5])
+
+# Compound conditions — use & (and), | (or), ~ (not), NOT Python and/or!
+data = np.array([1, 15, 3, 22, 8, 17, 5, 30])
+mask = (data > 5) & (data < 20)
+print("5 < x < 20:", data[mask])
+
+# Modify elements matching a condition in-place
+arr = np.array([1, -2, 3, -4, 5, -6])
+arr[arr < 0] = 0    # zero out all negatives
+print("After zeroing negatives:", arr)
+
+# np.where — conditional selection (like a vectorized if-else)
+a = np.array([1, -2, 3, -4, 5])
+b = np.where(a > 0, a, 0)         # keep positive, zero out negative
+print("np.where positive only:", b)
+
+result = np.where(a > 0, a * 2, a * (-1))  # double positives, flip negatives
+print("np.where double/flip:  ", result)
+
+# --- FANCY INDEXING ---
+# Index with an array of indices — always returns a COPY
+arr = np.array([10, 20, 30, 40, 50])
+idx = np.array([0, 2, 4])
+print("\nFancy index [0,2,4]:", arr[idx])
+
+# 2D fancy indexing — pick specific (row, col) pairs
+rows = np.array([0, 1, 2])
+cols = np.array([2, 0, 1])
+print("m at (0,2),(1,0),(2,1):", m[rows, cols])   # [3, 4, 8]
+
+# np.take — alternative to fancy indexing
+print("np.take:", np.take(arr, [1, 3]))            # [20, 40]
+`} title="Boolean indexing, np.where, fancy indexing" height={480} />
+
+---
+
+## Universal Functions (ufuncs) and Aggregations
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+
+a = np.array([1.0, 4.0, 9.0, 16.0, 25.0])
+b = np.array([2.0, 3.0, 5.0, 1.0,  4.0])
+
+# Element-wise math — all operate without Python loops
+print("sqrt:    ", np.sqrt(a))
+print("exp:     ", np.exp([0, 1, 2]).round(3))
+print("log:     ", np.log(a).round(3))
+print("sin:     ", np.sin(np.linspace(0, np.pi, 5)).round(3))
+print("abs:     ", np.abs([-3, -1, 0, 2, -5]))
+print("maximum: ", np.maximum(a, b))          # element-wise max of two arrays
+
+# Aggregation functions
+data = np.array([[1, 2, 3],
+                 [4, 5, 6],
+                 [7, 8, 9]], dtype=float)
+
+print("\n--- Aggregations ---")
+print("sum:      ", data.sum())            # scalar: sum all elements
+print("mean:     ", data.mean())
+print("std:      ", data.std().round(3))
+print("min, max: ", data.min(), data.max())
+print("argmin:   ", data.argmin())         # flat index of minimum
+print("argmax:   ", data.argmax())
+
+# axis parameter — 0 = along rows (down), 1 = along columns (across)
+print("\n--- axis=0 (column-wise) ---")
+print("sum:   ", data.sum(axis=0))    # [12. 15. 18.]
+print("mean:  ", data.mean(axis=0))  # [4.  5.  6.]
+print("max:   ", data.max(axis=0))   # [7.  8.  9.]
+
+print("\n--- axis=1 (row-wise) ---")
+print("sum:   ", data.sum(axis=1))    # [6. 15. 24.]
+print("mean:  ", data.mean(axis=1))  # [2.  5.  8.]
+
+# keepdims=True — preserve dimensions for broadcasting later
+col_means = data.mean(axis=0, keepdims=True)
+print("\ncol_means shape:", col_means.shape)     # (1, 3) not (3,)
+centered = data - col_means                     # subtract column mean from each row
+print("Centered:\n", centered)
+`} title="Universal functions and axis-based aggregations" height={500} />
+
+---
+
+## Broadcasting — The Most Powerful Feature
+
+Broadcasting lets NumPy work with arrays of different shapes **without copying data**. The rules:
+
+1. If arrays have different `ndim`, prepend 1s to the shorter shape
+2. Dimensions of size 1 are stretched to match the other
+3. If shapes don't match after stretching → error
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
 
 # Rule 1: scalar broadcasts to any shape
 a = np.array([1, 2, 3, 4])
-print(f"array + 10: {a + 10}")  # 10 treated as shape (1,) → (4,)
-print()
+print("array + 10:  ", a + 10)    # 10 treated as [10, 10, 10, 10]
+print("array * 2.5: ", a * 2.5)
 
-# Rule 2: (3,1) broadcasts with (3,) → (1,3)
-# Let's visualize this with column/row vectors
-col = np.array([[1], [2], [3]])   # shape (3, 1)
-row = np.array([10, 20, 30, 40]) # shape (4,) → treated as (1, 4)
+# Rule 2: shape (3,) broadcasts with shape (4, 3)
+# (4,3) + (3,) -> (4,3) + (1,3) -> (4,3) — row added to each column
+matrix = np.ones((4, 3))
+row    = np.array([1, 2, 3])      # shape (3,)
+print("\nmatrix + row:\n", matrix + row)
 
-print("Column vector (3,1):")
-print(col)
-print("\nRow vector (1,4) [shown as 1D]:")
-print(row)
-print("\nOuter sum via broadcasting (3,4):")
-result = col + row
-print(result)
-print(f"Shape: {result.shape}")
-print()
+# Normalise each row: subtract row mean, divide by row std
+data = np.array([[10.0, 20.0, 30.0],
+                 [1.0,  100.0, 10.0],
+                 [5.0,  5.0,   5.0]])
 
-# Practical: center each column of a matrix (subtract column mean)
-rng = np.random.default_rng(42)
-data = rng.integers(10, 100, (4, 3)).astype(float)
-print("Original data:\n", data)
+means = data.mean(axis=1, keepdims=True)   # shape (3, 1)
+stds  = data.std(axis=1,  keepdims=True)   # shape (3, 1)
+stds[stds == 0] = 1                        # avoid divide-by-zero
 
-col_means = data.mean(axis=0)  # shape (3,) — one mean per column
-print(f"\nColumn means: {col_means}")
+normalised = (data - means) / stds         # broadcasting: (3,3) - (3,1) / (3,1)
+print("\nNormalised (row z-score):\n", normalised.round(2))
 
-centered = data - col_means    # (4,3) - (3,) → broadcasts to (4,3)
-print("\nCentered (each column has mean ~0):\n", centered)
-print(f"New column means: {centered.mean(axis=0).round(10)}")
-print()
+# Outer product via broadcasting — (N,1) * (1,M) -> (N,M)
+x = np.array([1, 2, 3, 4])[:, np.newaxis]  # shape (4, 1)
+y = np.array([10, 20, 30])                  # shape (3,)
+outer = x * y                               # (4,1) * (3,) -> (4,3)
+print("\nOuter product (4x3):\n", outer)
 
-# Practical: pairwise distances (broadcasting over 2 axes)
-points = np.array([[0, 0], [3, 4], [1, 1]])  # shape (3, 2)
-# diff[i,j,:] = points[i] - points[j]
-diff = points[:, np.newaxis, :] - points[np.newaxis, :, :]  # (3,3,2)
-distances = np.sqrt((diff**2).sum(axis=-1))  # (3,3)
-print("Pairwise distances:")
-print(distances.round(3))
-`} packages={["numpy"]} />
+# Pairwise squared distances: (N, 1, D) - (1, M, D) -> (N, M, D)
+# Often used for k-nearest neighbors
+points_a = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+points_b = np.array([[1.0, 1.0], [2.0, 2.0]])
 
-## Reshaping and Stacking
+diff = points_a[:, np.newaxis, :] - points_b[np.newaxis, :, :]  # (3,2,2)
+dist_sq = (diff**2).sum(axis=2)                                   # (3,2)
+print("\nPairwise squared distances:\n", dist_sq.round(2))
+`} title="Broadcasting: rules, normalisation, pairwise distances" height={520} />
 
-<PythonPlayground code={String.raw`import numpy as np
+---
+
+## Shape Manipulation
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
 
 a = np.arange(24)
 print("Original (24,):", a)
-print()
 
-# reshape — total elements must stay the same
-b = a.reshape(4, 6)
-print("reshape(4,6):\n", b)
+# reshape — returns VIEW if possible, copy otherwise
+# Total elements must stay the same
+m = a.reshape(4, 6)
+print("\nreshape(4,6):\n", m)
 
-c = a.reshape(2, 3, 4)
-print(f"\nreshape(2,3,4): shape={c.shape}")
+# Use -1 to infer one dimension
+n = a.reshape(3, -1)    # 3 rows, NumPy calculates 24/3=8 columns
+print("\nreshape(3,-1):\n", n)
 
-# -1 lets NumPy infer one dimension
-d = a.reshape(6, -1)   # 24/6 = 4
-print(f"\nreshape(6,-1): shape={d.shape}")
-print(d)
-print()
+cube = a.reshape(2, 3, 4)
+print("\nreshape(2,3,4) shape:", cube.shape)
 
-# ravel vs flatten
-# ravel: returns a VIEW when possible (no copy)
-# flatten: always returns a COPY
-e = b.ravel()
-print(f"ravel shape: {e.shape}, shares memory: {np.shares_memory(b, e)}")
-f = b.flatten()
-print(f"flatten shape: {f.shape}, shares memory: {np.shares_memory(b, f)}")
-print()
+# ravel / flatten — reduce to 1D
+# ravel returns a VIEW when possible; flatten always returns a copy
+print("\na.ravel()[:6]:  ", m.ravel()[:6])
+print("m.flatten()[:6]:", m.flatten()[:6])
 
-# newaxis — add a dimension of size 1
-v = np.array([1, 2, 3])
-col_v = v[:, np.newaxis]   # (3,) → (3,1)
-row_v = v[np.newaxis, :]   # (3,) → (1,3)
-print(f"v shape: {v.shape}")
-print(f"col_v shape: {col_v.shape}")
-print(f"row_v shape: {row_v.shape}")
-print()
+# Transpose
+t = m.T   # view with rows and cols swapped
+print("\nm.T shape:", t.shape)   # (6, 4)
 
-# Stacking
-a1 = np.array([1, 2, 3])
-a2 = np.array([4, 5, 6])
-print("vstack:\n", np.vstack([a1, a2]))
-print("hstack:", np.hstack([a1, a2]))
-print("stack(axis=0):\n", np.stack([a1, a2], axis=0))
-print("stack(axis=1):\n", np.stack([a1, a2], axis=1))
+# Stacking — combine arrays
+row1 = np.array([1, 2, 3])
+row2 = np.array([4, 5, 6])
+row3 = np.array([7, 8, 9])
 
-m1 = np.ones((2, 3))
-m2 = np.zeros((2, 3))
-print("\nconcatenate axis=0 (stack rows):\n", np.concatenate([m1, m2], axis=0))
-print("concatenate axis=1 (stack cols):\n", np.concatenate([m1, m2], axis=1))
-`} packages={["numpy"]} />
+vstacked = np.vstack([row1, row2, row3])   # stack as rows: (3,3)
+hstacked = np.hstack([row1, row2, row3])   # concatenate: (9,)
+print("\nvstack:\n", vstacked)
+print("hstack: ", hstacked)
+
+# np.concatenate — general purpose
+a1 = np.array([[1, 2], [3, 4]])
+a2 = np.array([[5, 6], [7, 8]])
+print("concat axis=0:\n", np.concatenate([a1, a2], axis=0))  # (4,2)
+print("concat axis=1:\n", np.concatenate([a1, a2], axis=1))  # (2,4)
+
+# np.split
+arr = np.arange(12)
+parts = np.split(arr, 3)    # split into 3 equal parts
+print("\nsplit into 3:", [p.tolist() for p in parts])
+`} title="Reshape, transpose, stack, split" height={480} />
+
+---
+
+## Random Number Generation
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+
+# Modern API: use np.random.default_rng(seed) for reproducibility
+rng = np.random.default_rng(seed=42)
+
+# Uniform distribution [0, 1)
+u = rng.random((3, 4))
+print("Uniform [0,1):\n", u.round(3))
+
+# Integers
+ints = rng.integers(low=1, high=101, size=(2, 5))
+print("\nRandom integers 1-100:\n", ints)
+
+# Normal distribution (Gaussian): mean=0, std=1
+normal = rng.standard_normal((3, 4))
+print("\nStandard normal:\n", normal.round(2))
+
+# Custom normal: mean=100, std=15 (IQ distribution)
+iq = rng.normal(loc=100, scale=15, size=10).round(1)
+print("\nIQ sample:", iq)
+
+# Choice — sample from an array
+cards = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+hand = rng.choice(cards, size=5, replace=False)   # no replacement = shuffle
+print("Hand:", hand)
+
+# Shuffle — in-place
+deck = np.arange(1, 53)
+rng.shuffle(deck)
+print("Shuffled deck first 10:", deck[:10])
+
+# Bernoulli trials
+coin_flips = rng.choice(["H", "T"], size=20)
+from collections import Counter
+print("Coin flips:", Counter(coin_flips))
+`} title="Random number generation with default_rng" height={440} />
+
+---
 
 ## Linear Algebra
 
-<PythonPlayground code={String.raw`import numpy as np
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
 
-# Matrix multiplication
-A = np.array([[1, 2], [3, 4]])
-B = np.array([[5, 6], [7, 8]])
+# Matrix multiplication — use @ operator (Python 3.5+)
+A = np.array([[1, 2], [3, 4], [5, 6]])   # (3,2)
+B = np.array([[7, 8, 9], [10, 11, 12]])  # (2,3)
 
-print("A:\n", A)
-print("B:\n", B)
-print()
-print("A @ B (matrix multiply):\n", A @ B)
-print("np.dot(A, B):\n", np.dot(A, B))  # same thing
-print()
+C = A @ B   # (3,2) @ (2,3) = (3,3)
+print("A @ B:\n", C)
 
-# Transpose
-print("A.T:\n", A.T)
-print()
+# np.dot — equivalent for 2D, but @ is clearer
+print("np.dot:\n", np.dot(A, B))
 
-# Determinant and inverse
-det_A = np.linalg.det(A)
-inv_A = np.linalg.inv(A)
-print(f"det(A) = {det_A:.1f}")
-print(f"inv(A):\n{inv_A}")
-print(f"A @ inv(A) (should be identity):\n{(A @ inv_A).round(10)}")
-print()
+# Element-wise vs matrix multiply
+M = np.array([[1, 2], [3, 4]])
+print("\nElement-wise M * M:\n", M * M)    # squares each element
+print("Matrix M @ M:\n", M @ M)            # matrix multiply
 
-# Solving linear systems: Ax = b
-# System: 2x + y = 5, x + 3y = 10
-A_sys = np.array([[2, 1], [1, 3]], dtype=float)
-b_sys = np.array([5, 10], dtype=float)
+# Determinant, inverse, solve
+sq = np.array([[2.0, 1.0], [5.0, 3.0]])
+print("\nDeterminant:", np.linalg.det(sq).round(4))
+print("Inverse:\n",    np.linalg.inv(sq))
+print("Check inv*sq:\n", (np.linalg.inv(sq) @ sq).round(10))
+
+# Solve linear system Ax = b
+A_sys = np.array([[2.0, 1.0, -1.0],
+                  [-3.0, -1.0, 2.0],
+                  [-2.0, 1.0, 2.0]])
+b_sys = np.array([8.0, -11.0, -3.0])
 x = np.linalg.solve(A_sys, b_sys)
-print(f"Solving 2x+y=5, x+3y=10:")
-print(f"x = {x}")
-print(f"Verify A@x = {A_sys @ x}")
-print()
+print("\nSolution x:", x)
+print("Verification Ax:", (A_sys @ x).round(10))
 
 # Eigenvalues and eigenvectors
-eigenvalues, eigenvectors = np.linalg.eig(A)
-print(f"Eigenvalues of A: {eigenvalues}")
-print(f"Eigenvectors of A:\n{eigenvectors}")
-print()
+vals, vecs = np.linalg.eig(M)
+print("\nEigenvalues:", vals.round(4))
+print("Eigenvectors:\n", vecs.round(4))
 
-# SVD — the workhorse of ML
-rng = np.random.default_rng(42)
-M = rng.standard_normal((4, 3))
-U, S, Vt = np.linalg.svd(M)
-print(f"SVD of (4,3) matrix:")
-print(f"  U shape: {U.shape}")
-print(f"  S (singular values): {S.round(4)}")
-print(f"  Vt shape: {Vt.shape}")
-`} packages={["numpy"]} />
+# SVD — Singular Value Decomposition
+U, S, Vt = np.linalg.svd(A)
+print("\nSVD of A:")
+print("  S (singular values):", S.round(3))
+print("  U shape:", U.shape, "  Vt shape:", Vt.shape)
 
-## Performance: Vectorized vs Loop Benchmark
+# Norm
+v = np.array([3.0, 4.0])
+print("\nL2 norm of [3,4]:", np.linalg.norm(v))   # 5.0
+`} title="Linear algebra: matrix multiply, solve, eigen, SVD" height={520} />
 
-<PythonPlayground code={String.raw`import numpy as np
+---
+
+## Performance: Vectorization Patterns
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
 import time
 
-N = 1_000_000
+rng = np.random.default_rng(42)
+n = 500_000
+data = rng.standard_normal(n)
 
-# Create data
-data = np.random.default_rng(42).standard_normal(N)
+# Pattern 1: Avoid Python loops for element-wise operations
+t0 = time.perf_counter()
+manual = [abs(x) for x in data]   # Python loop
+t1 = time.perf_counter()
+vectorized = np.abs(data)          # NumPy ufunc
+t2 = time.perf_counter()
+print(f"abs() — loop: {(t1-t0)*1000:.1f}ms, numpy: {(t2-t1)*1000:.2f}ms, speedup: {(t1-t0)/(t2-t1):.0f}x")
 
-# --- Python loop ---
-start = time.perf_counter()
-total_py = 0.0
-for x in data.tolist():  # convert to Python list for fair comparison
-    total_py += x * x
-loop_time = time.perf_counter() - start
+# Pattern 2: Boolean mask vs filtering loop
+t0 = time.perf_counter()
+filtered_loop = [x for x in data if x > 0]
+t1 = time.perf_counter()
+filtered_np = data[data > 0]
+t2 = time.perf_counter()
+print(f"filter>0 — loop: {(t1-t0)*1000:.1f}ms, numpy: {(t2-t1)*1000:.2f}ms")
 
-# --- NumPy vectorized ---
-start = time.perf_counter()
-total_np = np.sum(data ** 2)
-numpy_time = time.perf_counter() - start
+# Pattern 3: Cumulative sum
+t0 = time.perf_counter()
+cumsum_loop = []
+total = 0
+for x in data:
+    total += x
+    cumsum_loop.append(total)
+t1 = time.perf_counter()
+cumsum_np = np.cumsum(data)
+t2 = time.perf_counter()
+print(f"cumsum — loop: {(t1-t0)*1000:.1f}ms, numpy: {(t2-t1)*1000:.2f}ms")
 
-print(f"Task: sum of squares for {N:,} floats")
-print()
-print(f"Python loop: {loop_time*1000:.1f}ms  → result: {total_py:.4f}")
-print(f"NumPy:       {numpy_time*1000:.1f}ms  → result: {total_np:.4f}")
-print()
-speedup = loop_time / numpy_time if numpy_time > 0 else float('inf')
-print(f"NumPy is ~{speedup:.0f}x faster")
-print()
+# Pattern 4: In-place operations save memory allocation
+a = rng.random(n)
+b = rng.random(n)
 
-# More operations comparison
-ops = {
-    "sum": (lambda lst: sum(lst), lambda arr: np.sum(arr)),
-    "max": (lambda lst: max(lst), lambda arr: np.max(arr)),
-    "mean": (lambda lst: sum(lst)/len(lst), lambda arr: np.mean(arr)),
-}
+t0 = time.perf_counter()
+c = a + b         # allocates a new array
+t1 = time.perf_counter()
+np.add(a, b, out=a)  # in-place, no allocation
+t2 = time.perf_counter()
+print(f"add — new array: {(t1-t0)*1000:.2f}ms, in-place: {(t2-t1)*1000:.2f}ms")
+`} title="Vectorization speedups: loops vs NumPy" height={440} />
 
-py_list = data.tolist()
-for op_name, (py_fn, np_fn) in ops.items():
-    t0 = time.perf_counter(); py_fn(py_list); py_t = time.perf_counter() - t0
-    t0 = time.perf_counter(); np_fn(data);    np_t = time.perf_counter() - t0
-    ratio = py_t / np_t if np_t > 0 else float('inf')
-    print(f"{op_name:>6}: Python={py_t*1000:.1f}ms  NumPy={np_t*1000:.1f}ms  "
-          f"({ratio:.0f}x speedup)")
-`} packages={["numpy"]} />
+---
 
-## PROJECT: Neural Network Forward Pass from Scratch
+## Project: Gradient Descent from Scratch
 
-A neural network is just a sequence of matrix multiplications and non-linear functions. NumPy is all you need to implement one:
+Implement linear regression and gradient descent using only NumPy — no scikit-learn.
 
-<PythonPlayground code={String.raw`import numpy as np
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
 
-# --- Activation functions ---
-
-def relu(x):
-    """ReLU: max(0, x) — sets negatives to 0, preserves positives."""
-    return np.maximum(0, x)
-
-def sigmoid(x):
-    """Sigmoid: maps any real number to (0, 1)."""
-    return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
-
-def softmax(x):
-    """
-    Softmax: converts logits to probabilities that sum to 1.
-    Subtract max for numerical stability (avoids overflow in exp).
-    """
-    e_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
-    return e_x / e_x.sum(axis=-1, keepdims=True)
-
-def cross_entropy_loss(logits, targets):
-    """
-    Cross-entropy loss: measures prediction quality.
-    logits: (batch, classes), targets: (batch,) integer class indices
-    """
-    probs = softmax(logits)
-    batch_size = targets.shape[0]
-    # Select the probability the model assigned to the correct class
-    correct_probs = probs[np.arange(batch_size), targets]
-    # Negative log likelihood
-    return -np.mean(np.log(correct_probs + 1e-8))
-
-# --- Network definition ---
-
-class NeuralNetwork:
-    """
-    3-layer feedforward network:
-    Input (input_dim) → Hidden1 (256, ReLU) → Hidden2 (128, ReLU) → Output (n_classes, Softmax)
-    """
-    def __init__(self, input_dim, hidden1, hidden2, n_classes, rng=None):
-        if rng is None:
-            rng = np.random.default_rng(42)
-
-        # Xavier/Glorot initialization: variance = 2 / (fan_in + fan_out)
-        def xavier(fan_in, fan_out):
-            std = np.sqrt(2.0 / (fan_in + fan_out))
-            return rng.standard_normal((fan_in, fan_out)) * std
-
-        self.W1 = xavier(input_dim, hidden1)
-        self.b1 = np.zeros(hidden1)
-
-        self.W2 = xavier(hidden1, hidden2)
-        self.b2 = np.zeros(hidden2)
-
-        self.W3 = xavier(hidden2, n_classes)
-        self.b3 = np.zeros(n_classes)
-
-        print(f"Network architecture:")
-        print(f"  Input:   ({input_dim},)")
-        print(f"  Hidden1: ({hidden1},) [ReLU]  params: {self.W1.size + self.b1.size:,}")
-        print(f"  Hidden2: ({hidden2},) [ReLU]  params: {self.W2.size + self.b2.size:,}")
-        print(f"  Output:  ({n_classes},) [Softmax]  params: {self.W3.size + self.b3.size:,}")
-        total = sum(p.size for p in [self.W1,self.b1,self.W2,self.b2,self.W3,self.b3])
-        print(f"  Total parameters: {total:,}")
-
-    def forward(self, x):
-        """
-        Forward pass.
-        x: (batch_size, input_dim)
-        returns: (batch_size, n_classes) logits
-        """
-        # Layer 1: linear transform + ReLU
-        z1 = x @ self.W1 + self.b1          # (batch, hidden1)
-        a1 = relu(z1)
-
-        # Layer 2: linear transform + ReLU
-        z2 = a1 @ self.W2 + self.b2         # (batch, hidden2)
-        a2 = relu(z2)
-
-        # Output layer: linear transform (softmax applied in loss)
-        z3 = a2 @ self.W3 + self.b3         # (batch, n_classes)
-
-        # Store activations for inspection
-        self.activations = {"z1": z1, "a1": a1, "z2": z2, "a2": a2, "z3": z3}
-        return z3
-
-    def predict(self, x):
-        """Returns predicted class indices."""
-        logits = self.forward(x)
-        return np.argmax(softmax(logits), axis=1)
-
-# --- Run inference ---
-print("=" * 50)
 rng = np.random.default_rng(42)
 
-# Simulate image classification: 64-dimensional input, 10 classes
-net = NeuralNetwork(input_dim=64, hidden1=256, hidden2=128, n_classes=10)
-print()
+# Generate synthetic data: y = 3x + 2 + noise
+n_samples = 200
+X_raw = rng.uniform(-5, 5, n_samples)
+y = 3.0 * X_raw + 2.0 + rng.normal(0, 1, n_samples)
 
-# Batch of 32 samples
-batch_size = 32
-x_batch = rng.standard_normal((batch_size, 64))
-true_labels = rng.integers(0, 10, batch_size)
+# Feature matrix: column of ones (bias) + X column
+X = np.column_stack([np.ones(n_samples), X_raw])   # shape (200, 2)
+
+def mse_loss(X, y, w):
+    """Mean Squared Error: (1/n) * ||Xw - y||^2"""
+    predictions = X @ w
+    errors = predictions - y
+    return (errors ** 2).mean()
+
+def gradient(X, y, w):
+    """Gradient of MSE: (2/n) * X^T (Xw - y)"""
+    predictions = X @ w
+    errors = predictions - y
+    return (2 / len(y)) * (X.T @ errors)
+
+def gradient_descent(X, y, lr=0.01, n_epochs=200, verbose=True):
+    w = rng.standard_normal(X.shape[1])   # random init
+    history = []
+    for epoch in range(n_epochs):
+        loss = mse_loss(X, y, w)
+        history.append(loss)
+        grad = gradient(X, y, w)
+        w = w - lr * grad                  # w <- w - lr * grad
+        if verbose and epoch % 50 == 0:
+            print(f"  Epoch {epoch:>3}: loss={loss:.4f}  w={w}")
+    return w, history
+
+print("Training linear regression with gradient descent:")
+w_learned, history = gradient_descent(X, y, lr=0.05, n_epochs=200)
+
+print(f"\nLearned weights: bias={w_learned[0]:.3f}, slope={w_learned[1]:.3f}")
+print(f"True weights:    bias=2.000, slope=3.000")
+print(f"Final MSE loss:  {history[-1]:.4f}")
+
+# Analytical solution for comparison (normal equation)
+w_analytic = np.linalg.solve(X.T @ X, X.T @ y)
+print(f"Analytic weights: bias={w_analytic[0]:.3f}, slope={w_analytic[1]:.3f}")
+
+# Learning curve
+print("\nLoss progression:")
+for i in [0, 25, 50, 100, 150, 199]:
+    bar = "#" * int(history[i] / history[0] * 30)
+    print(f"  Epoch {i:>3}: {history[i]:.3f} {bar}")
+`} title="PROJECT: Linear Regression via Gradient Descent (pure NumPy)" height={540} />
+
+---
+
+## Exercises
+
+### Exercise 1 — Array Creation and Inspection
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+
+# TASK: Create each array described below WITHOUT using loops.
+# Only use NumPy creation functions.
+
+# 1. A 5x5 identity matrix
+eye = None   # YOUR CODE
+
+# 2. An array of 20 evenly spaced values between 0 and 2*pi (inclusive)
+circle = None   # YOUR CODE
+
+# 3. A 4x4 matrix where entry [i,j] = i*j (multiplication table)
+mult_table = None   # YOUR CODE — hint: np.arange + reshape + broadcasting
+
+# 4. A checkerboard pattern of 0s and 1s (8x8)
+# Hint: index with [::2, ::2] and [1::2, 1::2]
+checkerboard = np.zeros((8, 8), dtype=int)
+# YOUR CODE
+
+print("Identity:\n", eye)
+print("\nCircle (first 5):", circle[:5].round(3) if circle is not None else None)
+print("\nMult table:\n", mult_table)
+print("\nCheckerboard:\n", checkerboard)
+`} title="Exercise 1: Array creation challenges" height={380} />
+
+### Exercise 2 — Indexing and Masking
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+rng = np.random.default_rng(0)
+data = rng.integers(-50, 51, size=(6, 6))
+print("Data:\n", data)
+
+# TASK 1: Extract all values greater than 20, as a 1D array
+high_values = None   # YOUR CODE
+
+# TASK 2: Replace all negative values with 0 (in-place)
+# YOUR CODE
+
+# TASK 3: Extract the top-left 3x3 submatrix
+top_left = None   # YOUR CODE
+
+# TASK 4: Get every other row, columns 1 through 4 (exclusive)
+strided = None   # YOUR CODE
+
+# TASK 5: Using np.where, create an array that is:
+#   - 1 where the original data (before zeroing) was > 0
+#   - -1 where it was < 0
+#   - 0 where it was exactly 0
+# Re-generate original data to check
+data2 = rng.integers(-50, 51, size=(4, 4))
+signs = None   # YOUR CODE
+
+print("\nHigh values (>20):", high_values)
+print("After zeroing negatives:\n", data)
+print("Top-left 3x3:\n", top_left)
+print("Strided:\n", strided)
+print("Signs:\n", signs)
+`} title="Exercise 2: Indexing, masking, np.where" height={420} />
+
+### Exercise 3 — Broadcasting and Vectorization
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+
+# TASK 1: Normalize each COLUMN of the matrix to [0, 1] range
+# (x - col_min) / (col_max - col_min)
+# Do NOT use any loops. Use broadcasting with axis and keepdims.
+np.random.seed(42)
+X = np.random.randint(1, 100, size=(5, 4)).astype(float)
+print("Original:\n", X)
+
+X_normalised = None   # YOUR CODE
+
+print("Normalised:\n", X_normalised.round(3) if X_normalised is not None else None)
+
+# TASK 2: Compute pairwise Euclidean distances between rows of X_normalised
+# Result should be a 5x5 matrix D where D[i,j] = ||row_i - row_j||_2
+# Do NOT use loops. Use broadcasting: (N,1,F) - (1,N,F) -> (N,N,F)
+if X_normalised is not None:
+    D = None   # YOUR CODE
+    print("\nDistance matrix:\n", D.round(3) if D is not None else None)
+
+# TASK 3: Outer product of two vectors using broadcasting (no np.outer)
+a = np.array([1, 2, 3, 4])
+b = np.array([10, 20, 30])
+outer = None   # YOUR CODE — reshape a and b, then multiply
+
+print("\nOuter product:\n", outer)
+`} title="Exercise 3: Broadcasting challenges" height={420} />
+
+### Exercise 4 — Statistics from Scratch
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+
+# TASK: Implement these statistical functions using ONLY NumPy array operations.
+# Check your results against NumPy's built-ins.
+
+def my_mean(a, axis=None):
+    """Arithmetic mean."""
+    # YOUR CODE HERE
+    pass
+
+def my_variance(a, ddof=0, axis=None):
+    """Variance. ddof=0 for population, ddof=1 for sample."""
+    # YOUR CODE HERE
+    pass
+
+def my_std(a, ddof=0, axis=None):
+    return np.sqrt(my_variance(a, ddof=ddof, axis=axis))
+
+def my_median(a):
+    """Median of a 1D array."""
+    # Hint: sort, then pick middle element(s)
+    # YOUR CODE HERE
+    pass
+
+def my_percentile(a, q):
+    """q-th percentile (0-100) of a 1D array."""
+    # Hint: sort, then use linear interpolation
+    # YOUR CODE HERE
+    pass
+
+# Test data
+rng = np.random.default_rng(7)
+data = rng.normal(50, 10, 1000)
+
+# Compare implementations
+if my_mean(data) is not None:
+    print(f"mean:       mine={my_mean(data):.4f}  numpy={np.mean(data):.4f}")
+    print(f"var(ddof=1): mine={my_variance(data,1):.4f}  numpy={np.var(data,ddof=1):.4f}")
+    print(f"std(ddof=1): mine={my_std(data,1):.4f}  numpy={np.std(data,ddof=1):.4f}")
+    print(f"median:     mine={my_median(data):.4f}  numpy={np.median(data):.4f}")
+    print(f"p25:        mine={my_percentile(data,25):.4f}  numpy={np.percentile(data,25):.4f}")
+    print(f"p75:        mine={my_percentile(data,75):.4f}  numpy={np.percentile(data,75):.4f}")
+`} title="Exercise 4: Statistical functions from scratch" height={480} />
+
+### Exercise 5 — Image Processing with Arrays
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+
+# Images are just NumPy arrays: (height, width, channels) for color,
+# or (height, width) for grayscale. Let's do real image operations.
+
+rng = np.random.default_rng(99)
+image = rng.integers(0, 256, size=(8, 8), dtype=np.uint8)
+print("Original image (8x8 grayscale pixel values):")
+print(image)
+
+# TASK 1: Normalize to [0.0, 1.0] float range
+normalised = None   # YOUR CODE
+
+# TASK 2: Threshold — create a binary (black/white) image
+# Pixels > 128 become 1, others become 0
+binary = None   # YOUR CODE
+
+# TASK 3: Horizontal flip (mirror left-right)
+flipped_h = None   # YOUR CODE — hint: slicing with step -1
+
+# TASK 4: Vertical flip (mirror top-bottom)
+flipped_v = None   # YOUR CODE
+
+# TASK 5: 2D convolution with a blur kernel (no scipy needed)
+# Apply a 3x3 averaging kernel to compute local averages
+# Only process the inner 6x6 (skip border for simplicity)
+def apply_3x3_avg_filter(img):
+    """Average filter: replace each pixel with mean of its 3x3 neighbourhood."""
+    h, w = img.shape
+    result = np.zeros((h-2, w-2), dtype=float)
+    for i in range(h-2):
+        for j in range(w-2):
+            result[i, j] = img[i:i+3, j:j+3].mean()
+    return result.astype(np.uint8)
+
+blurred = apply_3x3_avg_filter(image)
+print("\nBlurred (6x6 center, 3x3 avg filter):")
+print(blurred)
+
+print("\nNormalised (first row):", normalised[0].round(2) if normalised is not None else None)
+print("Binary:", binary)
+print("Flipped horizontal:\n", flipped_h)
+`} title="Exercise 5: Image operations with NumPy arrays" height={520} />
+
+### Exercise 6 — PCA from Scratch
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+
+def pca(X, n_components):
+    """
+    Principal Component Analysis using SVD.
+    Steps:
+    1. Centre the data (subtract mean of each feature)
+    2. Compute SVD: X_centred = U * S * Vt
+    3. Principal components are rows of Vt
+    4. Project: X_pca = X_centred @ Vt[:n_components].T
+    5. Explained variance ratio = S^2 / sum(S^2)
+    """
+    # Step 1: centre
+    mean = X.mean(axis=0)
+    X_c = X - mean
+
+    # Step 2: SVD
+    U, S, Vt = np.linalg.svd(X_c, full_matrices=False)
+
+    # Step 3 & 4: project onto top n_components
+    components = Vt[:n_components]         # (n_components, n_features)
+    X_pca = X_c @ components.T            # (n_samples, n_components)
+
+    # Step 5: explained variance
+    var_ratio = (S**2) / (S**2).sum()
+
+    return X_pca, components, var_ratio[:n_components]
+
+# Generate data with known structure: 3D data lying mostly in a 2D plane
+rng = np.random.default_rng(42)
+t = rng.uniform(0, 2*np.pi, 300)
+X = np.column_stack([
+    np.cos(t) + rng.normal(0, 0.1, 300),
+    np.sin(t) + rng.normal(0, 0.1, 300),
+    0.1 * rng.standard_normal(300),         # tiny 3rd dimension = noise
+])
+print("Original data shape:", X.shape)
+print("Variance per axis:", X.var(axis=0).round(4))
+
+# Apply PCA
+X_2d, components, var_ratio = pca(X, n_components=2)
+print("\nReduced shape:", X_2d.shape)
+print("Explained variance per component:", var_ratio.round(4))
+print(f"Total variance explained: {var_ratio.sum():.2%}")
+print("First principal component:", components[0].round(4))
+`} title="Exercise 6: PCA from scratch (SVD)" height={480} />
+
+### Exercise 7 — Moving Averages and Time Series
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+
+# TASK: Implement moving averages WITHOUT loops using NumPy.
+
+def simple_moving_average(data, window):
+    """
+    SMA: average of last 'window' values.
+    The first (window-1) values will be NaN.
+    Hint: np.convolve with a uniform kernel, then handle edges.
+    """
+    kernel = np.ones(window) / window
+    full   = np.convolve(data, kernel, mode="full")
+    # 'full' output is longer than input — align and pad
+    result = np.full(len(data), np.nan)
+    result[window-1:] = full[:len(data)-window+1]
+    return result
+
+def exponential_moving_average(data, alpha):
+    """
+    EMA: ema[t] = alpha * data[t] + (1 - alpha) * ema[t-1]
+    alpha in (0,1): higher = more weight to recent values.
+    This one needs a loop (inherently sequential), but the loop is Pythonic.
+    """
+    ema = np.empty(len(data))
+    ema[0] = data[0]
+    for i in range(1, len(data)):
+        ema[i] = alpha * data[i] + (1 - alpha) * ema[i-1]
+    return ema
+
+# Generate price-like time series
+rng = np.random.default_rng(1)
+returns = rng.normal(0.001, 0.02, 100)
+price = 100 * np.cumprod(1 + returns)
+
+sma5  = simple_moving_average(price, window=5)
+sma20 = simple_moving_average(price, window=20)
+ema   = exponential_moving_average(price, alpha=0.1)
+
+# Print a mini chart (last 15 values)
+print("Day  Price     SMA5     SMA20    EMA")
+for i in range(85, 100):
+    s5  = f"{sma5[i]:8.2f}"  if not np.isnan(sma5[i])  else "     NaN"
+    s20 = f"{sma20[i]:8.2f}" if not np.isnan(sma20[i]) else "     NaN"
+    print(f"{i:>3}  {price[i]:8.2f}  {s5}  {s20}  {ema[i]:8.2f}")
+
+# Bollinger Bands: SMA20 +/- 2*std20
+print("\nBollinger Bands (last 5 days):")
+for i in range(95, 100):
+    if i >= 19:
+        window_data = price[i-19:i+1]
+        mid  = window_data.mean()
+        std  = window_data.std()
+        print(f"  Day {i}: lower={mid-2*std:.2f}  mid={mid:.2f}  upper={mid+2*std:.2f}  price={price[i]:.2f}")
+`} title="Exercise 7: Moving averages and Bollinger Bands" height={520} />
+
+### Exercise 8 — Neural Network Forward Pass
+
+<PythonPlayground packages={["numpy"]} code={String.raw`import numpy as np
+
+# Build a complete multi-layer neural network forward pass using only NumPy.
+# Layers: Dense (linear) + activation functions
+# Architecture: 4 -> 8 -> 8 -> 3 (multiclass classifier)
+
+def relu(x):
+    return np.maximum(0, x)
+
+def softmax(x):
+    # Numerically stable: subtract max before exp
+    e = np.exp(x - x.max(axis=1, keepdims=True))
+    return e / e.sum(axis=1, keepdims=True)
+
+def cross_entropy_loss(y_pred, y_true):
+    """y_pred: (batch, classes) softmax probabilities. y_true: int labels."""
+    batch = len(y_true)
+    log_probs = np.log(y_pred[np.arange(batch), y_true] + 1e-9)
+    return -log_probs.mean()
+
+def accuracy(y_pred, y_true):
+    return (y_pred.argmax(axis=1) == y_true).mean()
+
+class NeuralNet:
+    def __init__(self, layer_sizes, seed=0):
+        rng = np.random.default_rng(seed)
+        self.weights = []
+        self.biases  = []
+        for i in range(len(layer_sizes) - 1):
+            fan_in = layer_sizes[i]
+            # He initialisation for ReLU layers
+            std = np.sqrt(2.0 / fan_in)
+            W = rng.normal(0, std, (fan_in, layer_sizes[i+1]))
+            b = np.zeros(layer_sizes[i+1])
+            self.weights.append(W)
+            self.biases.append(b)
+
+    def forward(self, X):
+        out = X
+        for i, (W, b) in enumerate(zip(self.weights, self.biases)):
+            out = out @ W + b
+            if i < len(self.weights) - 1:
+                out = relu(out)         # ReLU on hidden layers
+            else:
+                out = softmax(out)      # softmax on output layer
+        return out
+
+# Create model and synthetic data
+model = NeuralNet([4, 8, 8, 3], seed=42)
+
+rng = np.random.default_rng(42)
+X_batch  = rng.standard_normal((32, 4))   # 32 samples, 4 features
+y_batch  = rng.integers(0, 3, 32)         # labels: 0, 1, or 2
 
 # Forward pass
-logits = net.forward(x_batch)
-probs = softmax(logits)
-predictions = net.predict(x_batch)
-loss = cross_entropy_loss(logits, true_labels)
+probs = model.forward(X_batch)
 
-print(f"\nBatch inference ({batch_size} samples):")
-print(f"  Input shape:      {x_batch.shape}")
-print(f"  Logits shape:     {logits.shape}")
-print(f"  Probs shape:      {probs.shape}")
-print(f"  Probs sum check:  {probs.sum(axis=1).mean():.6f} (should be 1.0)")
-print(f"  Cross-entropy loss: {loss:.4f}")
-
-# Accuracy (random weights = ~10% for 10 classes)
-accuracy = np.mean(predictions == true_labels)
-print(f"  Accuracy: {accuracy:.0%} (random weights ≈ 10%)")
-
-print(f"\nActivation statistics:")
-for name, act in net.activations.items():
-    sparsity = np.mean(act == 0) if name.startswith("a") else 0.0
-    print(f"  {name}: shape={act.shape}, "
-          f"mean={act.mean():.3f}, std={act.std():.3f}"
-          + (f", ReLU sparsity={sparsity:.1%}" if sparsity > 0 else ""))
-`} packages={["numpy"]} />
+print("Input shape:  ", X_batch.shape)
+print("Output shape: ", probs.shape)
+print("Output sums to 1:", probs.sum(axis=1)[:5].round(4))  # verify softmax
+print(f"Loss:     {cross_entropy_loss(probs, y_batch):.4f}")
+print(f"Accuracy: {accuracy(probs, y_batch):.2%}  (random ~33% expected)")
+print("\nPredicted class probabilities (first 5 samples):")
+for i in range(5):
+    pred = probs[i]
+    label = y_batch[i]
+    print(f"  Sample {i}: pred_class={pred.argmax()} (true={label})  probs={pred.round(3)}")
+`} title="Exercise 8: Neural Network Forward Pass (pure NumPy)" height={560} />
 
 ## Key Takeaways
 
-- **NumPy's speed comes from memory layout**: contiguous C arrays plus SIMD CPU instructions, not Python-level tricks — this is why copying to a list and back is expensive
-- **Slicing returns views, not copies**: `arr[0:5]` shares memory with `arr` — modifying it modifies the original; use `.copy()` when you need independence
-- **Boolean indexing is the most practical pattern**: `arr[arr > 0]` is cleaner and faster than any loop filter, and `arr[mask] = value` is the idiomatic way to conditionally set values
-- **Broadcasting follows three strict rules**: pad left with 1s, stretch size-1 dimensions, error on incompatible sizes — once internalized, it replaces most explicit loops
-- **`axis=0` reduces rows, `axis=1` reduces columns**: a (3, 4) array summed on `axis=0` gives shape (4,); summed on `axis=1` gives shape (3,) — think "collapse along this axis"
-- **`@` is matrix multiply, `*` is element-wise**: confusing them is the most common NumPy bug — always check shapes before and after
-- **`np.linalg.solve(A, b)` beats `inv(A) @ b`**: computing the inverse is slower and numerically less stable than solving directly; use `solve` for systems of equations
-- **Vectorization is a mindset shift**: instead of asking "how do I loop over elements?", ask "what array operation produces the result?" — the answer is almost always faster
+- NumPy stores data in **contiguous typed memory** — this is why it beats Python loops by 10-100x for numerical work
+- **`strides`** let NumPy reshape, transpose, and slice arrays without copying data — always check if you have a view or a copy
+- **Avoid Python loops over array elements** — every operation has a vectorized NumPy equivalent
+- **`axis=0`** reduces along rows (gives column results); **`axis=1`** reduces along columns (gives row results); always add `keepdims=True` when the result must broadcast back
+- **Broadcasting** follows three rules: prepend 1s, stretch size-1 dims, error on incompatible dims — internalize these to write clean vectorized code
+- **Boolean indexing** returns a copy; **slicing** returns a view — modifying a slice modifies the original
+- **`np.where(cond, a, b)`** is the vectorized ternary operator — use it instead of masked assignment when creating a new array
+- **`@`** is matrix multiply; **`*`** is element-wise — never confuse them
+- `np.linalg.solve(A, b)` is faster and more numerically stable than `inv(A) @ b`
+- Use **`dtype=np.float32`** instead of float64 for ML training — half the memory, same accuracy for most tasks

@@ -1,103 +1,260 @@
 ---
-title: "Pandas — DataFrames, Cleaning & Analysis"
-description: "Pandas for production data work: loading, cleaning, transforming, grouping, and analyzing real datasets. Build a complete sales data analyzer that handles messy real-world data."
-duration: 30
+title: "Pandas — DataFrames, Data Cleaning, Analysis & Transformation"
+description: "Master pandas completely — from Series and DataFrame internals to production-grade data cleaning, reshaping, groupby, merging, time series, and performance optimization."
+duration: 38
 order: 10
 ---
 
-## The Core Abstractions: Series and DataFrame
+## Part 1: Series — The 1D Building Block
 
-Pandas has two fundamental data structures:
+A `Series` is a one-dimensional labeled array. Think of it as a column in a spreadsheet where every row has a name (the *index*). Unlike a plain Python list, operations on two Series automatically **align on the index** — a property that makes pandas both powerful and occasionally surprising.
 
-- **Series**: a 1D labeled array — like a column in a spreadsheet with an index
-- **DataFrame**: a 2D table of Series — like a spreadsheet, where every column is a Series sharing the same index
+Every Series has:
+- **values** — a NumPy array holding the actual data
+- **index** — a label array (default: 0, 1, 2, … RangeIndex)
+- **dtype** — the data type (int64, float64, object, datetime64, category, …)
+- **name** — optional string used as the column header when the Series is inside a DataFrame
 
-The *index* is the key that makes pandas different from NumPy. Every row has a label (the index), and operations align on these labels automatically. When you add two DataFrames, pandas lines them up by index — not by position.
-
-<PythonPlayground code={String.raw`import pandas as pd
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
 import numpy as np
 
-# Series
-s = pd.Series([10, 20, 30, 40], index=["a", "b", "c", "d"], name="scores")
-print("Series:")
-print(s)
-print(f"\nIndex: {s.index.tolist()}")
-print(f"Values: {s.values}")
-print(f"dtype: {s.dtype}")
+# --- Creating Series ---
+
+# From a Python list
+s_list = pd.Series([10, 20, 30, 40, 50])
+print("From list:")
+print(s_list)
+print(f"  dtype: {s_list.dtype}, shape: {s_list.shape}, name: {s_list.name}")
 print()
 
-# Series arithmetic aligns on index
-s2 = pd.Series([1, 2, 3], index=["b", "c", "e"])
-print("s + s2 (aligns on index, NaN where no match):")
-print(s + s2)
+# With a custom index
+s_custom = pd.Series(
+    [88, 92, 75, 61, 95],
+    index=["Alice", "Bob", "Carol", "Dave", "Eve"],
+    name="exam_score"
+)
+print("Custom string index:")
+print(s_custom)
 print()
 
-# DataFrame from a dict
+# From a dict — keys become the index
+scores = {"Alice": 88, "Bob": 92, "Carol": 75}
+s_dict = pd.Series(scores, name="scores")
+print("From dict:")
+print(s_dict)
+print()
+
+# From a scalar — broadcasts to fill the entire index
+s_scalar = pd.Series(0.0, index=["a", "b", "c", "d"], name="zeros")
+print("From scalar:", s_scalar.tolist())
+print()
+
+# From a NumPy array
+arr = np.linspace(0, 1, 5)
+s_np = pd.Series(arr, name="linspace")
+print("From ndarray:")
+print(s_np)
+`} height={480} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+# --- Vectorized operations and index alignment ---
+
+s1 = pd.Series([1, 2, 3, 4], index=["a", "b", "c", "d"])
+s2 = pd.Series([10, 20, 30], index=["b", "c", "e"])
+
+# Arithmetic aligns on the index: only "b" and "c" have both values.
+# "a", "d" (only in s1) and "e" (only in s2) produce NaN.
+print("s1:")
+print(s1)
+print("\ns2:")
+print(s2)
+print("\ns1 + s2  (NaN where index label is missing in either series):")
+print(s1 + s2)
+print()
+
+# Boolean indexing
+s = pd.Series([5, 12, 3, 18, 7, 22], name="values")
+print("Values > 10:")
+print(s[s > 10])
+print()
+
+# Fancy (integer array) indexing
+print("s[[0, 2, 4]]:", s[[0, 2, 4]].tolist())
+print()
+
+# String methods via .str accessor
+cities = pd.Series(["  New York", "London  ", "  PARIS  ", "tokyo"])
+clean = cities.str.strip().str.title()
+print("String cleaning with .str:")
+print(clean.tolist())
+print()
+
+# Extract numbers from strings
+prices = pd.Series(["USD 12.50", "USD 9.99", "USD 150.00"])
+amounts = prices.str.extract(r"USD ([0-9.]+)")[0].astype(float)
+print("Extracted prices:", amounts.tolist())
+`} height={460} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+s = pd.Series([10, 20, 30, 40, 50, 60],
+              index=["a", "b", "c", "d", "e", "f"],
+              name="demo")
+
+# ------- .loc: LABEL-based -------
+# Single label
+print(".loc['c']          ->", s.loc["c"])
+
+# Slice (inclusive on both ends when label-based)
+print(".loc['b':'e']      ->", s.loc["b":"e"].tolist())
+
+# List of labels
+print(".loc[['a','c','f']]->", s.loc[["a", "c", "f"]].tolist())
+
+# Boolean array
+mask = s > 25
+print(".loc[s > 25]       ->", s.loc[mask].tolist())
+print()
+
+# ------- .iloc: POSITION-based (exclusive end, like Python slices) -------
+print(".iloc[2]           ->", s.iloc[2])
+print(".iloc[1:4]         ->", s.iloc[1:4].tolist())   # positions 1, 2, 3
+print(".iloc[[0, 2, 5]]   ->", s.iloc[[0, 2, 5]].tolist())
+print()
+
+# ------- Callable indexing -------
+# Pass a function: receives the Series, returns a label/slice/bool array
+result = s.loc[lambda x: x > x.mean()]
+print(".loc[lambda x: x > mean()] ->", result.tolist())
+`} height={420} />
+
+---
+
+## Part 2: DataFrame Fundamentals
+
+A DataFrame is a 2D table: a dict of Series that all share the same index. Every column is a Series; every row is a cross-section with a label from the index.
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+# --- Creating DataFrames ---
+
+# From a dict of lists (most common)
 df = pd.DataFrame({
-    "name":   ["Alice", "Bob", "Carol", "Dave"],
-    "age":    [30, 25, 35, 28],
-    "salary": [75000.0, 60000.0, 90000.0, 55000.0],
-    "dept":   ["eng", "sales", "eng", "marketing"],
+    "name":   ["Alice", "Bob", "Carol", "Dave", "Eve"],
+    "age":    [30, 25, 35, 28, 22],
+    "salary": [75_000.0, 60_000.0, 90_000.0, 55_000.0, 48_000.0],
+    "dept":   ["eng", "sales", "eng", "marketing", "sales"],
 })
-print("DataFrame:")
+print("From dict of lists:")
 print(df)
-print(f"\nShape: {df.shape}  (rows, cols)")
+print()
+
+# From list of dicts (rows-first layout)
+rows = [
+    {"product": "Widget", "price": 9.99,  "stock": 100},
+    {"product": "Gadget", "price": 24.99, "stock": 45},
+    {"product": "Doohickey", "price": 4.99, "stock": 200},
+]
+df_rows = pd.DataFrame(rows)
+print("From list of dicts:")
+print(df_rows)
+print()
+
+# Attributes
+print(f"shape: {df.shape}   <- (rows, cols)")
+print(f"columns: {df.columns.tolist()}")
+print(f"index: {df.index.tolist()}")
 print(f"dtypes:\n{df.dtypes}")
-`} packages={["numpy", "pandas"]} />
+`} height={500} />
 
-## Indexing: .loc, .iloc, Boolean, .at, .iat
-
-<PythonPlayground code={String.raw`import pandas as pd
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
 
 df = pd.DataFrame({
     "name":   ["Alice", "Bob", "Carol", "Dave", "Eve"],
     "age":    [30, 25, 35, 28, 22],
-    "salary": [75000.0, 60000.0, 90000.0, 55000.0, 48000.0],
+    "salary": [75_000.0, 60_000.0, 90_000.0, 55_000.0, 48_000.0],
     "dept":   ["eng", "sales", "eng", "marketing", "sales"],
-}, index=["a", "b", "c", "d", "e"])  # string index
+}, index=["r0", "r1", "r2", "r3", "r4"])
 
-print("DataFrame with string index:")
+# --- Column access ---
+print("Single column (returns Series):")
+print(df["name"])
+print()
+print("Multiple columns (returns DataFrame):")
+print(df[["name", "salary"]])
+print()
+
+# --- Row access ---
+print(".loc['r1']  (label):")
+print(df.loc["r1"])
+print()
+print(".iloc[2]  (position):")
+print(df.iloc[2])
+print()
+
+# --- Boolean row filter ---
+senior = df[df["salary"] > 60_000]
+print("salary > 60,000:")
+print(senior)
+print()
+
+# --- .at and .iat for single-cell scalar access (fastest) ---
+print(f".at['r2','salary']  = {df.at['r2','salary']}")
+print(f".iat[0, 1]          = {df.iat[0, 1]}")
+`} height={480} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+
+df = pd.DataFrame({
+    "name":   ["Alice", "Bob", "Carol", "Dave"],
+    "age":    [30, 25, 35, 28],
+    "salary": [75_000.0, 60_000.0, 90_000.0, 55_000.0],
+    "dept":   ["eng", "sales", "eng", "marketing"],
+})
+
+# --- Adding columns ---
+df["bonus"] = df["salary"] * 0.10         # direct assignment
+df = df.assign(                           # .assign() returns a new DataFrame
+    total_comp=df["salary"] + df["salary"] * 0.10,
+    seniority=df["age"].apply(lambda a: "senior" if a >= 30 else "junior")
+)
+print("After adding columns:")
 print(df)
 print()
 
-# .loc: label-based
-print(".loc['b'] (row 'b' as Series):")
-print(df.loc["b"])
-print()
-print(".loc['a':'c', 'name':'age'] (label slice, inclusive):")
-print(df.loc["a":"c", "name":"age"])
+# --- Removing columns ---
+df2 = df.drop(columns=["bonus"])
+print("After drop(columns=['bonus']):")
+print(df2.columns.tolist())
 print()
 
-# .iloc: position-based (0-indexed, exclusive end like Python slices)
-print(".iloc[1:3, 0:2] (rows 1-2, cols 0-1):")
-print(df.iloc[1:3, 0:2])
+# --- Removing rows ---
+df3 = df.drop(index=[1, 3])
+print("After drop(index=[1,3]):")
+print(df3[["name", "dept"]])
 print()
 
-# Boolean indexing
-high_earners = df[df["salary"] > 60000]
-print("High earners (salary > 60000):")
-print(high_earners)
-print()
+# --- head / tail / sample ---
+print("head(2):")
+print(df.head(2)[["name", "salary"]])
+print("\nsample(2, random_state=0):")
+print(df.sample(2, random_state=0)[["name", "dept"]])
+`} height={500} />
 
-# Multiple conditions: & (and), | (or), ~ (not)
-# Note: use parentheses — Python operator precedence bites here
-result = df[(df["salary"] > 55000) & (df["dept"] == "eng")]
-print("Eng with salary > 55000:")
-print(result)
-print()
+---
 
-# .at and .iat: single-cell access (faster than .loc/.iloc for scalar)
-print(f".at['c', 'salary']: {df.at['c', 'salary']}")
-print(f".iat[0, 1]: {df.iat[0, 1]}")
-`} packages={["numpy", "pandas"]} />
+## Part 3: Data Cleaning — Production Techniques
 
-## Data Inspection
+Real data is messy. Missing values, wrong types, duplicate rows, inconsistent casing, hidden whitespace — all of these exist in production datasets. Systematic cleaning is the difference between analysis you can trust and analysis that quietly lies.
 
-<PythonPlayground code={String.raw`import pandas as pd
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
 import numpy as np
 import io
 
-# Create a slightly messy dataset for inspection
 csv_text = """id,name,age,salary,dept,rating
 1,Alice,30,75000,eng,4.5
 2,Bob,,60000,sales,3.8
@@ -110,489 +267,1437 @@ csv_text = """id,name,age,salary,dept,rating
 """
 
 df = pd.read_csv(io.StringIO(csv_text))
-print("=== df.info() ===")
-df.info()
+print("=== Raw data ===")
+print(df)
 print()
 
-print("=== df.describe() ===")
-print(df.describe())
-print()
-
-print("=== df.head(3) ===")
-print(df.head(3))
-
-print("\n=== Missing values ===")
+# --- Detection ---
+print("=== isnull().sum() — count per column ===")
 print(df.isnull().sum())
-print(f"\nTotal missing: {df.isnull().sum().sum()}")
-print(f"% missing per column:\n{(df.isnull().mean() * 100).round(1)}")
+print(f"\nTotal missing cells: {df.isnull().sum().sum()}")
+print(f"\n% missing per column:\n{(df.isnull().mean() * 100).round(1)}")
 print()
 
-print("=== Cardinality ===")
-print(df.nunique())
+# --- dropna variants ---
+print("=== dropna(how='any') — keep only fully complete rows ===")
+print(df.dropna(how="any"))
 print()
 
-print("=== value_counts (dept) ===")
-print(df["dept"].value_counts())
+print("=== dropna(subset=['age','salary']) — only care about these two ===")
+print(df.dropna(subset=["age", "salary"]))
 print()
 
-print("=== value_counts with normalize ===")
-print(df["dept"].value_counts(normalize=True).round(3))
-`} packages={["numpy", "pandas"]} />
+print("=== dropna(thresh=5) — keep rows with >= 5 non-null values ===")
+print(df.dropna(thresh=5))
+`} height={540} />
 
-## Handling Missing Data
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+import io
 
-Missing data in pandas is represented as `NaN` (for floats) or `pd.NA` (for nullable integer/string types). Understanding where `NaN` comes from and how to handle it is one of the most important practical skills.
+csv_text = """id,name,age,salary,dept,rating
+1,Alice,30,75000,eng,4.5
+2,Bob,,60000,sales,3.8
+3,Carol,35,90000,eng,
+4,Dave,28,55000,marketing,4.1
+5,Eve,22,48000,sales,3.5
+6,Frank,45,110000,eng,4.9
+7,Grace,31,72000,,4.2
+8,Hank,28,55000,marketing,4.1
+"""
+df = pd.read_csv(io.StringIO(csv_text))
 
-<PythonPlayground code={String.raw`import pandas as pd
+# --- fillna strategies ---
+
+# Scalar fill
+print("fillna(0) — replace all NaN with 0:")
+print(df[["age","rating"]].fillna(0))
+print()
+
+# Column-specific fill values
+fill_map = {
+    "age":    df["age"].median(),
+    "rating": df["rating"].mean(),
+    "dept":   "unknown",
+}
+df_filled = df.fillna(fill_map)
+print(f"Filled: age={fill_map['age']}, rating={fill_map['rating']:.2f}, dept=unknown")
+print(df_filled)
+print()
+
+# Forward fill and backward fill
+ts_data = pd.Series([1.0, np.nan, np.nan, 4.0, np.nan, 6.0])
+print("Original:   ", ts_data.tolist())
+print("ffill:      ", ts_data.ffill().tolist())
+print("bfill:      ", ts_data.bfill().tolist())
+print("ffill(limit=1):", ts_data.ffill(limit=1).tolist())
+`} height={480} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
 import numpy as np
 
+# --- Type conversion ---
 df = pd.DataFrame({
-    "a": [1.0, 2.0, np.nan, 4.0, np.nan],
-    "b": [10, np.nan, 30, np.nan, 50],
-    "c": ["x", "y", None, "w", "v"],
-    "d": [1.1, 2.2, 3.3, 4.4, 5.5],
+    "id":       ["1", "2", "3", "4", "5"],
+    "amount":   ["$1,250.00", "$99.99", "bad", "$450.00", "$75.50"],
+    "date_str": ["2024-01-15", "2024-01-16", "2024-01-17", "2024-01-18", "2024-01-19"],
+    "category": ["Food", "Tech", "Food", "Travel", "Tech"],
+})
+print("Raw types:")
+print(df.dtypes)
+print()
+
+# to_numeric with errors='coerce' — invalid strings become NaN instead of crashing
+df["amount_clean"] = (
+    df["amount"]
+    .str.replace(r"[$,]", "", regex=True)
+    .str.strip()
+)
+df["amount_num"] = pd.to_numeric(df["amount_clean"], errors="coerce")
+
+# to_datetime
+df["date"] = pd.to_datetime(df["date_str"])
+
+# astype for cheap conversions
+df["id"] = df["id"].astype(int)
+df["category"] = df["category"].astype("category")   # memory-efficient
+
+print("Converted types:")
+print(df[["id", "amount_num", "date", "category"]].dtypes)
+print()
+print("Result:")
+print(df[["id", "amount_num", "date", "category"]])
+print(f"\nMemory (category vs object): category={df['category'].nbytes}B")
+`} height={480} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+# --- Duplicate handling ---
+df = pd.DataFrame({
+    "name":    ["Alice", "Bob", "Alice", "Carol", "Bob", "Alice"],
+    "dept":    ["eng", "sales", "eng", "marketing", "sales", "eng"],
+    "salary":  [75000, 60000, 75000, 90000, 60000, 80000],
 })
 print("Original:")
 print(df)
 print()
 
-# Detection
-print("isnull():")
-print(df.isnull())
+print("duplicated() mask:")
+print(df.duplicated())
 print()
 
-# dropna: drop rows/columns with any NaN
-print("dropna() — drop rows with any NaN:")
-print(df.dropna())
+print("duplicated(subset=['name','dept']):")
+print(df.duplicated(subset=["name", "dept"]))
 print()
 
-# dropna with thresh: keep rows with at least N non-NaN values
-print("dropna(thresh=3) — keep rows with >=3 non-null values:")
-print(df.dropna(thresh=3))
+# drop_duplicates keeps first occurrence by default
+print("drop_duplicates(subset=['name','dept'], keep='first'):")
+print(df.drop_duplicates(subset=["name", "dept"], keep="first"))
 print()
 
-# dropna on subset
-print("dropna(subset=['a','b']) — only care about columns a and b:")
-print(df.dropna(subset=["a", "b"]))
-print()
+# --- Outlier detection: IQR method ---
+rng = np.random.default_rng(42)
+salaries = pd.Series(
+    np.concatenate([rng.normal(70000, 10000, 96), [250000, 300000, -5000, 10]])
+)
+Q1, Q3 = salaries.quantile(0.25), salaries.quantile(0.75)
+IQR = Q3 - Q1
+lower, upper = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
+outliers = salaries[(salaries < lower) | (salaries > upper)]
+clean = salaries[(salaries >= lower) & (salaries <= upper)]
+print(f"IQR outlier detection:")
+print(f"  Q1={Q1:,.0f}  Q3={Q3:,.0f}  IQR={IQR:,.0f}")
+print(f"  Bounds: [{lower:,.0f}, {upper:,.0f}]")
+print(f"  Outliers ({len(outliers)}): {sorted(outliers.tolist())}")
+print(f"  Clean observations: {len(clean)}")
+`} height={520} />
 
-# fillna
-print("fillna(0):")
-print(df.fillna(0))
-print()
-
-# fill with column-specific values
-fill_values = {"a": df["a"].mean(), "b": df["b"].median(), "c": "unknown"}
-print(f"Fill a with mean ({df['a'].mean():.1f}), b with median ({df['b'].median():.0f}), c with 'unknown':")
-print(df.fillna(fill_values))
-print()
-
-# forward fill and backward fill
-print("ffill (forward fill — carry last valid value forward):")
-print(df[["a", "b"]].ffill())
-`} packages={["numpy", "pandas"]} />
-
-## Data Types, Conversion & String Operations
-
-<PythonPlayground code={String.raw`import pandas as pd
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
 import numpy as np
-import io
 
-csv_text = """date,amount,category,description
-2024-01-15,  $1,250.00  ,FOOD, Grocery store purchase
-2024-01-16,99.99,TECH,Amazon.com order
-2024-01-17, bad_amount,FOOD,Coffee shop
-2024-01-18,450.00,TRAVEL, Flight to NYC
-2024-01-19,75.50,TECH,Monthly subscription
-"""
-df = pd.read_csv(io.StringIO(csv_text))
-print("Raw data:")
-print(df)
-print(f"\ndtypes:\n{df.dtypes}")
-print()
+# --- String cleaning and renaming ---
+df = pd.DataFrame({
+    "  First Name  ": ["  alice", "BOB  ", "  Carol  "],
+    "email":          ["alice@EXAMPLE.COM", "bob@example.com", "carol@Example.com"],
+    "phone":          ["(555) 123-4567", "555.234.5678", "555-345-6789"],
+})
+
+# Rename columns: strip whitespace from column names
+df.columns = df.columns.str.strip()
+print("Cleaned column names:", df.columns.tolist())
 
 # String cleaning
-df["description"] = df["description"].str.strip()
-df["category"] = df["category"].str.strip().str.upper()
+df["First Name"] = df["First Name"].str.strip().str.title()
+df["email"] = df["email"].str.lower()
 
-# Clean the amount column
-df["amount_clean"] = (df["amount"]
-    .str.strip()
-    .str.replace(r'[$,]', '', regex=True)  # remove $ and commas
-    .str.strip()
+# Normalize phone numbers with regex
+df["phone_digits"] = df["phone"].str.replace(r"\D", "", regex=True)  # keep digits only
+df["phone_formatted"] = df["phone_digits"].str.replace(
+    r"(\d{3})(\d{3})(\d{4})", r"\1-\2-\3", regex=True
 )
-df["amount_num"] = pd.to_numeric(df["amount_clean"], errors="coerce")
 
-# Parse dates
-df["date"] = pd.to_datetime(df["date"])
-
-print("Cleaned data:")
-print(df[["date", "amount_num", "category", "description"]])
-print(f"\ndtypes:\n{df[['date', 'amount_num', 'category', 'description']].dtypes}")
+print("\nCleaned DataFrame:")
+print(df[["First Name", "email", "phone_formatted"]])
 print()
 
-# String accessor operations
-df["desc_lower"] = df["description"].str.lower()
-df["desc_words"] = df["description"].str.split().str.len()
-is_amazon = df["description"].str.contains("amazon", case=False, na=False)
+# .rename() for explicit column mapping
+df2 = df.rename(columns={"First Name": "name", "phone_formatted": "phone_std"})
+print("After rename:")
+print(df2[["name", "email", "phone_std"]])
 
-print(f"Contains 'amazon': {is_amazon.values}")
-print(f"Word counts:\n{df[['description', 'desc_words']]}")
+# .replace() for encoding / value mapping
+status = pd.Series(["active", "inactive", "pending", "active", "inactive"])
+encoded = status.replace({"active": 1, "inactive": 0, "pending": -1})
+print("\nEncoded:", encoded.tolist())
+`} height={520} />
+
+---
+
+## Part 4: Indexing Mastery
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+# --- MultiIndex ---
+# A MultiIndex gives each row a tuple of labels — essential for hierarchical data
+
+arrays = [
+    ["North", "North", "South", "South", "East", "East"],
+    ["Q1",    "Q2",    "Q1",    "Q2",    "Q1",   "Q2"],
+]
+index = pd.MultiIndex.from_arrays(arrays, names=["region", "quarter"])
+sales = pd.Series(
+    [120_000, 135_000, 95_000, 102_000, 88_000, 91_000],
+    index=index,
+    name="sales"
+)
+print("MultiIndex Series:")
+print(sales)
 print()
 
-# Extract with regex
-amounts = pd.Series(["$1,250.00", "$99.99", "$450.00"])
-extracted = amounts.str.extract(r'\$([0-9,]+\.[0-9]{2})')
-print("Extracted amounts:", extracted[0].tolist())
-`} packages={["numpy", "pandas"]} />
+# .loc with multi-level labels
+print("sales.loc['North']:")
+print(sales.loc["North"])
+print()
 
-## GroupBy: Split-Apply-Combine
+print("sales.loc[('South', 'Q1')]:", sales.loc[("South", "Q1")])
+print()
 
-GroupBy is pandas' most powerful feature. The pattern: split the DataFrame into groups, apply a function to each group, combine the results.
+# Cross-section: .xs() — slices one level leaving the rest
+print("sales.xs('Q2', level='quarter'):")
+print(sales.xs("Q2", level="quarter"))
+`} height={460} />
 
-<PythonPlayground code={String.raw`import pandas as pd
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+# --- set_index, reset_index, stack, unstack ---
+df = pd.DataFrame({
+    "region":  ["North", "North", "South", "South", "East", "East"],
+    "quarter": ["Q1", "Q2", "Q1", "Q2", "Q1", "Q2"],
+    "sales":   [120_000, 135_000, 95_000, 102_000, 88_000, 91_000],
+    "units":   [240, 270, 190, 204, 176, 182],
+})
+
+# Set a MultiIndex from two columns
+df_mi = df.set_index(["region", "quarter"])
+print("MultiIndex DataFrame:")
+print(df_mi)
+print()
+
+# unstack: move inner index level to columns
+wide = df_mi["sales"].unstack(level="quarter")
+print("unstack('quarter') -> wide format:")
+print(wide)
+print()
+
+# stack: move columns back to rows
+long = wide.stack()
+long.name = "sales"
+print("stack() -> back to long format:")
+print(long.head(4))
+print()
+
+# reset_index: flatten back to regular columns
+df_flat = df_mi.reset_index()
+print("reset_index() -> flat DataFrame:")
+print(df_flat)
+`} height={520} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+df = pd.DataFrame({
+    "city":  ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix"],
+    "state": ["NY", "CA", "IL", "TX", "AZ"],
+    "pop":   [8_336_817, 3_979_576, 2_693_976, 2_320_268, 1_680_992],
+    "area":  [302.6, 503.0, 227.3, 669.0, 517.6],
+})
+
+# --- reindex: conform to a new index, NaN for missing labels ---
+df_indexed = df.set_index("city")
+new_order = ["Chicago", "New York", "Dallas", "Phoenix", "Los Angeles"]
+reindexed = df_indexed.reindex(new_order)
+print("reindex (Dallas not in original -> NaN):")
+print(reindexed)
+print()
+
+# --- sort_index ---
+print("sort_index(ascending=False):")
+print(df_indexed.sort_index(ascending=False)[["state", "pop"]])
+print()
+
+# --- sort_values ---
+print("sort_values('pop', ascending=False):")
+print(df.sort_values("pop", ascending=False)[["city", "pop"]].to_string(index=False))
+`} height={460} />
+
+---
+
+## Part 5: Apply, Map, and Transform
+
+Pandas provides several function-application methods. Choosing correctly between them matters for correctness *and* performance.
+
+| Method | Applied to | Input | Output shape | Use when |
+|--------|-----------|-------|-------------|----------|
+| `Series.map()` | Series | one element | same length | element-wise with dict or function |
+| `Series.apply()` | Series | one element | any | element-wise when no vectorized op exists |
+| `DataFrame.apply(axis=0)` | DataFrame | one column (Series) | flexible | column-wise aggregation |
+| `DataFrame.apply(axis=1)` | DataFrame | one row (Series) | same rows | row-wise custom logic |
+| `DataFrame.map()` | DataFrame | one cell | same shape | element-wise on entire DataFrame |
+| `groupby.transform()` | GroupBy | group (Series) | same rows as input | add group statistics as a column |
+| `.pipe()` | any | object itself | any | method chaining |
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+df = pd.DataFrame({
+    "name":   ["Alice", "Bob", "Carol", "Dave", "Eve"],
+    "age":    [30, 25, 35, 28, 22],
+    "salary": [75_000.0, 60_000.0, 90_000.0, 55_000.0, 48_000.0],
+    "dept":   ["eng", "sales", "eng", "marketing", "sales"],
+})
+
+# --- Series.map(): element-wise with dict or function ---
+dept_code = {"eng": "E", "sales": "S", "marketing": "M"}
+df["dept_code"] = df["dept"].map(dept_code)
+print("map() with dict:")
+print(df[["dept", "dept_code"]])
+print()
+
+# --- Series.apply(): element-wise with arbitrary function ---
+def salary_band(s):
+    if s < 60_000:   return "low"
+    elif s < 80_000: return "mid"
+    else:            return "high"
+
+df["band"] = df["salary"].apply(salary_band)
+print("apply() for salary band:")
+print(df[["name", "salary", "band"]])
+print()
+
+# --- DataFrame.apply(axis=1): row-wise ---
+def full_label(row):
+    return f"{row['name']} ({row['dept_code']}, {row['band']})"
+
+df["label"] = df.apply(full_label, axis=1)
+print("apply(axis=1) — row-wise:")
+print(df["label"].tolist())
+`} height={500} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
 import numpy as np
 
 rng = np.random.default_rng(42)
-
-# Generate sales data
-n = 200
-products = ["Widget", "Gadget", "Doohickey", "Thingamajig"]
-regions = ["North", "South", "East", "West"]
-
 df = pd.DataFrame({
-    "product": rng.choice(products, n),
-    "region": rng.choice(regions, n),
-    "sales": rng.integers(100, 5000, n).astype(float),
-    "units": rng.integers(1, 50, n),
-    "quarter": rng.choice(["Q1", "Q2", "Q3", "Q4"], n),
+    "dept":   rng.choice(["eng", "sales", "marketing"], 10),
+    "salary": rng.integers(40_000, 120_000, 10).astype(float),
+    "bonus":  rng.integers(2_000, 15_000, 10).astype(float),
 })
 
-print("Sample data (first 5 rows):")
+# --- transform(): return same shape as input (for group stats) ---
+# Use case: add a "dept average salary" column without losing any rows
+df["dept_avg"] = df.groupby("dept")["salary"].transform("mean")
+df["pct_of_avg"] = (df["salary"] / df["dept_avg"] * 100).round(1)
+print("transform() — group mean as new column:")
+print(df.sort_values("dept"))
+print()
+
+# --- DataFrame.apply(axis=0): column-wise aggregation ---
+numeric_df = df[["salary", "bonus"]]
+print("apply(axis=0) — column-wise range:")
+print(numeric_df.apply(lambda col: col.max() - col.min()))
+print()
+
+# --- .pipe(): method chaining for multi-step transformations ---
+def add_total_comp(d):
+    d = d.copy()
+    d["total"] = d["salary"] + d["bonus"]
+    return d
+
+def rank_by_total(d):
+    d = d.copy()
+    d["rank"] = d["total"].rank(ascending=False).astype(int)
+    return d
+
+result = df.pipe(add_total_comp).pipe(rank_by_total)
+print(".pipe() chaining:")
+print(result[["dept", "salary", "bonus", "total", "rank"]].sort_values("rank"))
+`} height={520} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+import time
+
+# --- Performance: vectorized vs apply ---
+rng = np.random.default_rng(0)
+N = 100_000
+df = pd.DataFrame({
+    "x": rng.standard_normal(N),
+    "y": rng.standard_normal(N),
+})
+
+# apply (Python loop under the hood)
+t0 = time.perf_counter()
+result_apply = df.apply(lambda row: row["x"] ** 2 + row["y"] ** 2, axis=1)
+t_apply = time.perf_counter() - t0
+
+# vectorized (pure NumPy/C)
+t0 = time.perf_counter()
+result_vec = df["x"] ** 2 + df["y"] ** 2
+t_vec = time.perf_counter() - t0
+
+print(f"apply(axis=1):   {t_apply:.3f}s")
+print(f"vectorized:      {t_vec:.4f}s")
+print(f"Speedup:         {t_apply/t_vec:.0f}x faster with vectorized code")
+print()
+print("Rule: reach for vectorized (.str, .dt, arithmetic, np.where)")
+print("      before apply(). apply() is Python — it's slow.")
+print()
+
+# Common vectorized alternatives
+df2 = pd.DataFrame({"score": [55, 82, 47, 91, 73, 38]})
+
+# Instead of: df2["grade"] = df2["score"].apply(lambda s: "pass" if s >= 60 else "fail")
+df2["grade"] = np.where(df2["score"] >= 60, "pass", "fail")   # vectorized
+print("np.where instead of apply:")
+print(df2)
+`} height={480} />
+
+---
+
+## Part 6: GroupBy — Split-Apply-Combine
+
+GroupBy is one of pandas' most important abstractions. It lets you split a DataFrame into groups, apply a function to each, and combine the results — all in one expressive call.
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+rng = np.random.default_rng(42)
+N = 300
+
+products = ["Widget", "Gadget", "Doohickey", "Thingamajig"]
+regions  = ["North", "South", "East", "West"]
+
+df = pd.DataFrame({
+    "product": rng.choice(products, N),
+    "region":  rng.choice(regions, N),
+    "sales":   rng.integers(100, 5000, N).astype(float),
+    "units":   rng.integers(1, 50, N),
+    "quarter": rng.choice(["Q1", "Q2", "Q3", "Q4"], N),
+})
+
+print("Sample data (first 5):")
 print(df.head())
 print()
 
-# Basic groupby
-print("=== Mean sales by product ===")
-print(df.groupby("product")["sales"].mean().round(2))
+# --- Basic aggregations ---
+print("=== Sum sales by product ===")
+print(df.groupby("product")["sales"].sum().sort_values(ascending=False))
 print()
 
-# Multiple aggregations with agg
-print("=== Multiple aggregations by product ===")
-result = df.groupby("product")["sales"].agg(
-    count="count",
-    mean="mean",
-    total="sum",
-    max_sale="max"
-).round(2)
+print("=== Mean, std, count by product ===")
+print(df.groupby("product")["sales"].agg(["mean", "std", "count"]).round(1))
+print()
+
+# --- Named aggregation (pandas 0.25+, recommended style) ---
+print("=== Named aggregation by region ===")
+result = df.groupby("region").agg(
+    total_sales=("sales",  "sum"),
+    avg_units  =("units",  "mean"),
+    n_orders   =("sales",  "count"),
+    max_sale   =("sales",  "max"),
+).round(1).sort_values("total_sales", ascending=False)
 print(result)
+`} height={520} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+rng = np.random.default_rng(42)
+N = 300
+df = pd.DataFrame({
+    "product": rng.choice(["Widget", "Gadget", "Doohickey", "Thingamajig"], N),
+    "region":  rng.choice(["North", "South", "East", "West"], N),
+    "sales":   rng.integers(100, 5000, N).astype(float),
+    "units":   rng.integers(1, 50, N),
+    "quarter": rng.choice(["Q1", "Q2", "Q3", "Q4"], N),
+})
+
+# --- Multi-key groupby ---
+print("=== Groupby product + quarter (first 8 rows) ===")
+multi = df.groupby(["product", "quarter"])["sales"].sum().sort_index()
+print(multi.head(8))
 print()
 
-# Named aggregation on multiple columns
-print("=== Multi-column named aggregation ===")
-result2 = df.groupby("region").agg(
-    total_sales=("sales", "sum"),
-    avg_units=("units", "mean"),
-    num_transactions=("sales", "count")
-).round(2)
-print(result2.sort_values("total_sales", ascending=False))
-print()
-
-# Groupby on multiple keys
-print("=== Pivot: product × quarter total sales ===")
+# --- Pivot-style with unstack ---
+print("=== Product x Quarter (unstack) ===")
 pivot = df.groupby(["product", "quarter"])["sales"].sum().unstack(fill_value=0)
 print(pivot.astype(int))
 print()
 
-# transform — keeps the same index as the original DataFrame
-# Great for adding group-level statistics as a new column
-df["product_avg_sales"] = df.groupby("product")["sales"].transform("mean")
-df["sales_vs_avg"] = (df["sales"] - df["product_avg_sales"]).round(2)
-print("=== Sales relative to product average (first 8 rows) ===")
-print(df[["product", "sales", "product_avg_sales", "sales_vs_avg"]].head(8))
-`} packages={["numpy", "pandas"]} />
+# --- transform: add group mean as a column ---
+df["product_avg"] = df.groupby("product")["sales"].transform("mean")
+df["vs_avg_pct"] = ((df["sales"] - df["product_avg"]) / df["product_avg"] * 100).round(1)
+print("=== Sales vs product average (first 6 rows) ===")
+print(df[["product", "sales", "product_avg", "vs_avg_pct"]].head(6))
+print()
 
-## Merging, Joining, and Concatenating
+# --- filter: remove entire groups that don't meet a criterion ---
+# Remove products where average sales < 2000
+df_filtered = df.groupby("product").filter(lambda g: g["sales"].mean() >= 2000)
+kept = df_filtered["product"].unique()
+print(f"Products kept after filter (avg_sales >= 2000): {sorted(kept)}")
+`} height={520} />
 
-<PythonPlayground code={String.raw`import pandas as pd
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
 
-# Two related tables
+rng = np.random.default_rng(42)
+N = 200
+
+# Time-based groupby
+dates = pd.date_range("2023-01-01", periods=N, freq="D")
+df = pd.DataFrame({
+    "date":  dates,
+    "sales": rng.integers(500, 5000, N).astype(float),
+    "dept":  rng.choice(["eng", "sales", "ops"], N),
+})
+df = df.set_index("date")
+
+# --- pd.Grouper for time-based groupby ---
+print("=== Monthly totals (pd.Grouper) ===")
+monthly = df.groupby(pd.Grouper(freq="ME"))["sales"].sum()
+for period, val in monthly.items():
+    bar = "#" * int(val / monthly.max() * 25)
+    print(f"  {period.strftime('%Y-%m')}  {val:7,.0f}  {bar}")
+print()
+
+# --- GroupBy.apply: arbitrary function per group ---
+def top_n_rows(group, n=2):
+    return group.nlargest(n, "sales")
+
+print("=== Top 2 sales days per dept ===")
+df_reset = df.reset_index()
+top2 = df_reset.groupby("dept", group_keys=False).apply(top_n_rows, n=2)
+print(top2.sort_values("dept")[["date", "dept", "sales"]].to_string(index=False))
+print()
+
+# --- nunique: count distinct values per group ---
+print("=== Unique depts per month ===")
+monthly_depts = df_reset.groupby(pd.Grouper(key="date", freq="ME"))["dept"].nunique()
+print(monthly_depts.head(4))
+`} height={520} />
+
+---
+
+## Part 7: Merging, Joining, and Concatenating
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+
+# --- pd.merge: SQL-style joins ---
 employees = pd.DataFrame({
-    "emp_id": [1, 2, 3, 4, 5],
-    "name": ["Alice", "Bob", "Carol", "Dave", "Eve"],
-    "dept_id": [10, 20, 10, 30, 20],
+    "emp_id":  [1, 2, 3, 4, 5, 6],
+    "name":    ["Alice", "Bob", "Carol", "Dave", "Eve", "Frank"],
+    "dept_id": [10, 20, 10, 30, 20, 99],   # 99 has no matching dept
 })
 
 departments = pd.DataFrame({
-    "dept_id": [10, 20, 40],
-    "dept_name": ["Engineering", "Sales", "Marketing"],
-    "budget": [500000, 200000, 150000],
+    "dept_id":   [10, 20, 30, 40],          # 40 has no matching employee
+    "dept_name": ["Engineering", "Sales", "Marketing", "Finance"],
+    "budget":    [500_000, 200_000, 150_000, 300_000],
 })
 
-print("Employees:")
-print(employees)
-print("\nDepartments:")
-print(departments)
-print()
-
-# Inner join: only matching rows from both
+print("INNER join — only matching dept_ids:")
 inner = pd.merge(employees, departments, on="dept_id", how="inner")
-print("INNER join (only matching dept_ids):")
 print(inner)
 print()
 
-# Left join: all employees, NaN for unmatched departments
+print("LEFT join — all employees, NaN for unmatched depts:")
 left = pd.merge(employees, departments, on="dept_id", how="left")
-print("LEFT join (all employees, NaN for unmatched depts):")
 print(left)
 print()
 
-# concat: stack DataFrames vertically (or horizontally)
-q1_sales = pd.DataFrame({"region": ["North","South"], "sales": [100, 200]})
-q2_sales = pd.DataFrame({"region": ["North","East"],  "sales": [150, 175]})
+print("OUTER join — all rows from both:")
+outer = pd.merge(employees, departments, on="dept_id", how="outer")
+print(outer)
+print()
 
-combined = pd.concat([q1_sales, q2_sales], keys=["Q1","Q2"])
-print("Concat with keys:")
+# Different column names on each side
+orders = pd.DataFrame({"order_id": [101, 102, 103], "cust_id": [1, 2, 1], "total": [250, 75, 400]})
+customers = pd.DataFrame({"id": [1, 2, 3], "customer": ["Alice", "Bob", "Carol"]})
+merged = pd.merge(orders, customers, left_on="cust_id", right_on="id")
+print("Merge on different column names:")
+print(merged[["order_id", "customer", "total"]])
+`} height={560} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+
+# --- pd.concat ---
+q1 = pd.DataFrame({"region": ["North","South","East"], "sales": [120_000, 95_000, 88_000], "q": "Q1"})
+q2 = pd.DataFrame({"region": ["North","South","East"], "sales": [135_000, 102_000, 91_000], "q": "Q2"})
+q3 = pd.DataFrame({"region": ["North","South","East"], "sales": [110_000, 115_000, 98_000], "q": "Q3"})
+
+# axis=0: stack vertically (like UNION ALL)
+combined = pd.concat([q1, q2, q3], ignore_index=True)
+print("concat axis=0 (stacked):")
 print(combined)
 print()
 
-# Reset index after concat if you don't want the MultiIndex
-combined_reset = pd.concat([q1_sales, q2_sales], ignore_index=True)
-print("Concat with reset index:")
-print(combined_reset)
-`} packages={["numpy", "pandas"]} />
+# keys= to create a MultiIndex
+labeled = pd.concat([q1, q2, q3], keys=["Q1", "Q2", "Q3"])
+print("concat with keys= (MultiIndex):")
+print(labeled)
+print()
 
-## Time Series
+# axis=1: stack horizontally (side by side)
+a = pd.DataFrame({"x": [1, 2, 3]})
+b = pd.DataFrame({"y": [4, 5, 6], "z": [7, 8, 9]})
+side_by_side = pd.concat([a, b], axis=1)
+print("concat axis=1 (side-by-side):")
+print(side_by_side)
+print()
 
-<PythonPlayground code={String.raw`import pandas as pd
+# --- merge_asof: nearest-key join (time series events) ---
+# Useful for: matching sensor readings to the nearest timestamp event
+trades = pd.DataFrame({
+    "time":  pd.to_datetime(["09:01", "09:05", "09:10", "09:15"], format="%H:%M"),
+    "price": [100.1, 100.5, 99.8, 101.2],
+})
+quotes = pd.DataFrame({
+    "time": pd.to_datetime(["09:00", "09:03", "09:08", "09:12"], format="%H:%M"),
+    "bid":  [99.9, 100.2, 99.5, 101.0],
+})
+matched = pd.merge_asof(trades, quotes, on="time")
+print("merge_asof (each trade matched to most recent quote):")
+print(matched)
+`} height={560} />
+
+---
+
+## Part 8: Reshaping Data
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
 import numpy as np
 
-# Create a time series
+# --- pivot_table ---
 rng = np.random.default_rng(42)
-dates = pd.date_range("2024-01-01", periods=90, freq="D")
-values = 100 + np.cumsum(rng.standard_normal(90))  # random walk
+N = 200
+df = pd.DataFrame({
+    "product": rng.choice(["Widget", "Gadget", "Doohickey"], N),
+    "region":  rng.choice(["North", "South", "East", "West"], N),
+    "quarter": rng.choice(["Q1", "Q2", "Q3", "Q4"], N),
+    "sales":   rng.integers(500, 5000, N).astype(float),
+})
+
+print("=== pivot_table: product x region, mean sales ===")
+pt = df.pivot_table(
+    values="sales",
+    index="product",
+    columns="region",
+    aggfunc="mean",
+    fill_value=0
+)
+print(pt.round(0).astype(int))
+print()
+
+# Margins: add row/column totals
+print("=== pivot_table with margins (totals) ===")
+pt2 = df.pivot_table(
+    values="sales",
+    index="product",
+    columns="quarter",
+    aggfunc="sum",
+    margins=True,
+    margins_name="Total"
+)
+print(pt2.astype(int))
+`} height={480} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+
+# --- melt: wide -> long ---
+wide = pd.DataFrame({
+    "city":  ["New York", "London", "Tokyo"],
+    "2021":  [8_336_000, 8_982_000, 13_960_000],
+    "2022":  [8_468_000, 9_002_000, 13_988_000],
+    "2023":  [8_550_000, 9_100_000, 14_010_000],
+})
+print("Wide format:")
+print(wide)
+print()
+
+long = pd.melt(
+    wide,
+    id_vars=["city"],
+    value_vars=["2021", "2022", "2023"],
+    var_name="year",
+    value_name="population"
+)
+long["year"] = long["year"].astype(int)
+print("Long (tidy) format after melt:")
+print(long.sort_values(["city", "year"]).reset_index(drop=True))
+print()
+
+# --- crosstab: frequency table ---
+df = pd.DataFrame({
+    "dept":  ["eng", "eng", "sales", "sales", "eng", "marketing", "sales"],
+    "level": ["senior","junior","senior","senior","junior","senior","junior"],
+})
+print("=== crosstab(dept, level) ===")
+ct = pd.crosstab(df["dept"], df["level"], margins=True)
+print(ct)
+print()
+
+# Normalize
+print("=== Normalized (row percentages) ===")
+ct_norm = pd.crosstab(df["dept"], df["level"], normalize="index")
+print((ct_norm * 100).round(1))
+`} height={520} />
+
+---
+
+## Part 9: Time Series
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+# --- Creating and accessing DatetimeIndex ---
+rng = np.random.default_rng(42)
+dates = pd.date_range("2024-01-01", periods=180, freq="D")
+values = 100 + np.cumsum(rng.standard_normal(180) * 2)
 
 ts = pd.Series(values, index=dates, name="price")
 print("Time series (first 5):")
 print(ts.head())
-print(f"\nDatetimeIndex freq: {ts.index.freq}")
+print(f"\nStart: {ts.index.min().date()}  End: {ts.index.max().date()}")
+print(f"Freq: {ts.index.freq}")
 print()
 
-# Resampling: group by time period
-print("Monthly mean:")
-print(ts.resample("ME").mean().round(2))  # ME = Month End
+# .dt accessor on a column
+df = ts.reset_index()
+df.columns = ["date", "price"]
+df["year"]      = df["date"].dt.year
+df["month"]     = df["date"].dt.month
+df["dayofweek"] = df["date"].dt.day_name()
+df["quarter"]   = df["date"].dt.quarter
+df["is_weekend"] = df["date"].dt.dayofweek >= 5
+
+print("=== .dt accessor ===")
+print(df[["date", "year", "month", "dayofweek", "quarter", "is_weekend"]].head(8))
 print()
 
-print("Weekly min/max:")
-print(ts.resample("W").agg(["min", "max"]).round(2).head(4))
+print("=== Average price by day-of-week ===")
+print(df.groupby("dayofweek")["price"].mean().round(2).sort_values(ascending=False))
+`} height={520} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+rng = np.random.default_rng(42)
+dates = pd.date_range("2023-01-01", periods=365, freq="D")
+prices = 100 + np.cumsum(rng.standard_normal(365) * 1.5)
+ts = pd.Series(prices, index=dates, name="price")
+
+# --- Resampling ---
+print("=== Monthly OHLC-style (first 3 months) ===")
+monthly = ts.resample("ME").agg(["first", "min", "max", "last"])
+monthly.columns = ["open", "low", "high", "close"]
+print(monthly.head(3).round(2))
 print()
 
-# Rolling statistics
+print("=== Quarterly mean ===")
+print(ts.resample("QE").mean().round(2))
+print()
+
+# --- Rolling statistics ---
 ts_df = ts.to_frame()
-ts_df["ma7"]  = ts.rolling(window=7).mean()   # 7-day moving average
-ts_df["ma30"] = ts.rolling(window=30).mean()  # 30-day moving average
-ts_df["std7"] = ts.rolling(window=7).std()    # 7-day rolling std
-
-print("Rolling stats (last 5 rows):")
+ts_df["ma7"]   = ts.rolling(7).mean()
+ts_df["ma30"]  = ts.rolling(30).mean()
+ts_df["vol7"]  = ts.rolling(7).std()
+ts_df["upper"] = ts_df["ma30"] + 2 * ts.rolling(30).std()
+ts_df["lower"] = ts_df["ma30"] - 2 * ts.rolling(30).std()
+print("=== Rolling stats (last 5 rows) ===")
 print(ts_df.tail(5).round(2))
 print()
 
-# DatetimeIndex accessors
-df_dates = pd.DataFrame({"date": dates, "value": values})
-df_dates["month"]    = df_dates["date"].dt.month
-df_dates["dow"]      = df_dates["date"].dt.day_name()
-df_dates["is_weekend"] = df_dates["date"].dt.dayofweek >= 5
+# --- Shifting: lag features ---
+ts_df["lag1"]    = ts.shift(1)   # previous day's value
+ts_df["return1"] = (ts / ts.shift(1) - 1) * 100  # daily % return
+ts_df["lag7"]    = ts.shift(7)   # one week ago
+print("=== Lag / return features (first non-null rows) ===")
+print(ts_df[["price","lag1","return1","lag7"]].dropna().head(5).round(3))
+`} height={520} />
 
-print("Avg by day of week:")
-print(df_dates.groupby("dow")["value"].mean().round(2).sort_values(ascending=False).head(5))
-`} packages={["numpy", "pandas"]} />
-
-## Performance Tips
-
-```python
-# 1. Avoid chained indexing — it can operate on copies
-df["col"][mask] = value        # BAD: may not modify df
-df.loc[mask, "col"] = value    # GOOD: always modifies df
-
-# 2. Use vectorized string ops (.str accessor) instead of apply
-df["upper"] = df["name"].apply(lambda x: x.upper())  # SLOW
-df["upper"] = df["name"].str.upper()                   # FAST
-
-# 3. Use categorical for low-cardinality string columns
-df["status"] = df["status"].astype("category")  # saves memory, speeds groupby
-
-# 4. Prefer agg/transform over apply — apply is pure Python
-df.groupby("col").agg("mean")               # fast C
-df.groupby("col").apply(lambda g: g.mean()) # slow Python
-
-# 5. Read only what you need
-df = pd.read_csv("big.csv", usecols=["a", "b", "c"])
-```
-
-## PROJECT: Sales Data Analyzer
-
-<PythonPlayground code={String.raw`import pandas as pd
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
 import numpy as np
-import io
 
-# --- Generate a realistic, messy sales dataset ---
-rng = np.random.default_rng(42)
-N = 1000
+# --- pd.date_range and business day arithmetic ---
+print("=== date_range: daily, business days, month-end ===")
+daily = pd.date_range("2024-01-01", periods=5, freq="D")
+bizdays = pd.date_range("2024-01-01", periods=5, freq="B")
+month_end = pd.date_range("2024-01-01", periods=6, freq="ME")
 
-products = ["Widget Pro", "Gadget Max", "Doohickey Lite", "widget pro", "GADGET MAX"]
-regions = ["North", "South", "East", "West", "NORTH", "south"]
-customers = [f"CUST{i:04d}" for i in range(1, 51)]  # 50 customers
-
-raw_data = {
-    "order_id":   range(1, N+1),
-    "date":       pd.date_range("2023-01-01", periods=N, freq="8H").strftime("%Y-%m-%d"),
-    "product":    rng.choice(products, N),
-    "region":     rng.choice(regions, N),
-    "customer_id": rng.choice(customers, N),
-    "units":      rng.integers(1, 50, N).astype(float),
-    "unit_price": rng.choice([9.99, 24.99, 49.99, 99.99, np.nan], N),
-    "discount":   rng.choice([0, 0.05, 0.10, 0.15, 0.20, np.nan], N),
-}
-
-df = pd.DataFrame(raw_data)
-
-# Introduce messiness
-# Duplicate 50 rows
-dup_idx = rng.choice(N, 50, replace=False)
-df = pd.concat([df, df.iloc[dup_idx]], ignore_index=True)
-
-# Set some fields to NaN
-nan_idx = rng.choice(len(df), 30, replace=False)
-df.loc[nan_idx, "units"] = np.nan
-
-print(f"Raw dataset: {len(df)} rows, {df.shape[1]} columns")
-print(f"Missing values:\n{df.isnull().sum()}")
-print(f"\nSample of messy data:")
-print(df[df["product"].str.contains("widget", case=True, na=False)]["product"].value_counts())
-`} packages={["numpy", "pandas"]} />
-
-<PythonPlayground code={String.raw`import pandas as pd
-import numpy as np
-import io
-
-# Rebuild dataset compactly for this playground
-rng = np.random.default_rng(42)
-N = 1000
-
-products_clean = ["Widget Pro", "Gadget Max", "Doohickey Lite", "Thingamajig"]
-regions_clean = ["North", "South", "East", "West"]
-products_messy = ["Widget Pro", "Gadget Max", "Doohickey Lite",
-                  "widget pro", "GADGET MAX", "Widget Pro"]
-regions_messy  = ["North", "South", "East", "West", "NORTH", "south"]
-customers = [f"CUST{i:04d}" for i in range(1, 51)]
-
-df = pd.DataFrame({
-    "order_id":    range(1, N+1),
-    "date":        pd.date_range("2023-01-01", periods=N, freq="8H").strftime("%Y-%m-%d"),
-    "product":     rng.choice(products_messy, N),
-    "region":      rng.choice(regions_messy, N),
-    "customer_id": rng.choice(customers, N),
-    "units":       rng.integers(1, 50, N).astype(float),
-    "unit_price":  rng.choice([9.99, 24.99, 49.99, 99.99], N).astype(float),
-    "discount":    rng.choice([0.0, 0.05, 0.10, 0.15, 0.20], N),
-})
-
-# Add duplicates and NaNs
-dup_idx = rng.choice(N, 50, replace=False)
-df = pd.concat([df, df.iloc[dup_idx]], ignore_index=True)
-nan_idx = rng.choice(len(df), 30, replace=False)
-df.loc[nan_idx, "units"] = np.nan
-
-print(f"Before cleaning: {len(df)} rows")
-
-# === CLEANING ===
-
-# 1. Remove duplicates
-df = df.drop_duplicates(subset=[c for c in df.columns if c != "order_id"])
-print(f"After dedup:     {len(df)} rows")
-
-# 2. Standardize categorical columns
-df["product"] = df["product"].str.strip().str.title()
-df["region"]  = df["region"].str.strip().str.title()
-
-# 3. Fix date type
-df["date"] = pd.to_datetime(df["date"])
-
-# 4. Handle missing units (fill with median)
-df["units"] = df["units"].fillna(df["units"].median())
-
-# 5. Compute derived columns
-df["revenue"] = df["units"] * df["unit_price"] * (1 - df["discount"])
-df["month"]   = df["date"].dt.to_period("M")
-df["quarter"] = df["date"].dt.to_period("Q")
-
-print(f"After cleaning:  {len(df)} rows, {df.isnull().sum().sum()} NaN values")
+print(f"Daily:     {daily.strftime('%Y-%m-%d').tolist()}")
+print(f"BizDays:   {bizdays.strftime('%Y-%m-%d').tolist()}")
+print(f"MonthEnd:  {month_end.strftime('%Y-%m-%d').tolist()}")
 print()
 
-# === ANALYSIS ===
+# --- pd.to_datetime: parsing various formats ---
+mixed_dates = ["2024-01-15", "15/01/2024", "Jan 15, 2024", "20240115"]
+parsed = [pd.to_datetime(d, dayfirst=False, infer_datetime_format=True) for d in mixed_dates[:2]]
+print("Parsed dates:")
+for raw, parsed_dt in zip(mixed_dates[:2], parsed):
+    print(f"  '{raw}' -> {parsed_dt}")
+print()
 
-print("=" * 55)
-print("SALES ANALYSIS REPORT")
-print("=" * 55)
+# --- Period vs Timestamp ---
+# Period represents an interval; Timestamp is a point in time
+ts = pd.Timestamp("2024-03-15")
+print(f"Timestamp: {ts}")
+print(f"  Year: {ts.year}, Month: {ts.month}, Quarter: {ts.quarter}")
+print(f"  Week: {ts.isocalendar().week}, is_month_end: {ts.is_month_end}")
+print()
 
-# Revenue by product
-print("\n--- Revenue by Product ---")
-by_product = df.groupby("product")["revenue"].agg(
-    total="sum",
-    avg_order="mean",
-    transactions="count"
+period = pd.Period("2024-Q1", freq="Q")
+print(f"Period: {period}")
+print(f"  Start: {period.start_time.date()}")
+print(f"  End:   {period.end_time.date()}")
+`} height={500} />
+
+---
+
+## Part 10: Performance
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+import sys
+
+# --- Memory: categories vs object strings ---
+N = 100_000
+df_obj = pd.DataFrame({
+    "status": np.random.choice(["active", "inactive", "pending"], N),
+    "region": np.random.choice(["North", "South", "East", "West"], N),
+    "product": np.random.choice(["Widget", "Gadget", "Doohickey"], N),
+})
+
+df_cat = df_obj.copy()
+for col in df_cat.columns:
+    df_cat[col] = df_cat[col].astype("category")
+
+mem_obj = df_obj.memory_usage(deep=True).sum()
+mem_cat = df_cat.memory_usage(deep=True).sum()
+
+print(f"Object dtype memory: {mem_obj:,} bytes ({mem_obj/1024:.1f} KB)")
+print(f"Category dtype memory: {mem_cat:,} bytes ({mem_cat/1024:.1f} KB)")
+print(f"Memory reduction: {(1 - mem_cat/mem_obj)*100:.1f}%")
+print()
+
+# --- Efficient dtypes ---
+df_heavy = pd.DataFrame({
+    "int_col":   np.random.randint(0, 100, N),      # int64 by default
+    "float_col": np.random.random(N) * 1000,         # float64 by default
+})
+
+df_light = df_heavy.copy()
+df_light["int_col"]   = df_light["int_col"].astype(np.int8)    # range -128..127
+df_light["float_col"] = df_light["float_col"].astype(np.float32)
+
+mem_heavy = df_heavy.memory_usage(deep=True).sum()
+mem_light = df_light.memory_usage(deep=True).sum()
+
+print(f"int64/float64: {mem_heavy:,} bytes")
+print(f"int8/float32:  {mem_light:,} bytes")
+print(f"Memory reduction: {(1 - mem_light/mem_heavy)*100:.1f}%")
+`} height={480} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+import time
+
+# --- copy() vs view — the chained assignment trap ---
+df = pd.DataFrame({"a": [1, 2, 3, 4, 5], "b": [10, 20, 30, 40, 50]})
+
+# View: df[condition] may return a view or a copy (unpredictable!)
+# This may silently do nothing or raise a SettingWithCopyWarning:
+# df[df["a"] > 2]["b"] = 999   # DANGEROUS - might not work
+
+# CORRECT: use .loc for all assignments
+df.loc[df["a"] > 2, "b"] = 999
+print("After .loc assignment:")
+print(df)
+print()
+
+# Explicit copy when you need to modify a slice independently
+subset = df[df["a"] <= 2].copy()  # explicit copy — safe to modify
+subset["b"] = 0
+print("Modified subset (original unchanged):")
+print(subset)
+print("Original df unchanged:")
+print(df)
+print()
+
+# --- Chunked reading for large CSVs ---
+print("=== Chunked CSV processing pattern ===")
+print("""
+# For very large files that don't fit in RAM:
+results = []
+for chunk in pd.read_csv('huge.csv', chunksize=50_000):
+    # process chunk — only 50k rows in memory at a time
+    chunk_result = chunk.groupby('product')['sales'].sum()
+    results.append(chunk_result)
+
+# Combine chunk results
+final = pd.concat(results).groupby(level=0).sum()
+""")
+print("This pattern keeps memory usage constant regardless of file size.")
+`} height={480} />
+
+---
+
+## PROJECT: Full Real-Estate Data Analysis Pipeline
+
+This project loads a messy real-estate dataset, cleans it systematically, analyzes it with groupby and merging, and generates a polished summary report.
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+import io
+
+# ---- Generate messy dataset ----
+rng = np.random.default_rng(42)
+N = 500
+
+neighborhoods = ["Downtown", "Midtown", "Uptown", "Suburbs", "DOWNTOWN", "suburbs", "MIDTOWN"]
+property_types = ["condo", "house", "Condo", "townhouse", "HOUSE", "apartment"]
+agents = [f"Agent{i:02d}" for i in range(1, 21)]
+
+raw = {
+    "listing_id":  range(1001, 1001 + N),
+    "date_listed": pd.date_range("2023-01-01", periods=N, freq="16H").strftime("%Y-%m-%d"),
+    "neighborhood": rng.choice(neighborhoods, N),
+    "type":         rng.choice(property_types, N),
+    "bedrooms":     rng.choice([1, 2, 3, 4, 5, np.nan], N),
+    "bathrooms":    rng.choice([1.0, 1.5, 2.0, 2.5, 3.0, np.nan], N),
+    "sqft":         rng.integers(500, 4500, N).astype(float),
+    "list_price":   rng.integers(250_000, 1_500_000, N).astype(float),
+    "sale_price":   rng.integers(240_000, 1_600_000, N).astype(float),
+    "days_on_market": rng.integers(1, 180, N),
+    "agent_id":     rng.choice(agents, N),
+}
+
+df = pd.DataFrame(raw)
+
+# Inject duplicates (30 rows)
+dup_idx = rng.choice(N, 30, replace=False)
+df = pd.concat([df, df.iloc[dup_idx]], ignore_index=True)
+
+# Inject NaN values
+for col in ["sqft", "list_price", "days_on_market"]:
+    nan_idx = rng.choice(len(df), 20, replace=False)
+    df.loc[nan_idx, col] = np.nan
+
+# Inject outliers
+df.loc[rng.choice(len(df), 5, replace=False), "sale_price"] = 15_000_000  # outliers
+
+print(f"Raw dataset: {len(df)} rows x {df.shape[1]} columns")
+print(f"Missing values:\n{df.isnull().sum()[df.isnull().sum() > 0]}")
+print(f"\nSample neighborhood values: {df['neighborhood'].value_counts().head(6).to_dict()}")
+`} height={500} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+import io
+
+rng = np.random.default_rng(42)
+N = 500
+neighborhoods = ["Downtown", "Midtown", "Uptown", "Suburbs", "DOWNTOWN", "suburbs", "MIDTOWN"]
+property_types = ["condo", "house", "Condo", "townhouse", "HOUSE", "apartment"]
+agents = [f"Agent{i:02d}" for i in range(1, 21)]
+raw = {
+    "listing_id":   range(1001, 1001 + N),
+    "date_listed":  pd.date_range("2023-01-01", periods=N, freq="16H").strftime("%Y-%m-%d"),
+    "neighborhood": rng.choice(neighborhoods, N),
+    "type":         rng.choice(property_types, N),
+    "bedrooms":     rng.choice([1.0, 2.0, 3.0, 4.0, 5.0, np.nan], N),
+    "bathrooms":    rng.choice([1.0, 1.5, 2.0, 2.5, 3.0, np.nan], N),
+    "sqft":         rng.integers(500, 4500, N).astype(float),
+    "list_price":   rng.integers(250_000, 1_500_000, N).astype(float),
+    "sale_price":   rng.integers(240_000, 1_600_000, N).astype(float),
+    "days_on_market": rng.integers(1, 180, N),
+    "agent_id":     rng.choice(agents, N),
+}
+df = pd.DataFrame(raw)
+dup_idx = rng.choice(N, 30, replace=False)
+df = pd.concat([df, df.iloc[dup_idx]], ignore_index=True)
+for col in ["sqft", "list_price", "days_on_market"]:
+    nan_idx = rng.choice(len(df), 20, replace=False)
+    df.loc[nan_idx, col] = np.nan
+df.loc[rng.choice(len(df), 5, replace=False), "sale_price"] = 15_000_000
+
+# ===== CLEANING PIPELINE =====
+print("STEP 1: Remove exact duplicates")
+before = len(df)
+df = df.drop_duplicates(subset=[c for c in df.columns if c != "listing_id"])
+print(f"  {before} -> {len(df)} rows ({before - len(df)} duplicates removed)")
+
+print("\nSTEP 2: Standardize categoricals")
+df["neighborhood"] = df["neighborhood"].str.strip().str.title()
+df["type"] = df["type"].str.strip().str.lower()
+# Map variants to canonical names
+type_map = {"condo": "Condo", "house": "House", "townhouse": "Townhouse", "apartment": "Apartment"}
+df["type"] = df["type"].map(type_map).fillna(df["type"])
+print(f"  Neighborhoods: {sorted(df['neighborhood'].unique())}")
+print(f"  Types: {sorted(df['type'].unique())}")
+
+print("\nSTEP 3: Parse dates")
+df["date_listed"] = pd.to_datetime(df["date_listed"])
+df["month_listed"] = df["date_listed"].dt.to_period("M")
+df["year_listed"]  = df["date_listed"].dt.year
+
+print("\nSTEP 4: Handle missing values")
+df["bedrooms"]   = df["bedrooms"].fillna(df.groupby("type")["bedrooms"].transform("median"))
+df["bathrooms"]  = df["bathrooms"].fillna(df.groupby("type")["bathrooms"].transform("median"))
+df["sqft"]       = df["sqft"].fillna(df.groupby(["type","neighborhood"])["sqft"].transform("median"))
+df["list_price"] = df["list_price"].fillna(df["list_price"].median())
+df["days_on_market"] = df["days_on_market"].fillna(df["days_on_market"].median())
+print(f"  Remaining NaN: {df.isnull().sum().sum()}")
+
+print("\nSTEP 5: Remove outliers (IQR on sale_price)")
+Q1, Q3 = df["sale_price"].quantile(0.25), df["sale_price"].quantile(0.75)
+IQR = Q3 - Q1
+before = len(df)
+df = df[(df["sale_price"] >= Q1 - 1.5*IQR) & (df["sale_price"] <= Q3 + 1.5*IQR)]
+print(f"  {before} -> {len(df)} rows ({before - len(df)} outliers removed)")
+
+print("\nSTEP 6: Derive engineered features")
+df["price_per_sqft"]  = (df["sale_price"] / df["sqft"]).round(2)
+df["sale_ratio"]      = (df["sale_price"] / df["list_price"]).round(4)
+df["over_ask"]        = df["sale_ratio"] > 1.0
+
+print(f"\n=== CLEAN DATASET: {len(df)} rows ===")
+print(df[["neighborhood","type","bedrooms","sqft","list_price","sale_price","price_per_sqft","sale_ratio"]].head(5).round(1))
+`} height={580} />
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+# Rebuild clean dataset compactly
+rng = np.random.default_rng(42)
+N = 500
+neighborhoods = ["Downtown", "Midtown", "Uptown", "Suburbs"]
+property_types = ["Condo", "House", "Townhouse", "Apartment"]
+agents = [f"Agent{i:02d}" for i in range(1, 21)]
+
+df = pd.DataFrame({
+    "listing_id":    range(1001, 1001 + N),
+    "date_listed":   pd.date_range("2023-01-01", periods=N, freq="16H"),
+    "neighborhood":  rng.choice(neighborhoods, N),
+    "type":          rng.choice(property_types, N),
+    "bedrooms":      rng.choice([1.0, 2.0, 3.0, 4.0, 5.0], N),
+    "bathrooms":     rng.choice([1.0, 1.5, 2.0, 2.5, 3.0], N),
+    "sqft":          rng.integers(500, 4500, N).astype(float),
+    "list_price":    rng.integers(250_000, 1_500_000, N).astype(float),
+    "sale_price":    rng.integers(240_000, 1_600_000, N).astype(float),
+    "days_on_market": rng.integers(1, 180, N),
+    "agent_id":      rng.choice(agents, N),
+    "month_listed":  pd.period_range("2023-01", periods=N, freq="D").asfreq("M"),
+})
+df["price_per_sqft"] = (df["sale_price"] / df["sqft"]).round(2)
+df["sale_ratio"]     = (df["sale_price"] / df["list_price"]).round(4)
+df["over_ask"]       = df["sale_ratio"] > 1.0
+
+# ===== ANALYSIS REPORT =====
+print("=" * 60)
+print("       REAL ESTATE MARKET ANALYSIS REPORT")
+print("=" * 60)
+
+# 1. Market overview
+print(f"\nTotal listings analyzed:  {len(df):,}")
+print(f"Average list price:       {chr(36)}{df['list_price'].mean():,.0f}")
+print(f"Average sale price:       {chr(36)}{df['sale_price'].mean():,.0f}")
+print(f"Median sale/list ratio:   {df['sale_ratio'].median():.3f}")
+print(f"Sold over asking:         {df['over_ask'].mean()*100:.1f}%")
+print(f"Avg days on market:       {df['days_on_market'].mean():.0f}")
+
+# 2. By neighborhood
+print("\n--- Median Sale Price by Neighborhood ---")
+by_hood = df.groupby("neighborhood")["sale_price"].agg(
+    median="median", count="count", ppsf="median"
+).sort_values("median", ascending=False)
+by_hood["ppsf"] = df.groupby("neighborhood")["price_per_sqft"].median().round(0)
+for hood, row in by_hood.iterrows():
+    print(f"  {hood:<12} median={chr(36)}{row['median']:>9,.0f}  "
+          f"({row['count']:>3} listings)  {chr(36)}{row['ppsf']:.0f}/sqft")
+
+# 3. By property type
+print("\n--- Property Type Breakdown ---")
+type_stats = df.groupby("type").agg(
+    count=("sale_price", "count"),
+    median_price=("sale_price", "median"),
+    avg_sqft=("sqft", "mean"),
+    over_ask_pct=("over_ask", "mean")
+).round(1)
+type_stats["over_ask_pct"] = (type_stats["over_ask_pct"] * 100).round(1)
+print(type_stats.sort_values("median_price", ascending=False).to_string())
+
+# 4. Monthly trend
+print("\n--- Monthly Listing Trend (2023) ---")
+monthly = df.groupby("month_listed")["sale_price"].agg(["count", "median"])
+monthly.columns = ["count", "median_price"]
+for period, row in list(monthly.iterrows())[:6]:
+    bar = "#" * int(row["count"] / monthly["count"].max() * 20)
+    print(f"  {str(period):<10} {row['count']:>3} listings  "
+          f"median={chr(36)}{row['median_price']:>8,.0f}  {bar}")
+
+# 5. Top agents
+print("\n--- Top 5 Agents by Volume ---")
+agent_stats = df.groupby("agent_id")["sale_price"].agg(
+    volume="sum", deals="count", avg_price="mean"
+).sort_values("volume", ascending=False).head(5)
+for agent, row in agent_stats.iterrows():
+    print(f"  {agent}: {row['deals']} deals, "
+          f"total={chr(36)}{row['volume']:,.0f}, "
+          f"avg={chr(36)}{row['avg_price']:,.0f}")
+`} height={600} />
+
+---
+
+## Exercises
+
+**Exercise 1 (Easy):** Create a DataFrame with columns `name`, `score`, `grade` for 6 students. Use `.loc` to select students with score > 80. Add a column `passed` that is `True` when score >= 60. Print the result.
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+
+# Your solution here
+df = pd.DataFrame({
+    "name":  ["Alice", "Bob", "Carol", "Dave", "Eve", "Frank"],
+    "score": [92, 55, 78, 84, 61, 47],
+    "grade": ["A", "F", "C", "B", "D", "F"],
+})
+
+# 1. Students scoring > 80
+high = df.loc[df["score"] > 80]
+print("Scoring > 80:")
+print(high)
+print()
+
+# 2. Add passed column
+df["passed"] = df["score"] >= 60
+print("With 'passed' column:")
+print(df)
+`} height={380} />
+
+**Exercise 2 (Easy):** Given a Series of transaction amounts as strings (e.g., `"$1,200.50"`), clean them and compute the total, mean, and max.
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+
+transactions = pd.Series([
+    "$1,200.50", "$450.00", "bad_data", "$3,750.25", "$89.99", "$12,000.00"
+])
+
+# Parse: strip $, remove commas, coerce errors
+amounts = pd.to_numeric(
+    transactions.str.replace(r"[$,]", "", regex=True).str.strip(),
+    errors="coerce"
+)
+print("Parsed amounts:", amounts.tolist())
+print(f"Total:  {chr(36)}{amounts.sum():,.2f}")
+print(f"Mean:   {chr(36)}{amounts.mean():,.2f}")
+print(f"Max:    {chr(36)}{amounts.max():,.2f}")
+print(f"Bad entries: {amounts.isna().sum()}")
+`} height={360} />
+
+**Exercise 3 (Medium):** Load the CSV below into a DataFrame. Clean it: fix types, handle missing values, remove duplicates. Then group by `category` and compute total and average `amount`.
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+import io
+
+csv_data = """id,date,category,amount,status
+1,2024-01-10,food,45.50,completed
+2,2024-01-11,tech,199.99,completed
+3,2024-01-12,food,,pending
+4,2024-01-13,travel,320.00,completed
+5,2024-01-11,tech,199.99,completed
+6,2024-01-14,food,22.75,completed
+7,2024-01-15,travel,,completed
+8,2024-01-16,tech,89.00,refunded
+"""
+
+df = pd.read_csv(io.StringIO(csv_data))
+print("Raw data:")
+print(df)
+print()
+
+# Clean
+df["date"] = pd.to_datetime(df["date"])
+df = df.drop_duplicates(subset=["date","category","amount","status"])
+df["amount"] = df["amount"].fillna(df.groupby("category")["amount"].transform("median"))
+
+print("Cleaned:")
+print(df)
+print()
+
+print("By category:")
+print(df.groupby("category")["amount"].agg(total="sum", avg="mean").round(2))
+`} height={500} />
+
+**Exercise 4 (Medium):** Implement a z-score outlier removal function. Given a DataFrame and column name, return a copy with rows removed where the z-score of that column exceeds a threshold.
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+def remove_zscore_outliers(df, col, threshold=2.5):
+    """Return df with rows where abs(z-score of col) > threshold removed."""
+    mean = df[col].mean()
+    std  = df[col].std()
+    z_scores = (df[col] - mean) / std
+    mask = z_scores.abs() <= threshold
+    removed = (~mask).sum()
+    print(f"Removed {removed} outliers (|z| > {threshold}) from '{col}'")
+    return df[mask].copy()
+
+rng = np.random.default_rng(42)
+df = pd.DataFrame({
+    "id":     range(1, 101),
+    "salary": np.concatenate([rng.normal(70_000, 10_000, 96), [250_000, 300_000, -5_000, 1_000]])
+})
+
+print(f"Before: {len(df)} rows, max={df['salary'].max():,.0f}")
+df_clean = remove_zscore_outliers(df, "salary")
+print(f"After:  {len(df_clean)} rows, max={df_clean['salary'].max():,.0f}")
+print(f"Mean before: {chr(36)}{df['salary'].mean():,.0f}")
+print(f"Mean after:  {chr(36)}{df_clean['salary'].mean():,.0f}")
+`} height={420} />
+
+**Exercise 5 (Medium):** Create two DataFrames — `orders` and `products` — and merge them. Compute revenue (quantity * price) per product category.
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+rng = np.random.default_rng(42)
+orders = pd.DataFrame({
+    "order_id":   range(1, 21),
+    "product_id": rng.choice([101, 102, 103, 104, 105], 20),
+    "quantity":   rng.integers(1, 10, 20),
+    "date":       pd.date_range("2024-01-01", periods=20, freq="D"),
+})
+
+products = pd.DataFrame({
+    "product_id": [101, 102, 103, 104, 105],
+    "name":       ["Widget A", "Widget B", "Gadget X", "Gadget Y", "Doohickey"],
+    "category":   ["Widget", "Widget", "Gadget", "Gadget", "Other"],
+    "price":      [9.99, 19.99, 49.99, 79.99, 4.99],
+})
+
+# Merge and compute revenue
+merged = pd.merge(orders, products, on="product_id")
+merged["revenue"] = merged["quantity"] * merged["price"]
+
+print("Merged (first 5):")
+print(merged[["order_id","name","category","quantity","price","revenue"]].head())
+print()
+
+# Revenue by category
+cat_rev = merged.groupby("category")["revenue"].agg(
+    total="sum", orders="count", avg_order="mean"
 ).sort_values("total", ascending=False)
-by_product["total"] = by_product["total"].map("{chr(36)}{:,.0f}".format)
-by_product["avg_order"] = by_product["avg_order"].map("{chr(36)}{:,.2f}".format)
-print(by_product)
+print("Revenue by category:")
+print(cat_rev.round(2))
+`} height={460} />
 
-# Revenue by region
-print("\n--- Revenue by Region ---")
-by_region = df.groupby("region")["revenue"].sum().sort_values(ascending=False)
-total_rev = df["revenue"].sum()
-for region, rev in by_region.items():
-    pct = rev / total_rev * 100
-    print(f"  {region:<10} {chr(36)}{rev:>10,.0f}  ({pct:.1f}%)")
+**Exercise 6 (Medium):** Build a pivot table from sales data showing total sales by region (rows) and product (columns). Add a totals row and column.
 
-# Monthly revenue trend
-print("\n--- Monthly Revenue (2023) ---")
-monthly = df.groupby("month")["revenue"].sum()
-max_month = monthly.idxmax()
-for period, rev in monthly.items():
-    bar = "█" * int(rev / monthly.max() * 20)
-    marker = " ← peak" if period == max_month else ""
-    print(f"  {str(period):<10} {chr(36)}{rev:>8,.0f}  {bar}{marker}")
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
 
-# Top 5 customers
-print("\n--- Top 5 Customers by Revenue ---")
-top_customers = (df.groupby("customer_id")["revenue"]
-                 .sum()
-                 .sort_values(ascending=False)
-                 .head(5))
-for cust, rev in top_customers.items():
-    pct = rev / total_rev * 100
-    print(f"  {cust}: {chr(36)}{rev:,.0f} ({pct:.1f}% of total)")
+rng = np.random.default_rng(42)
+N = 200
+df = pd.DataFrame({
+    "region":  rng.choice(["North","South","East","West"], N),
+    "product": rng.choice(["Widget","Gadget","Doohickey"], N),
+    "sales":   rng.integers(100, 5000, N).astype(float),
+})
 
-# Growth rate (MoM)
-print("\n--- Month-over-Month Growth ---")
-monthly_series = df.groupby("month")["revenue"].sum()
-mom_growth = monthly_series.pct_change() * 100
-for period, growth in mom_growth.dropna().items():
-    arrow = "▲" if growth > 0 else "▼"
-    print(f"  {str(period)}: {arrow} {growth:+.1f}%")
+pt = df.pivot_table(
+    values="sales",
+    index="region",
+    columns="product",
+    aggfunc="sum",
+    margins=True,
+    margins_name="TOTAL",
+    fill_value=0
+)
 
-print(f"\nTotal Revenue: {chr(36)}{total_rev:,.0f}")
-print(f"Total Orders:  {len(df):,}")
-print(f"Avg Order:     {chr(36)}{df['revenue'].mean():,.2f}")
-`} packages={["numpy", "pandas"]} />
+# Format as integers
+print("Sales Pivot Table (region x product):")
+print(pt.astype(int).to_string())
+print()
+
+# Find best region-product combination (excluding totals)
+pt_no_total = pt.iloc[:-1, :-1]
+best_region, best_product = divmod(pt_no_total.values.argmax(), pt_no_total.shape[1])
+print(f"Best combination: {pt_no_total.index[best_region]} x "
+      f"{pt_no_total.columns[best_product]} = "
+      f"{chr(36)}{pt_no_total.values.max():,.0f}")
+`} height={440} />
+
+**Exercise 7 (Hard):** Implement a complete time-series feature engineering pipeline: given daily price data, compute 7-day and 30-day moving averages, daily returns, 7-day rolling volatility, and a boolean flag for "golden cross" (MA7 crosses above MA30).
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+rng = np.random.default_rng(42)
+dates = pd.date_range("2023-01-01", periods=252, freq="B")
+prices = 100 * np.exp(np.cumsum(rng.standard_normal(252) * 0.01 + 0.0003))
+
+df = pd.DataFrame({"price": prices}, index=dates)
+
+# ===== Feature Engineering Pipeline =====
+
+# Moving averages
+df["ma7"]  = df["price"].rolling(7).mean()
+df["ma30"] = df["price"].rolling(30).mean()
+
+# Daily returns
+df["return_pct"] = df["price"].pct_change() * 100
+
+# Rolling volatility (annualized: daily std * sqrt(252))
+df["vol7_ann"] = df["price"].pct_change().rolling(7).std() * np.sqrt(252) * 100
+
+# Golden cross: MA7 crosses above MA30
+# True on the exact day MA7 first exceeds MA30 (prev day MA7 <= MA30)
+df["above_ma30"] = df["ma7"] > df["ma30"]
+df["golden_cross"] = df["above_ma30"] & ~df["above_ma30"].shift(1).fillna(False)
+df["death_cross"]  = ~df["above_ma30"] & df["above_ma30"].shift(1).fillna(True)
+
+crosses = df[df["golden_cross"] | df["death_cross"]]
+print("Golden/Death crosses:")
+for dt, row in crosses.iterrows():
+    cross_type = "GOLDEN" if row["golden_cross"] else "DEATH"
+    print(f"  {dt.date()}  {cross_type}  price={row['price']:.2f}  "
+          f"MA7={row['ma7']:.2f}  MA30={row['ma30']:.2f}")
+
+print()
+print("=== Feature summary (last 10 rows) ===")
+summary = df[["price","ma7","ma30","return_pct","vol7_ann","golden_cross","death_cross"]].tail(10)
+pd.set_option("display.float_format", "{:.2f}".format)
+print(summary)
+`} height={540} />
+
+**Exercise 8 (Hard):** Build a data quality checker class that takes a DataFrame and produces a structured report: column types, missing percentages, unique counts, outlier counts (IQR), and a quality score.
+
+<PythonPlayground packages={["numpy", "pandas"]} code={String.raw`import pandas as pd
+import numpy as np
+
+class DataQualityReport:
+    """Compute and display a structured data quality report."""
+
+    def __init__(self, df: pd.DataFrame):
+        self.df = df
+        self.n_rows = len(df)
+        self.n_cols = df.shape[1]
+
+    def _count_outliers(self, series: pd.Series) -> int:
+        if not pd.api.types.is_numeric_dtype(series):
+            return 0
+        clean = series.dropna()
+        if len(clean) < 4:
+            return 0
+        Q1, Q3 = clean.quantile(0.25), clean.quantile(0.75)
+        IQR = Q3 - Q1
+        return int(((clean < Q1 - 1.5*IQR) | (clean > Q3 + 1.5*IQR)).sum())
+
+    def column_report(self) -> pd.DataFrame:
+        rows = []
+        for col in self.df.columns:
+            series = self.df[col]
+            n_null = series.isna().sum()
+            rows.append({
+                "column":    col,
+                "dtype":     str(series.dtype),
+                "null_pct":  round(n_null / self.n_rows * 100, 1),
+                "unique":    series.nunique(),
+                "top_value": series.value_counts().index[0] if series.nunique() > 0 else None,
+                "outliers":  self._count_outliers(series),
+            })
+        return pd.DataFrame(rows).set_index("column")
+
+    def quality_score(self) -> float:
+        """0-100 composite quality score."""
+        report = self.column_report()
+        completeness = 1 - report["null_pct"].mean() / 100
+        dup_rate = self.df.duplicated().mean()
+        outlier_rate = report["outliers"].sum() / (self.n_rows * len(report))
+        return round((completeness * 0.5 + (1 - dup_rate) * 0.3 + (1 - outlier_rate) * 0.2) * 100, 1)
+
+    def print_report(self):
+        print("=" * 65)
+        print("  DATA QUALITY REPORT")
+        print("=" * 65)
+        print(f"  Rows: {self.n_rows:,}   Columns: {self.n_cols}   "
+              f"Duplicates: {self.df.duplicated().sum():,}")
+        print(f"  Quality Score: {self.quality_score()}/100")
+        print()
+        rpt = self.column_report()
+        print(rpt.to_string())
+        print()
+        print("Columns with > 10% missing:")
+        high_null = rpt[rpt["null_pct"] > 10]
+        if len(high_null):
+            for col, row in high_null.iterrows():
+                print(f"  {col}: {row['null_pct']}% missing")
+        else:
+            print("  None")
+
+# --- Test it ---
+rng = np.random.default_rng(42)
+N = 300
+df_test = pd.DataFrame({
+    "id":       range(N),
+    "name":     [f"Person{i}" for i in range(N)],
+    "age":      np.where(rng.random(N) < 0.05, np.nan, rng.integers(18, 80, N)),
+    "salary":   np.concatenate([rng.normal(65_000, 15_000, 290), [500_000]*10]),
+    "dept":     rng.choice(["eng","sales","ops"], N),
+    "rating":   np.where(rng.random(N) < 0.15, np.nan, rng.uniform(1, 5, N).round(1)),
+})
+# Add duplicate rows
+df_test = pd.concat([df_test, df_test.iloc[:10]], ignore_index=True)
+
+report = DataQualityReport(df_test)
+report.print_report()
+`} height={600} />
+
+---
 
 ## Key Takeaways
 
-- **Index alignment is pandas' superpower and footgun**: operations between DataFrames/Series automatically align on the index — great for correctness, but unexpected when your indexes don't match and you get all-NaN results
-- **`.loc` is label-based, `.iloc` is position-based**: never mix them up, and always use `.loc[mask, col] = value` to avoid the chained-assignment warning
-- **`pd.to_numeric(errors='coerce')` and `pd.to_datetime` are your first cleaning steps**: they turn bad data into `NaN` rather than raising exceptions, giving you explicit control over what to do next
-- **`groupby().agg()` with named aggregations is more readable than chaining**: `agg(total=("col", "sum"), count=("col", "count"))` produces a clean, named-column result in one call
-- **`transform` keeps the original shape**: use it when you want to add a group statistic as a column to the original DataFrame without reducing rows
-- **Categorical dtype is a free optimization**: string columns with low cardinality (status, region, category) use 5–20x less memory as `category` and sort/groupby faster
-- **`merge` vs `concat`**: `merge` joins on column values (like SQL JOIN); `concat` stacks DataFrames along an axis (like UNION ALL) — they solve different problems
-- **Chained indexing (`df["col"][mask] = val`) may silently fail**: pandas can't tell if you're working on a copy or a view; always use `.loc` for assignment
+- **Index alignment is pandas' superpower and footgun**: operations between Series/DataFrames automatically align on the index — invaluable for correctness, but produces all-NaN results when your indexes don't match unexpectedly
+- **`.loc` is label-based, `.iloc` is position-based**: always use `.loc[mask, col] = value` for assignment — chained indexing (`df["col"][mask] = val`) may silently operate on a copy
+- **`pd.to_numeric(errors='coerce')` and `pd.to_datetime()` are your first cleaning moves**: they convert bad data to `NaN` rather than crashing, giving you explicit control over the repair
+- **Named aggregations are more readable**: `agg(total=("sales","sum"), count=("sales","count"))` produces clean, named columns in one call instead of chaining `.rename()`
+- **`transform` keeps the original shape**: use it when you want to add a group statistic back to the original DataFrame without reducing rows; `.agg()` collapses rows
+- **Categorical dtype is a free 5–20x memory saving**: any string column with low cardinality (status, region, type) should be `astype("category")`
+- **`merge` vs `concat`**: `merge` joins on column values (SQL JOIN semantics); `concat` stacks DataFrames along an axis (UNION ALL semantics) — they solve completely different problems
+- **Prefer vectorized ops over `apply()`**: `apply(axis=1)` is a Python loop over rows — it's 50–200x slower than equivalent NumPy/pandas vectorized operations

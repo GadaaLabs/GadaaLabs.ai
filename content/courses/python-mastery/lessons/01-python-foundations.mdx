@@ -1,363 +1,1175 @@
 ---
-title: "Python Foundations — Variables, Types & Control Flow"
-description: "Learn how Python stores values, how types work at runtime, and how to control program flow. Build a number guessing game and a unit converter — real programs from the first lesson."
-duration: 28
+title: "Python Foundations — Variables, Types, Memory & Control Flow"
+description: "Master how Python actually stores values in memory, how every type behaves, and how to control program flow with confidence. Build a BMI calculator and a grade analyzer."
+duration: 35
 order: 1
 ---
 
-## How Python Actually Works
+## Python's Memory Model — How Objects Really Work
 
-Python is an interpreted language with a twist: your source code is first compiled to **bytecode** (`.pyc` files), then executed by the CPython virtual machine. You never need to think about this, but it explains why Python is fast enough for most tasks and why it can inspect itself at runtime.
+Before writing a single line of useful code, you need to understand what Python is actually doing when you type `x = 42`. This mental model will save you hours of debugging confusion later.
 
-Every value in Python is an **object**. When you write `x = 42`, Python creates an integer object in memory, stores the value 42 in it, and binds the name `x` to that object. The name is just a label — you can rebind it to anything.
+In Python, **everything is an object**. An integer is an object. A string is an object. A function is an object. Even `None` is an object. Each object lives somewhere in memory and has three attributes baked into it:
 
-```python
-x = 42        # x points to an int object
-x = "hello"   # x now points to a str object — no error
-x = [1, 2, 3] # x now points to a list object
-```
+- **Identity** — its unique address in memory (returned by `id()`)
+- **Type** — what kind of object it is (returned by `type()`)
+- **Value** — the data it holds
 
-This is called **dynamic typing**. The variable has no type — the object does.
+When you write `x = 42`, Python does NOT create a variable that *contains* 42. Instead:
+1. Python creates an `int` object in memory with value `42`
+2. Python binds the *name* `x` to that object
 
-## Your First Program
+The name is just a label pointing at an object. This distinction is fundamental.
 
-<PythonPlayground code={String.raw`# Everything starts here
-name = "World"
-print(f"Hello, {name}!")
+<PythonPlayground code={String.raw`import sys
 
-# Python uses indentation (4 spaces) instead of braces
-for i in range(5):
-    print(f"Count: {i}")
+x = 42
+print(f"Value:    {x}")
+print(f"Type:     {type(x)}")
+print(f"Identity: {id(x)}")          # memory address
 
-print("Done!")
-`} />
+# Assign x to y -- both names point to THE SAME object
+y = x
+print(f"\nAfter y = x:")
+print(f"id(x) = {id(x)}")
+print(f"id(y) = {id(y)}")
+print(f"x is y = {x is y}")          # True -- same object!
 
-Click **Run** above. Try changing `"World"` to your name. This is how every lesson works — the code is live.
+# Rebind x to a new value -- y is unaffected
+x = 100
+print(f"\nAfter x = 100:")
+print(f"x = {x}, id(x) = {id(x)}")
+print(f"y = {y}, id(y) = {id(y)}")   # y still points to 42
+print(f"x is y = {x is y}")          # False now
+`} height={380} />
 
-## Variables and Assignment
+### Identity vs Equality: `is` vs `==`
 
-Variable names are case-sensitive, must start with a letter or `_`, and follow `snake_case` by convention.
+This is one of Python's most misunderstood distinctions.
 
-<PythonPlayground code={String.raw`# Multiple assignment
-x, y, z = 1, 2, 3
-print(x, y, z)
+- `==` checks **value equality** — do the objects hold the same data?
+- `is` checks **identity** — are they the *exact same object* in memory?
 
-# Swap without a temp variable
-x, y = y, x
-print(f"After swap: x={x}, y={y}")
+<PythonPlayground code={String.raw`a = [1, 2, 3]
+b = [1, 2, 3]   # a new list with same values
+c = a            # c points to the SAME list as a
 
-# Augmented assignment
-count = 0
-count += 1    # same as count = count + 1
-count *= 10
-print(f"count = {count}")
+print(f"a == b: {a == b}")    # True  -- same values
+print(f"a is b: {a is b}")    # False -- different objects
+print(f"a == c: {a == c}")    # True  -- same values
+print(f"a is c: {a is c}")    # True  -- same object!
 
-# Check the type of any object
-print(type(42))        # <class 'int'>
-print(type(3.14))      # <class 'float'>
-print(type("hello"))   # <class 'str'>
-print(type(True))      # <class 'bool'>
-print(type(None))      # <class 'NoneType'>
-`} />
+# Mutating through one name affects the other
+c.append(4)
+print(f"\nAfter c.append(4):")
+print(f"a = {a}")   # [1, 2, 3, 4] -- a was affected too!
+print(f"c = {c}")   # [1, 2, 3, 4]
+`} height={300} />
 
-## The Built-in Types
+This is called **aliasing** — two names pointing to the same mutable object. It is a common source of bugs. Always use `==` to compare values. Reserve `is` for checking `None` (`if x is None`).
 
-Python has five primitive types you use constantly:
+### Integer Caching — A CPython Optimization
 
-| Type | Example | Notes |
-|------|---------|-------|
-| `int` | `42`, `-7`, `1_000_000` | Unlimited precision |
-| `float` | `3.14`, `1e-5` | IEEE 754 double |
-| `str` | `"hello"`, `'world'` | Immutable, Unicode |
-| `bool` | `True`, `False` | Subclass of int |
-| `NoneType` | `None` | Represents absence |
+CPython pre-creates integer objects for small integers (-5 to 256) and reuses them. This is why `a is b` is `True` for small numbers but `False` for large ones — it's a performance optimization, not part of the language spec. You should never rely on this behavior.
 
-<PythonPlayground code={String.raw`# int arithmetic
-print(10 // 3)   # floor division → 3
-print(10 % 3)    # modulo → 1
-print(2 ** 10)   # exponentiation → 1024
-print(abs(-42))  # absolute value → 42
+<PythonPlayground code={String.raw`# Small integers are cached -- same object
+a = 100
+b = 100
+print(f"a is b (100): {a is b}")    # True -- cached
 
-# float gotcha — always present in interviews
-print(0.1 + 0.2)          # 0.30000000000000004
-print(round(0.1 + 0.2, 2)) # 0.3 — use round() when precision matters
+# Large integers are NOT cached
+x = 1000
+y = 1000
+print(f"x is y (1000): {x is y}")  # False -- different objects
 
-# Booleans are integers
-print(True + True)   # 2
-print(True * 5)      # 5
-print(int(False))    # 0
+# But equality still works
+print(f"x == y: {x == y}")          # True
 
-# None is a singleton
-x = None
-print(x is None)     # True — use 'is', not '=='
-`} />
+# This is why you should NEVER use 'is' to compare numbers
+# Always use == for value comparison
+`} height={260} />
 
-## Strings — The Most Used Type
+### Reference Counting and Garbage Collection
 
-Strings are immutable sequences of Unicode characters. You will use string operations constantly.
+Python tracks how many names (references) point to each object. When the count hits zero, the object is freed. You can inspect this with `sys.getrefcount()` — it reports one higher than you expect because the function call itself creates a temporary reference.
 
-<PythonPlayground code={String.raw`# String creation
-s1 = "double quotes"
-s2 = 'single quotes'
-s3 = """triple quotes
-span multiple lines"""
+<PythonPlayground code={String.raw`import sys
 
-# f-strings (Python 3.6+) — use these everywhere
+x = [1, 2, 3]
+print(f"refcount of x: {sys.getrefcount(x)}")  # 2 (x + getrefcount arg)
+
+y = x   # add a reference
+print(f"refcount after y=x: {sys.getrefcount(x)}")  # 3
+
+z = x   # add another
+print(f"refcount after z=x: {sys.getrefcount(x)}")  # 4
+
+del y   # remove a reference
+print(f"refcount after del y: {sys.getrefcount(x)}")  # 3
+
+# When refcount hits 0, the memory is reclaimed
+# CPython also has a cyclic garbage collector for reference cycles
+# You rarely need to think about any of this -- Python handles it
+`} height={280} />
+
+---
+
+## All Numeric Types in Depth
+
+### `int` — Arbitrary Precision Integers
+
+Python's `int` is not a fixed 32-bit or 64-bit integer like in C or Java. It grows to hold any value you need, limited only by available RAM. Python never has integer overflow.
+
+<PythonPlayground code={String.raw`# Python handles arbitrarily large integers
+googol = 10 ** 100
+print(f"10^100 has {len(str(googol))} digits")
+
+# Factorial of 100 -- no overflow
+import math
+fact_100 = math.factorial(100)
+print(f"100! has {len(str(fact_100))} digits")
+
+# Integer operations
+a, b = 17, 5
+print(f"\n{a} + {b}  = {a + b}")
+print(f"{a} - {b}  = {a - b}")
+print(f"{a} * {b}  = {a * b}")
+print(f"{a} / {b}  = {a / b}")      # float division -- ALWAYS returns float
+print(f"{a} // {b} = {a // b}")     # floor division -- truncates toward -infinity
+print(f"{a} % {b}  = {a % b}")      # modulo
+print(f"{a} ** {b} = {a ** b}")     # exponentiation
+
+# divmod gives both quotient and remainder in one call (more efficient)
+q, r = divmod(a, b)
+print(f"\ndivmod({a}, {b}) = quotient={q}, remainder={r}")
+# Verify: b * q + r == a
+print(f"Verify: {b} * {q} + {r} = {b * q + r}")
+
+# abs and modular pow
+print(f"\nabs(-42) = {abs(-42)}")
+print(f"pow(2, 10, 1000) = {pow(2, 10, 1000)}")  # (2^10) mod 1000 -- fast
+`} height={420} />
+
+Bitwise operations work on integers — critical for flags, masks, and systems programming:
+
+<PythonPlayground code={String.raw`a = 0b1010   # 10
+b = 0b1100   # 12
+
+print(f"a       = {bin(a):>10} = {a}")
+print(f"b       = {bin(b):>10} = {b}")
+print(f"a & b   = {bin(a & b):>10} = {a & b}")    # AND: both bits must be 1
+print(f"a | b   = {bin(a | b):>10} = {a | b}")    # OR: either bit is 1
+print(f"a ^ b   = {bin(a ^ b):>10} = {a ^ b}")    # XOR: exactly one bit is 1
+print(f"~a      = {bin(~a):>10} = {~a}")           # NOT: flip all bits
+print(f"a << 1  = {bin(a << 1):>10} = {a << 1}")  # left shift = multiply by 2
+print(f"a >> 1  = {bin(a >> 1):>10} = {a >> 1}")  # right shift = divide by 2
+
+# Number literals in different bases
+print(f"\nBinary 0b11111111  = {0b11111111}")
+print(f"Octal  0o377       = {0o377}")
+print(f"Hex    0xFF        = {0xFF}")
+
+# Practical: check if a number is even/odd with bitmask
+n = 42
+print(f"\n{n} is {'even' if n & 1 == 0 else 'odd'}")
+`} height={400} />
+
+### `float` — IEEE 754 Double Precision
+
+Python floats are 64-bit IEEE 754 doubles. They give 15-17 significant decimal digits of precision, but cannot represent all decimal fractions exactly. Understanding this prevents nasty bugs.
+
+<PythonPlayground code={String.raw`import math
+
+# The famous floating-point gotcha
+print(0.1 + 0.2)               # 0.30000000000000004
+print(0.1 + 0.2 == 0.3)        # False!
+
+# Why? 0.1 in binary is 0.000110011001100... (infinitely repeating)
+# Just like 1/3 in decimal is 0.333... Python stores the closest approximation
+
+# How to compare floats correctly
+print(math.isclose(0.1 + 0.2, 0.3))                      # True
+print(math.isclose(0.1 + 0.2, 0.3, rel_tol=1e-9))        # True
+# or use round() for display
+print(round(0.1 + 0.2, 10) == round(0.3, 10))             # True
+
+# Float special values
+inf = float("inf")
+nan = float("nan")
+print(f"\nInfinity:  {inf}")
+print(f"-Infinity: {-inf}")
+print(f"NaN:       {nan}")
+print(f"NaN == NaN: {nan == nan}")     # False! NaN is never equal to anything
+print(f"isnan(nan): {math.isnan(nan)}")
+print(f"isinf(inf): {math.isinf(inf)}")
+
+# Useful math functions
+print(f"\nfloor(3.7):      {math.floor(3.7)}")
+print(f"ceil(3.2):       {math.ceil(3.2)}")
+print(f"round(3.5):      {round(3.5)}")   # banker's rounding (rounds to even)
+print(f"round(4.5):      {round(4.5)}")   # rounds to 4 (even)
+print(f"round(3.14159,2):{round(3.14159, 2)}")
+print(f"sqrt(144):       {math.sqrt(144)}")
+print(f"log(e):          {math.log(math.e):.1f}")
+print(f"log10(1000):     {math.log10(1000):.1f}")
+print(f"sin(pi/2):       {math.sin(math.pi/2):.1f}")
+`} height={480} />
+
+When you need exact decimal arithmetic — money, accounting — use the `decimal` module:
+
+<PythonPlayground code={String.raw`from decimal import Decimal, getcontext
+
+# Set precision to 28 significant digits (default is already 28)
+getcontext().prec = 28
+
+price = Decimal("19.99")
+tax   = Decimal("0.08")
+total = price * (1 + tax)
+
+print(f"Price:         {price}")
+print(f"Tax amount:    {price * tax}")
+print(f"Total:         {total}")
+print(f"Total rounded: {round(total, 2)}")
+
+# Compare with float
+float_total = 19.99 * 1.08
+print(f"\nFloat total:   {float_total}")     # slight imprecision
+print(f"Decimal total: {float(total)}")
+
+# Decimal supports the same operators
+a = Decimal("1") / Decimal("3")
+print(f"\n1/3 with Decimal: {a}")
+`} height={300} />
+
+### `complex` — Complex Numbers Built In
+
+Python has first-class complex number support. The `j` suffix (not `i`) marks the imaginary part.
+
+<PythonPlayground code={String.raw`import math, cmath
+
+z1 = 3 + 4j
+z2 = 1 - 2j
+
+print(f"z1 = {z1}")
+print(f"z2 = {z2}")
+print(f"Real part:   z1.real = {z1.real}")
+print(f"Imag part:   z1.imag = {z1.imag}")
+print(f"Conjugate:   z1.conjugate() = {z1.conjugate()}")
+
+# Magnitude (modulus) = sqrt(a^2 + b^2)
+print(f"Magnitude:   abs(z1) = {abs(z1)}")    # = sqrt(9 + 16) = 5.0
+
+print(f"\nz1 + z2 = {z1 + z2}")
+print(f"z1 * z2 = {z1 * z2}")
+print(f"z1 / z2 = {z1 / z2:.4f}")
+
+# Phase angle (argument)
+angle = cmath.phase(z1)
+print(f"\nPhase: {angle:.4f} rad = {math.degrees(angle):.2f} degrees")
+
+# Euler's formula: e^(i*pi) + 1 = 0
+result = cmath.exp(1j * cmath.pi) + 1
+print(f"\nEuler: e^(i*pi) + 1 = {result}")   # approximately 0
+`} height={380} />
+
+### `bool` — A Subclass of `int`
+
+`bool` is literally a subclass of `int`. `True` equals `1` and `False` equals `0`. This has surprising practical implications.
+
+<PythonPlayground code={String.raw`print(type(True))             # <class 'bool'>
+print(isinstance(True, int))  # True -- bool IS an int subclass
+print(True == 1)              # True
+print(False == 0)             # True
+
+print(True + True)            # 2
+print(True * 5)               # 5
+print(False * 100)            # 0
+
+# Count Trues using sum()
+votes = [True, False, True, True, False, True]
+print(f"\nYes votes: {sum(votes)}")    # 4
+
+# All falsy values in Python
+print("\n--- Falsy values ---")
+for val in [0, 0.0, 0j, "", [], {}, set(), None, False]:
+    print(f"  bool({repr(val):12}) = {bool(val)}")
+
+print("\n--- Truthy values ---")
+for val in [1, -1, 0.001, "x", [0], {"a": 1}, True]:
+    print(f"  bool({repr(val):12}) = {bool(val)}")
+`} height={420} />
+
+**Short-circuit evaluation** is essential to understand — Python stops evaluating `and`/`or` the moment the result is known:
+
+<PythonPlayground code={String.raw`# 'and' returns first falsy value, or the last value
+print(1 and 2)            # 2   (both truthy, return last)
+print(0 and 2)            # 0   (0 is falsy, short-circuit)
+print("" and "hello")     # ""  (empty string is falsy)
+print("a" and "b")        # "b" (both truthy)
+
+# 'or' returns first truthy value, or the last value
+print(0 or 2)             # 2   (0 is falsy, try next)
+print(1 or 2)             # 1   (1 is truthy, stop here)
+print("" or "default")    # "default" -- common fallback pattern
+print(None or "fallback") # "fallback"
+print(0 or 0 or 0)        # 0   (all falsy, return last)
+
+# Practical: provide a default value
+user_input = ""
+name = user_input or "Anonymous"
+print(f"\nDisplay name: {name}")
+
+# Short-circuit prevents errors -- if data is None, data["key"] never runs
+data = None
+result = data is not None and data["key"]
+print(f"Safe access: {result}")
+`} height={380} />
+
+---
+
+## Strings — A Complete Deep Dive
+
+### Immutability and Why It Matters
+
+Strings in Python are **immutable** — once created, they cannot be modified. Any "modification" operation creates and returns a new string object. This enables safe sharing (two names can point to the same string with no aliasing issues) and allows strings to be hashable (usable as dictionary keys).
+
+<PythonPlayground code={String.raw`s = "hello"
+print(f"id before: {id(s)}")
+
+# += does NOT modify the string in-place -- it creates a new string
+s = s + " world"
+print(f"id after:  {id(s)}")
+print(f"s = {s}")
+
+# You CANNOT change individual characters
+# s[0] = "H"  # TypeError: 'str' object does not support item assignment
+
+# To build strings from many parts, join() is the right tool
+# It creates exactly one string object
+parts = ["The", "quick", "brown", "fox"]
+result = " ".join(parts)
+print(f"\nJoined: {result}")
+
+# Loop concatenation is inefficient -- creates N intermediate strings
+slow = ""
+for word in parts:
+    slow += word + " "           # creates a new object each iteration
+
+# join() is O(n) and creates one object
+fast = " ".join(parts)
+print(f"Fast result: {fast}")
+`} height={340} />
+
+### Indexing, Slicing, and Step
+
+<PythonPlayground code={String.raw`s = "Python Mastery"
+n = len(s)
+print(f"String: '{s}'  Length: {n}")
+
+# Positive indexing (0 to n-1)
+print(f"\ns[0]  = '{s[0]}'")
+print(f"s[6]  = '{s[6]}'")
+
+# Negative indexing (counts from end: -1 is last)
+print(f"s[-1] = '{s[-1]}'")
+print(f"s[-7] = '{s[-7]}'")
+
+# Slicing: s[start:stop:step]  -- stop is EXCLUSIVE
+print(f"\ns[0:6]    = '{s[0:6]}'")    # "Python"
+print(f"s[7:]     = '{s[7:]}'")      # "Mastery" (to end)
+print(f"s[:6]     = '{s[:6]}'")      # "Python" (from start)
+print(f"s[-7:]    = '{s[-7:]}'")     # last 7 characters
+
+# Step
+print(f"\ns[::2]    = '{s[::2]}'")   # every 2nd character
+print(f"s[::-1]   = '{s[::-1]}'")   # reversed!
+print(f"s[1::2]   = '{s[1::2]}'")   # every 2nd starting at index 1
+
+# Real-world use: palindrome check
+def is_palindrome(word):
+    clean = word.lower().replace(" ", "")
+    return clean == clean[::-1]
+
+tests = ["racecar", "hello", "A man a plan a canal Panama", "python"]
+for t in tests:
+    print(f"  is_palindrome({repr(t)}) = {is_palindrome(t)}")
+`} height={460} />
+
+### All Important String Methods
+
+<PythonPlayground code={String.raw`# --- Stripping ---
+s = "  Hello, World!  "
+print(repr(s.strip()))           # both ends
+print(repr(s.lstrip()))          # left only
+print(repr(s.rstrip()))          # right only
+print(repr("...hello...".strip(".")))  # strip specific chars
+
+# --- Case ---
+s = "Hello, Python World!"
+print(s.upper())
+print(s.lower())
+print(s.title())
+print(s.swapcase())
+print(s.capitalize())
+
+# --- Searching ---
+print(f"\nfind('Python'):     {s.find('Python')}")    # returns index or -1
+print(f"index('World'):     {s.index('World')}")    # returns index or ValueError
+print(f"rfind('o'):         {s.rfind('o')}")         # search from right
+print(f"count('l'):         {s.count('l')}")
+print(f"startswith('He'):   {s.startswith('He')}")
+print(f"endswith('!'):      {s.endswith('!')}")
+print(f"'Python' in s:      {'Python' in s}")
+
+# --- Splitting ---
+words = s.split()                   # split on any whitespace
+print(f"\nWords: {words}")
+csv = "a,b,c,d,e"
+print(f"CSV split:   {csv.split(',')}")
+print(f"split 2:     {csv.split(',', 2)}")  # max 2 splits
+print(f"rsplit 2:    {csv.rsplit(',', 2)}") # split from right
+
+# --- Replacing ---
+print(f"\nReplace: {s.replace('Python', 'JavaScript')}")
+print(f"Limited: {'aabbaab'.replace('a', 'x', 2)}")
+
+# --- Alignment ---
+print(f"\n'42'.rjust(10):   '{'42'.rjust(10)}'")
+print(f"'42'.ljust(10):   '{'42'.ljust(10)}'")
+print(f"'42'.center(10):  '{'42'.center(10)}'")
+print(f"'42'.zfill(8):    '{'42'.zfill(8)}'")
+print(f"center fill:      '{'hi'.center(10, '-')}'")
+
+# --- Checking ---
+print(f"\n'abc'.isalpha():   {'abc'.isalpha()}")
+print(f"'123'.isdigit():   {'123'.isdigit()}")
+print(f"'abc123'.isalnum():{'abc123'.isalnum()}")
+print(f"'   '.isspace():   {'   '.isspace()}")
+print(f"'Hello'.istitle(): {'Hello'.istitle()}")
+`} height={580} />
+
+### f-String Format Specifications
+
+f-strings support a powerful mini-language. The syntax is `{value:format_spec}` where format_spec follows `[[fill]align][sign][#][0][width][grouping][.precision][type]`.
+
+<PythonPlayground code={String.raw`pi    = 3.14159265358979
+price = 1234567.89
+score = 0.8753
+
+# Float precision and notation
+print(f"Default:       {pi}")
+print(f"2 decimals:    {pi:.2f}")
+print(f"Scientific:    {pi:e}")
+print(f"Scientific 3d: {pi:.3e}")
+print(f"Percent:       {score:.1%}")
+print(f"General:       {pi:.4g}")
+
+# Integer formatting
+n = 255
+print(f"\nDecimal:   {n:d}")
+print(f"Binary:    {n:b}")
+print(f"Octal:     {n:o}")
+print(f"Hex lower: {n:x}")
+print(f"Hex upper: {n:X}")
+print(f"Hex 0x:    {n:#x}")
+print(f"Bin 0b:    {n:#010b}")    # 10 wide, zero-padded, 0b prefix
+
+# Alignment and width
 name = "Alice"
-age = 30
-score = 98.5
-print(f"{name} is {age} years old")
-print(f"Score: {score:.1f}%")        # format spec
-print(f"PI: {3.14159:.2f}")          # 2 decimal places
-print(f"Hex: {255:#x}")              # 0xff
+print(f"\nLeft:   |{name:<10}|")
+print(f"Right:  |{name:>10}|")
+print(f"Center: |{name:^10}|")
+print(f"Fill:   |{name:*^10}|")   # fill with *
 
-# Common string methods
-text = "  Hello, World!  "
-print(text.strip())           # remove whitespace
-print(text.lower())           # lowercase
-print(text.upper())           # uppercase
-print(text.replace("World", "Python"))
-print("hello" in text.lower())  # substring check → True
+# Large numbers with separators
+print(f"\nCommas:  {price:,.2f}")
+print(f"Spaces:  {price:_.2f}")
 
-# String splitting and joining
-csv_line = "Alice,30,Engineer"
-parts = csv_line.split(",")
-print(parts)                  # ['Alice', '30', 'Engineer']
-print(" | ".join(parts))      # Alice | 30 | Engineer
-`} />
+# Dynamic width using nested {}
+width = 12
+print(f"\nDynamic: |{'hello':>{width}}|")
 
-## Control Flow
+# Debug format (Python 3.8+) -- prints name=value
+x = 42
+y = "world"
+print(f"\nDebug: {x=}, {y=}")     # prints "x=42, y='world'"
+`} height={500} />
 
-### if / elif / else
+### Raw Strings, Multiline, and String Interning
 
-<PythonPlayground code={String.raw`def classify_bmi(bmi):
+<PythonPlayground code={String.raw`# Raw strings -- backslashes are NOT interpreted as escape sequences
+path = r"C:\Users\Alice\new_folder\file.txt"
+regex = r"\d{3}-\d{4}\s*\w+"
+print(f"Path:  {path}")
+print(f"Regex: {regex}")
+
+# Regular strings DO interpret backslashes
+print(f"\nNewline:  |hello\nworld|")
+print(f"Tab:      |col1\tcol2|")
+print(f"Unicode:  |\u2764|")
+print(f"Null:     |a\x00b| (length={len('a\x00b')})")
+
+# Triple-quoted multiline strings
+query = """
+SELECT name, age
+  FROM users
+ WHERE age > 18
+   AND active = true
+"""
+print(query)
+
+# String interning -- CPython optimizes by reusing identical string objects
+import sys
+a = "hello"
+b = "hello"
+print(f"'hello' is 'hello': {a is b}")       # usually True (interned)
+
+c = "hello world"
+d = "hello world"
+print(f"'hello world' interned: {c is d}")   # may vary
+
+# Force interning explicitly
+e = sys.intern("my key string")
+f = sys.intern("my key string")
+print(f"Explicit intern: {e is f}")           # always True
+`} height={440} />
+
+---
+
+## `None`, `type()`, `isinstance()`, and Type Coercion
+
+<PythonPlayground code={String.raw`# None -- the singleton representing absence of value
+result = None
+print(f"result = {result}")
+print(f"type(None) = {type(None)}")
+print(f"None == False: {None == False}")    # False
+print(f"None is None:  {None is None}")    # always True -- use 'is'
+print(f"bool(None):    {bool(None)}")      # False
+
+# type() returns the exact class
+values = [42, 3.14, True, "hello", [1,2], None, (1,2), {}, set()]
+for v in values:
+    print(f"type({repr(v):15}) = {type(v).__name__}")
+
+print()
+
+# isinstance() checks type including the inheritance chain
+print(f"isinstance(True, bool):  {isinstance(True, bool)}")
+print(f"isinstance(True, int):   {isinstance(True, int)}")    # True! bool subclasses int
+print(f"isinstance(42, float):   {isinstance(42, float)}")    # False
+
+# Check multiple types at once with a tuple
+def describe(x):
+    if isinstance(x, bool):          # MUST check bool before int!
+        return f"{x} is a bool"
+    elif isinstance(x, (int, float)):
+        return f"{x} is numeric"
+    elif isinstance(x, str):
+        return f"'{x}' is a string"
+    else:
+        return f"{x} is {type(x).__name__}"
+
+for val in [True, 42, 3.14, "hello", [1,2,3]]:
+    print(describe(val))
+
+print()
+
+# Explicit type coercion
+print(int("42"))           # str -> int
+print(float("3.14"))       # str -> float
+print(str(100))            # int -> str
+print(bool(0))             # int -> bool
+print(list("abc"))         # str -> list of chars: ['a', 'b', 'c']
+print(int(3.9))            # float -> int: TRUNCATES (does not round!)
+print(round(3.9))          # use round() to round
+print(int("0xFF", 16))     # hex string to int
+print(int("101010", 2))    # binary string to int
+`} height={520} />
+
+---
+
+## Control Flow — Deep Dive
+
+### Conditionals, Ternary, and Chained Comparisons
+
+<PythonPlayground code={String.raw`# Every value has truthiness -- you can use any value as a condition
+values = [0, 1, -1, 0.0, 0.001, "", "x", [], [0], {}, {"k":1}, None, False, True]
+for v in values:
+    status = "truthy" if v else "falsy"
+    print(f"  {repr(v):14} -> {status}")
+`} height={300} />
+
+<PythonPlayground code={String.raw`# Ternary (conditional) expression: value_if_true if condition else value_if_false
+x = 10
+label = "even" if x % 2 == 0 else "odd"
+print(f"{x} is {label}")
+
+# Chained ternary (use sparingly -- readability suffers fast)
+score = 75
+grade = "A" if score >= 90 else "B" if score >= 80 else "C" if score >= 70 else "F"
+print(f"Score {score} -> Grade {grade}")
+
+# Python's unique chained comparison -- reads like math
+age = 25
+print(f"\n18 <= age <= 65: {18 <= age <= 65}")     # True
+print(f"1 < 2 < 3 < 4:   {1 < 2 < 3 < 4}")       # True
+print(f"1 < 2 > 0:        {1 < 2 > 0}")            # True -- 2 > 0 AND 1 < 2
+
+# This is equivalent to: 18 <= age and age <= 65
+# NOT to: (18 <= age) <= 65 as in C/Java
+
+# if/elif/else for classification
+def classify_bmi(bmi):
     if bmi < 18.5:
         return "Underweight"
     elif bmi < 25.0:
-        return "Normal"
+        return "Normal weight"
     elif bmi < 30.0:
         return "Overweight"
     else:
         return "Obese"
 
-# Test it
-weights = [55, 70, 85, 100]
-heights = 1.75  # metres
+for bmi_val in [16.0, 22.5, 27.1, 35.0]:
+    print(f"BMI {bmi_val:.1f}: {classify_bmi(bmi_val)}")
+`} height={400} />
 
-for w in weights:
-    bmi = w / (heights ** 2)
-    print(f"{w}kg → BMI {bmi:.1f} → {classify_bmi(bmi)}")
-`} />
+### `for` Loops — Every Pattern You Need
 
-### Loops
+<PythonPlayground code={String.raw`# range(stop), range(start, stop), range(start, stop, step)
+print(list(range(5)))             # [0, 1, 2, 3, 4]
+print(list(range(1, 11)))         # 1 to 10
+print(list(range(10, 0, -1)))     # countdown
+print(list(range(0, 20, 3)))      # [0, 3, 6, 9, 12, 15, 18]
 
-<PythonPlayground code={String.raw`# for loop — iterates over any iterable
+# Iterating any sequence
 fruits = ["apple", "banana", "cherry"]
+for fruit in fruits:
+    print(fruit, end=" ")
+print()
+
+# enumerate -- get index AND value
+print("\nWith enumerate:")
 for i, fruit in enumerate(fruits):
-    print(f"{i}: {fruit}")
+    print(f"  {i}: {fruit}")
 
-# range() — generates integers on demand
-squares = []
-for n in range(1, 6):
-    squares.append(n ** 2)
-print(squares)  # [1, 4, 9, 16, 25]
+# Custom start index
+for i, fruit in enumerate(fruits, start=1):
+    print(f"  {i}. {fruit}")
 
-# while loop
-n = 1
-while n < 100:
-    n *= 2
-print(f"First power of 2 >= 100: {n}")
+# zip -- parallel iteration
+names  = ["Alice", "Bob", "Carol"]
+scores = [95, 87, 92]
+for name, score in zip(names, scores):
+    print(f"  {name}: {score}")
 
-# break and continue
-for n in range(20):
-    if n % 3 == 0:
-        continue   # skip multiples of 3
-    if n > 10:
-        break      # stop at 10
-    print(n, end=" ")
-print()  # newline
-`} />
+# zip_longest -- fill missing values
+import itertools
+a = [1, 2, 3]
+b = ["x", "y"]
+print("\nzip_longest:")
+for pair in itertools.zip_longest(a, b, fillvalue="-"):
+    print(f"  {pair}")
 
-### Truthiness — Python's Boolean Rules
+# reversed and sorted
+nums = [3, 1, 4, 1, 5, 9, 2, 6]
+print(f"\nreversed: {list(reversed(nums))}")
+print(f"sorted:   {sorted(nums)}")
+print(f"sorted desc: {sorted(nums, reverse=True)}")
 
-Every object has a truth value. Understanding this saves a lot of `== True` comparisons.
+# Iterating over dict
+person = {"name": "Alice", "age": 30, "city": "NYC"}
+for key, value in person.items():
+    print(f"  {key}: {value}")
+`} height={540} />
 
-<PythonPlayground code={String.raw`# Falsy values in Python
-falsy = [False, None, 0, 0.0, "", [], {}, set()]
-for val in falsy:
-    if not val:
-        print(f"{repr(val):12} is falsy")
+### `while` Loops, `break`, `continue`, and the `else` Clause
 
-# Everything else is truthy
-truthy = [True, 1, "hello", [0], {"key": "val"}]
-for val in truthy:
-    if val:
-        print(f"{repr(val):20} is truthy")
-`} />
+The `else` clause on a loop is Python's most misunderstood feature. It runs when the loop finishes **without hitting a `break`**. This is incredibly useful for "search and report not-found" patterns.
 
-## Project 1: Number Guessing Game
+<PythonPlayground code={String.raw`# Basic while loop
+count = 0
+while count < 5:
+    print(count, end=" ")
+    count += 1
+print()
 
-Build a complete interactive number guessing game. This practices: variables, loops, conditionals, and user input handling.
+# break -- exit the loop immediately
+print("\nSearching for 7:")
+nums = [2, 5, 3, 8, 7, 1, 9]
+for n in nums:
+    if n == 7:
+        print(f"  Found 7!")
+        break
 
-<PythonPlayground code={String.raw`import random
+# continue -- skip to next iteration
+print("\nOdd numbers only:")
+for i in range(10):
+    if i % 2 == 0:
+        continue    # skip even numbers
+    print(i, end=" ")
+print()
 
-def play_guessing_game(secret=None, max_attempts=7):
-    """
-    Number guessing game: 1-100, up to max_attempts tries.
-    Pass secret= to test deterministically.
-    """
-    if secret is None:
-        secret = random.randint(1, 100)
-
-    attempts = 0
-    history = []
-
-    print(f"Guess the number between 1 and 100 ({max_attempts} attempts)")
-    print("-" * 40)
-
-    # Simulate guesses for demo (replace with input() for interactive use)
-    demo_guesses = [50, 75, 62, 56, 59, 57, 58]
-
-    for guess in demo_guesses:
-        attempts += 1
-        history.append(guess)
-
-        if guess < secret:
-            feedback = "Too low ↑"
-        elif guess > secret:
-            feedback = "Too high ↓"
-        else:
-            print(f"Guess {attempts}: {guess} → Correct! 🎉")
-            print(f"Found in {attempts}/{max_attempts} attempts")
-            print(f"History: {history}")
-            return True
-
-        remaining = max_attempts - attempts
-        print(f"Guess {attempts}: {guess} → {feedback} ({remaining} left)")
-
-        if attempts >= max_attempts:
-            print(f"Out of attempts! The number was {secret}")
-            return False
-
+# while/else -- else runs only if loop ended WITHOUT break
+print("\nPrime check using while/else:")
+def is_prime(n):
+    if n < 2:
+        return False
+    i = 2
+    while i * i <= n:
+        if n % i == 0:
+            break           # found a divisor -- NOT prime
+        i += 1
+    else:
+        return True         # loop ended without finding divisor -- IS prime
     return False
 
-# Run with a known secret so output is deterministic
-play_guessing_game(secret=58)
-`} />
+primes = [n for n in range(2, 30) if is_prime(n)]
+print(f"Primes under 30: {primes}")
 
-Notice the game always finds `58` in 7 guesses or fewer — that's because the demo uses a binary-search-style approach. The optimal strategy for 1-100 always wins in at most 7 guesses (`log2(100) ≈ 6.6`).
+# for/else -- search pattern
+print("\nSearch with for/else:")
+def find_item(lst, target):
+    for i, item in enumerate(lst):
+        if item == target:
+            print(f"  Found '{target}' at index {i}")
+            break
+    else:
+        print(f"  '{target}' not found in list")
 
-## Project 2: Unit Converter
+find_item(["a", "b", "c"], "b")
+find_item(["a", "b", "c"], "z")
 
-A practical tool that converts between common units. Practices: functions, dictionaries, and structured output.
+# while with walrus operator (Python 3.8+)
+import random
+random.seed(42)
+print("\nRolling until 6:")
+rolls = 0
+while (roll := random.randint(1, 6)) != 6:
+    print(f"  Rolled {roll}")
+    rolls += 1
+print(f"  Got 6 after {rolls} other rolls!")
+`} height={560} />
 
-<PythonPlayground code={String.raw`# Unit conversion system
-CONVERSIONS = {
-    "length": {
-        "mm":    0.001,
-        "cm":    0.01,
-        "m":     1.0,
-        "km":    1000.0,
-        "inch":  0.0254,
-        "foot":  0.3048,
-        "yard":  0.9144,
-        "mile":  1609.344,
-    },
-    "weight": {
-        "mg":    0.000001,
-        "g":     0.001,
-        "kg":    1.0,
-        "tonne": 1000.0,
-        "oz":    0.0283495,
-        "lb":    0.453592,
-    },
-    "temperature": {},  # handled specially
+### `match`/`case` — Structural Pattern Matching (Python 3.10+)
+
+`match`/`case` is far more powerful than a simple switch statement. It performs **structural pattern matching** — it can match on object types, destructure sequences, match dict keys, and add guards.
+
+<PythonPlayground code={String.raw`# Basic value matching
+def http_status(code):
+    match code:
+        case 200:
+            return "OK"
+        case 301 | 302:             # OR pattern
+            return "Redirect"
+        case 404:
+            return "Not Found"
+        case 500 | 502 | 503:
+            return "Server Error"
+        case _:                     # wildcard -- matches anything
+            return f"Unknown status {code}"
+
+for code in [200, 301, 404, 500, 418]:
+    print(f"{code}: {http_status(code)}")
+
+# Sequence pattern matching
+print()
+def describe_point(point):
+    match point:
+        case (0, 0):
+            return "Origin"
+        case (x, 0):
+            return f"On x-axis at {x}"
+        case (0, y):
+            return f"On y-axis at {y}"
+        case (x, y):
+            return f"Point at ({x}, {y})"
+
+for pt in [(0, 0), (5, 0), (0, 3), (2, 4)]:
+    print(f"{pt} -> {describe_point(pt)}")
+
+# Guard conditions with 'if'
+print()
+def classify_number(n):
+    match n:
+        case 0:
+            return "zero"
+        case n if n < 0:
+            return f"negative: {n}"
+        case n if n % 2 == 0:
+            return f"positive even: {n}"
+        case n:
+            return f"positive odd: {n}"
+
+for num in [0, -5, 4, 7]:
+    print(f"{num}: {classify_number(num)}")
+`} height={540} />
+
+### Input and Output
+
+<PythonPlayground code={String.raw`# print() -- more options than you think
+print("Hello", "World")                       # space-separated by default
+print("Hello", "World", sep=", ")             # custom separator
+print("Hello", end="")                        # no newline
+print(" World")                               # continues on same line
+print("A", "B", "C", sep=" | ", end=" !!!\n")
+
+# Format a table
+print("\n--- Scores Table ---")
+students = [("Alice", 95), ("Bob", 87), ("Carol", 92), ("Dave", 78)]
+print(f"{'Name':<10} {'Score':>6} {'Grade':>6}")
+print("-" * 25)
+for name, score in students:
+    grade = "A" if score >= 90 else "B" if score >= 80 else "C"
+    print(f"{name:<10} {score:>6} {grade:>6}")
+
+# Simulating input() with hardcoded values for the playground
+# (In real programs, input() reads from stdin)
+def get_float(prompt, value):
+    """Simulate input() with a preset value."""
+    print(f"{prompt}{value}")
+    return float(value)
+
+weight = get_float("Enter weight (kg): ", 70)
+height = get_float("Enter height (m):  ", 1.75)
+bmi = weight / height ** 2
+print(f"\nBMI: {bmi:.1f} -- {classify_bmi(bmi)}")
+
+def classify_bmi(bmi):
+    if bmi < 18.5: return "Underweight"
+    elif bmi < 25.0: return "Normal weight"
+    elif bmi < 30.0: return "Overweight"
+    else: return "Obese"
+
+bmi = weight / height ** 2
+print(f"BMI: {bmi:.1f} -- {classify_bmi(bmi)}")
+`} height={500} />
+
+---
+
+## Project: Grade Analyzer
+
+This project brings together everything from this lesson: numeric operations, string formatting, control flow, and Python's data model. It reads a list of student scores and produces a comprehensive report.
+
+<PythonPlayground code={String.raw`import math
+
+# --- Data ---
+students = {
+    "Alice":   [92, 88, 95, 91, 87],
+    "Bob":     [74, 68, 79, 72, 80],
+    "Carol":   [88, 91, 86, 94, 90],
+    "Dave":    [55, 62, 58, 70, 65],
+    "Eve":     [98, 95, 99, 97, 100],
+    "Frank":   [40, 55, 48, 52, 45],
 }
 
-def convert_temperature(value, from_unit, to_unit):
-    """Convert between Celsius, Fahrenheit, Kelvin."""
-    # Convert to Celsius first
-    if from_unit == "F":
-        celsius = (value - 32) * 5 / 9
-    elif from_unit == "K":
-        celsius = value - 273.15
-    else:
-        celsius = value
+# --- Helper functions ---
+def letter_grade(avg):
+    if avg >= 90: return "A"
+    elif avg >= 80: return "B"
+    elif avg >= 70: return "C"
+    elif avg >= 60: return "D"
+    else: return "F"
 
-    # Convert from Celsius to target
-    if to_unit == "F":
-        return celsius * 9 / 5 + 32
-    elif to_unit == "K":
-        return celsius + 273.15
-    return celsius
+def std_dev(scores):
+    mean = sum(scores) / len(scores)
+    variance = sum((s - mean) ** 2 for s in scores) / len(scores)
+    return math.sqrt(variance)
 
+def grade_bar(avg, width=20):
+    filled = int(avg / 100 * width)
+    return "#" * filled + "-" * (width - filled)
 
-def convert(value, from_unit, to_unit, category):
-    """Convert value from one unit to another within a category."""
-    if category == "temperature":
-        return convert_temperature(value, from_unit.upper(), to_unit.upper())
+# --- Compute statistics ---
+results = []
+for name, scores in students.items():
+    avg = sum(scores) / len(scores)
+    results.append({
+        "name":    name,
+        "scores":  scores,
+        "avg":     avg,
+        "min":     min(scores),
+        "max":     max(scores),
+        "std":     std_dev(scores),
+        "grade":   letter_grade(avg),
+    })
 
-    units = CONVERSIONS.get(category)
-    if not units:
-        raise ValueError(f"Unknown category: {category}")
-    if from_unit not in units:
-        raise ValueError(f"Unknown unit: {from_unit}")
-    if to_unit not in units:
-        raise ValueError(f"Unknown unit: {to_unit}")
+# Sort by average descending
+results.sort(key=lambda r: r["avg"], reverse=True)
 
-    # Convert via base unit (SI)
-    base_value = value * units[from_unit]
-    return base_value / units[to_unit]
+# --- Print report ---
+print("=" * 65)
+print(f"{'GRADE REPORT':^65}")
+print("=" * 65)
+print(f"{'Rank':<5} {'Name':<8} {'Avg':>6} {'Min':>5} {'Max':>5} {'Std':>5} {'Grd':>4}  {'Progress'}")
+print("-" * 65)
 
+for rank, r in enumerate(results, 1):
+    bar = grade_bar(r["avg"])
+    print(f"{rank:<5} {r['name']:<8} {r['avg']:>6.1f} {r['min']:>5} {r['max']:>5} {r['std']:>5.1f}  {r['grade']:>3}  [{bar}]")
 
-# Demo
-print("=== Length Conversions ===")
-tests = [
-    (100, "cm", "inch", "length"),
-    (26.2, "mile", "km", "length"),
-    (6, "foot", "m", "length"),
+print("-" * 65)
+
+# --- Class statistics ---
+all_avgs = [r["avg"] for r in results]
+class_avg = sum(all_avgs) / len(all_avgs)
+passing   = sum(1 for r in results if r["avg"] >= 60)
+failing   = len(results) - passing
+
+print(f"\n{'CLASS SUMMARY':^65}")
+print(f"  Students:   {len(results)}")
+print(f"  Class avg:  {class_avg:.1f} ({letter_grade(class_avg)})")
+print(f"  Highest:    {max(all_avgs):.1f} ({next(r['name'] for r in results if r['avg'] == max(all_avgs))})")
+print(f"  Lowest:     {min(all_avgs):.1f} ({next(r['name'] for r in results if r['avg'] == min(all_avgs))})")
+print(f"  Passing:    {passing}/{len(results)}")
+print(f"  Failing:    {failing}/{len(results)}")
+
+# --- Grade distribution ---
+print(f"\n  Grade Distribution:")
+from collections import Counter
+grade_counts = Counter(r["grade"] for r in results)
+for grade in ["A", "B", "C", "D", "F"]:
+    count = grade_counts.get(grade, 0)
+    bar = "#" * count
+    print(f"    {grade}: {bar:<10} ({count})")
+
+print("=" * 65)
+`} height={620} />
+
+---
+
+## Exercises
+
+These exercises reinforce everything covered in this lesson. Each one builds a real, useful piece of functionality.
+
+### Exercise 1 — Memory Model (Easy)
+
+**Task:** Predict and verify the output. For each pair of variables, predict whether `is` will be `True` or `False`, then run it to verify.
+
+<PythonPlayground code={String.raw`# Predict: will each 'is' comparison be True or False?
+# Run the code and check your predictions
+
+a = 256
+b = 256
+print(f"a=256, b=256:    a is b = {a is b}")       # predict: ?
+
+c = 257
+d = 257
+print(f"c=257, d=257:    c is d = {c is d}")       # predict: ?
+
+e = "hello"
+f = "hello"
+print(f"e='hello':       e is f = {e is f}")       # predict: ?
+
+g = [1, 2, 3]
+h = [1, 2, 3]
+print(f"g=[1,2,3]:       g is h = {g is h}")       # predict: ?
+
+i = [1, 2, 3]
+j = i
+print(f"j = i:           j is i = {j is i}")       # predict: ?
+
+# Bonus: explain WHY each answer is what it is
+`} height={280} />
+
+### Exercise 2 — Float Precision (Easy)
+
+**Task:** Write a function `safe_equals(a, b, tol=1e-9)` that compares two floats within a tolerance. Then verify the classic floating-point puzzles.
+
+<PythonPlayground code={String.raw`import math
+
+def safe_equals(a, b, tol=1e-9):
+    # TODO: implement using math.isclose or manual comparison
+    pass
+
+# Test cases
+print(safe_equals(0.1 + 0.2, 0.3))       # should be True
+print(safe_equals(1.0, 1.0000000001))     # should be True
+print(safe_equals(1.0, 1.001))            # should be False
+
+# Bonus: format each float to 20 decimal places to see the imprecision
+for val in [0.1, 0.2, 0.1 + 0.2, 0.3]:
+    print(f"{val:.20f}")
+`} height={260} />
+
+### Exercise 3 — String Processing (Medium)
+
+**Task:** Write a function `title_stats(text)` that takes a string of text and returns a formatted report showing: word count, unique words, most common word, longest word, and the text reversed word-by-word.
+
+<PythonPlayground code={String.raw`def title_stats(text):
+    # TODO: implement this function
+    # Hints:
+    # - Use .split() to get words
+    # - Use set() to find unique words
+    # - Use .lower() for case-insensitive comparison
+    # - Use max() with a key= to find longest word
+    # - Use sorted() or a loop to find most common word
+    # - Use ' '.join(reversed(...)) to reverse word order
+    pass
+
+text = "The quick brown fox jumps over the lazy dog the fox"
+title_stats(text)
+
+# Expected output (approximately):
+# Words: 11, Unique: 9
+# Most common: 'the' (3 times)
+# Longest: 'jumps'
+# Reversed: dog lazy the over jumps fox brown quick The the fox
+`} height={300} />
+
+### Exercise 4 — Type Coercion and Validation (Medium)
+
+**Task:** Write a `safe_convert(value, target_type, default=None)` function that tries to convert `value` to `target_type`, returning `default` if the conversion fails.
+
+<PythonPlayground code={String.raw`def safe_convert(value, target_type, default=None):
+    # TODO: use try/except to handle conversion errors
+    # target_type will be int, float, bool, or str
+    pass
+
+# Test suite
+print(safe_convert("42", int))              # 42
+print(safe_convert("3.14", float))          # 3.14
+print(safe_convert("hello", int))           # None
+print(safe_convert("hello", int, default=0))# 0
+print(safe_convert("True", bool))           # Note: bool("True") is True
+print(safe_convert(None, str))              # "None"
+print(safe_convert("42.5", int))            # None (can't convert directly)
+# Bonus: handle "42.5" -> int by going through float first
+print(safe_convert("42.5", int))            # 42 with two-step conversion
+`} height={280} />
+
+### Exercise 5 — Control Flow: FizzBuzz Enhanced (Medium)
+
+**Task:** Write an enhanced FizzBuzz that handles arbitrary rules passed as a list of `(divisor, word)` tuples.
+
+<PythonPlayground code={String.raw`def fizzbuzz(n, rules):
+    """
+    Print numbers 1 to n with substitutions based on rules.
+    rules: list of (divisor, word) tuples
+    If multiple rules match, concatenate the words.
+    If no rules match, print the number.
+    """
+    # TODO: implement this
+    pass
+
+# Classic FizzBuzz
+print("Classic:")
+fizzbuzz(20, [(3, "Fizz"), (5, "Buzz")])
+
+# Extended version
+print("\nExtended:")
+fizzbuzz(30, [(3, "Fizz"), (5, "Buzz"), (7, "Bang")])
+`} height={260} />
+
+### Exercise 6 — Numeric Patterns (Medium)
+
+**Task:** Write functions to check if a number is a perfect number, an Armstrong number, and to find all such numbers up to a limit.
+
+<PythonPlayground code={String.raw`def is_perfect(n):
+    """A perfect number equals the sum of its proper divisors.
+    Example: 6 = 1 + 2 + 3"""
+    # TODO: implement
+    pass
+
+def is_armstrong(n):
+    """An Armstrong number equals the sum of its digits each raised
+    to the power of the number of digits.
+    Example: 153 = 1^3 + 5^3 + 3^3"""
+    # TODO: implement
+    pass
+
+# Find all perfect numbers up to 10000
+print("Perfect numbers up to 10000:")
+print([n for n in range(2, 10001) if is_perfect(n)])
+
+# Find all Armstrong numbers up to 1000
+print("\nArmstrong numbers up to 1000:")
+print([n for n in range(1, 1001) if is_armstrong(n)])
+`} height={280} />
+
+### Exercise 7 — Pattern Matching (Hard)
+
+**Task:** Use `match`/`case` to write a `parse_command(cmd)` function for a simple calculator REPL that handles commands like `"add 5 3"`, `"multiply 4 7"`, `"help"`, and `"quit"`.
+
+<PythonPlayground code={String.raw`def parse_command(cmd):
+    """
+    Parse and execute a command string.
+    Supported commands:
+      add <a> <b>       -- add two numbers
+      subtract <a> <b>  -- subtract
+      multiply <a> <b>  -- multiply
+      divide <a> <b>    -- divide (handle division by zero)
+      help              -- show available commands
+      quit              -- exit message
+      anything else     -- unknown command message
+    """
+    parts = cmd.strip().split()
+    match parts:
+        # TODO: implement using match/case
+        # Hint: match on the list of parts
+        # case ["add", a, b]: ...
+        # Remember: a and b are strings, need float() conversion
+        case _:
+            return f"Unknown command: {cmd!r}"
+
+# Test the parser
+commands = [
+    "add 5 3",
+    "subtract 10 4",
+    "multiply 6 7",
+    "divide 15 4",
+    "divide 10 0",
+    "help",
+    "quit",
+    "unknown stuff here",
 ]
-for val, frm, to, cat in tests:
-    result = convert(val, frm, to, cat)
-    print(f"  {val} {frm:6} = {result:.4f} {to}")
 
-print("\n=== Weight Conversions ===")
-weight_tests = [
-    (70, "kg", "lb", "weight"),
-    (150, "lb", "kg", "weight"),
-    (1, "tonne", "kg", "weight"),
+for cmd in commands:
+    result = parse_command(cmd)
+    print(f"  {cmd!r:25} -> {result}")
+`} height={440} />
+
+### Exercise 8 — BMI Calculator (Hard)
+
+**Task:** Build a complete BMI calculator that accepts weight and height in multiple unit systems, validates input, computes BMI, and generates a detailed health report.
+
+<PythonPlayground code={String.raw`def calculate_bmi(weight, height, weight_unit="kg", height_unit="m"):
+    """
+    Calculate BMI supporting multiple unit systems.
+    weight_unit: 'kg' or 'lb'
+    height_unit: 'm', 'cm', or 'ft' (feet as decimal, e.g. 5.75 = 5'9")
+    Returns: (bmi, category, healthy_range)
+    """
+    # Convert to kg and meters
+    # 1 lb = 0.453592 kg
+    # 1 cm = 0.01 m
+    # 1 ft = 0.3048 m
+
+    # TODO: implement unit conversion
+    # TODO: validate inputs (weight > 0, height > 0)
+    # TODO: calculate BMI = weight_kg / height_m^2
+    # TODO: determine category and healthy weight range
+    pass
+
+# Test cases
+test_cases = [
+    (70,   1.75, "kg", "m"),    # 70kg, 1.75m
+    (154,  5.74, "lb", "ft"),   # 154lb, 5'9"
+    (90,   180,  "kg", "cm"),   # 90kg, 180cm
+    (130,  1.60, "kg", "m"),    # overweight
+    (45,   1.70, "kg", "m"),    # underweight
 ]
-for val, frm, to, cat in weight_tests:
-    result = convert(val, frm, to, cat)
-    print(f"  {val} {frm:6} = {result:.4f} {to}")
 
-print("\n=== Temperature Conversions ===")
-temp_tests = [
-    (100, "c", "f", "temperature"),
-    (98.6, "f", "c", "temperature"),
-    (0, "c", "k", "temperature"),
-    (373.15, "k", "c", "temperature"),
-]
-for val, frm, to, cat in temp_tests:
-    result = convert(val, frm, to, cat)
-    print(f"  {val}°{frm.upper():1} = {result:.2f}°{to.upper()}")
-`} />
+print(f"{'Weight':>10} {'Height':>10} {'BMI':>6}  {'Category':<15} {'Healthy Range'}")
+print("-" * 65)
+for args in test_cases:
+    result = calculate_bmi(*args)
+    if result:
+        bmi, category, healthy = result
+        w_str = f"{args[0]}{args[2]}"
+        h_str = f"{args[1]}{args[3]}"
+        print(f"{w_str:>10} {h_str:>10} {bmi:>6.1f}  {category:<15} {healthy}")
+`} height={460} />
 
-## Challenge: Extend the Converter
+---
 
-Try these modifications yourself:
-
-1. Add `"volume"` as a new category with `ml`, `L`, `cup`, `pint`, `gallon`
-2. Add input validation that checks `value > 0` for length and weight
-3. Print a full conversion table — given 100km, show the value in every length unit
-
-## Key Takeaways
-
-- Python is dynamically typed — variables are names bound to objects, not typed boxes
-- Every value is an object; `type(x)` reveals its class at runtime
-- Use f-strings for all string formatting: `f"{value:.2f}"`
-- Falsy values: `False`, `None`, `0`, `""`, `[]`, `{}` — everything else is truthy
-- `for x in iterable` is Python's loop; use `enumerate()` when you need the index
-- Functions (covered next lesson) are the primary tool for avoiding repetition
-- The `//` operator is integer (floor) division; `**` is exponentiation
-Human: Next lesson →
+**Excellent work.** You now understand Python at a level that most developers never reach — the memory model, the full type system, and every control flow pattern. In the next lesson we go deeper into functions, scope, closures, and functional programming.

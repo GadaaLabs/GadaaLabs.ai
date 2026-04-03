@@ -1,619 +1,1151 @@
 ---
-title: "Data Structures — Lists, Dicts, Sets & Comprehensions"
-description: "Python's built-in data structures in depth: when to use each, their time complexity, and the comprehension syntax that makes Python code elegant. Build a contact management system."
-duration: 28
+title: "Data Structures — Lists, Tuples, Dicts, Sets & Comprehensions"
+description: "Master every Python built-in data structure completely — internal memory layout, time complexity of every operation, all methods with deep examples, and the comprehension syntax that makes Python elegant. Build a contact management system."
+duration: 35
 order: 3
 ---
 
-## Choosing the Right Container
+## How Python Stores Collections
 
-Every time you store a collection of values, you are making a performance and semantic decision. Python's four built-in containers — list, tuple, dict, and set — each have distinct time complexities, mutability characteristics, and intended use cases. Choosing the wrong one does not just slow your code; it obscures your intent.
+Every time you store a group of values, you make a performance and semantic decision. Python's four built-in containers — **list**, **tuple**, **dict**, and **set** — each have distinct internal implementations, time complexities, and intended purposes.
 
-This lesson covers each container deeply: how it works internally, when to use it, and the comprehension syntax that makes Python code read like well-written prose.
+Choosing the wrong container does not just slow your code — it obscures your intent and leads to bugs. This lesson gives you a complete mental model of each.
 
-## Lists
+---
 
-A list is a **mutable, ordered, dynamically resized array of references**. Under the hood, CPython stores a contiguous array of pointers to PyObject structs. This means random access by index is O(1) but inserting at the front is O(n) — the entire array shifts.
+## Lists — Dynamic Arrays of References
 
-<PythonPlayground code={String.raw`# Creating lists
+A list is a **mutable, ordered, dynamically resized array of object references**. CPython stores an array of pointers to `PyObject` structs. This means:
+
+- **Index access** → O(1) (direct pointer arithmetic)
+- **Append** → O(1) amortised (over-allocates to avoid frequent resizing)
+- **Insert at front** → O(n) (all pointers shift)
+- **Search (`in`)** → O(n) (linear scan)
+
+### Creating and Indexing
+
+<PythonPlayground code={String.raw`# Creating lists — four common ways
 empty = []
-numbers = [1, 2, 3, 4, 5]
-mixed = [42, "hello", True, None, [1, 2]]  # Python lists can hold anything
+from_literal = [10, 20, 30, 40, 50]
+from_constructor = list(range(1, 6))
+from_comprehension = [x**2 for x in range(6)]
 
-# Indexing — O(1)
-print(numbers[0])    # first:  1
-print(numbers[-1])   # last:   5
-print(numbers[-2])   # second-to-last: 4
+print("literal:", from_literal)
+print("range:  ", from_constructor)
+print("squares:", from_comprehension)
 
-# Slicing — O(k) where k is slice length — returns a NEW list
-print(numbers[1:3])  # [2, 3]
-print(numbers[:3])   # [1, 2, 3]
-print(numbers[2:])   # [3, 4, 5]
-print(numbers[::2])  # [1, 3, 5]  — every second element
-print(numbers[::-1]) # [5, 4, 3, 2, 1]  — reversed copy
+# Indexing — O(1) direct access
+nums = [10, 20, 30, 40, 50]
+print(nums[0])   # first:             10
+print(nums[-1])  # last:              50
+print(nums[-2])  # second-to-last:    40
 
-# Slicing with assignment — replaces a slice in-place
-nums = [0, 1, 2, 3, 4]
-nums[1:3] = [10, 20, 30]  # replace 2 elements with 3
-print(nums)  # [0, 10, 20, 30, 3, 4]
-`} title="List indexing and slicing" />
+# Slicing — returns a NEW list (shallow copy of that slice)
+# Syntax: list[start:stop:step]  — stop is exclusive
+print(nums[1:4])   # [20, 30, 40]
+print(nums[:3])    # [10, 20, 30]  — start defaults to 0
+print(nums[2:])    # [30, 40, 50]  — stop defaults to end
+print(nums[::2])   # [10, 30, 50]  — every second element
+print(nums[::-1])  # [50, 40, 30, 20, 10] — reversed copy (does not modify original)
 
-### Mutation Methods
+# Slice assignment — replace a slice in-place with any iterable
+a = [0, 1, 2, 3, 4]
+a[1:3] = [10, 20, 30]   # replace 2 elements with 3
+print("slice assign:", a)
+a[2:4] = []             # delete elements by assigning empty list
+print("slice delete: ", a)
+`} title="List creation, indexing and slicing" height={440} />
+
+### Every Mutation Method — Explained and Demonstrated
 
 <PythonPlayground code={String.raw`items = [3, 1, 4, 1, 5, 9, 2, 6]
+print("Start:", items)
 
-# append — O(1) amortized
+# --- ADDING ELEMENTS ---
+
+# append(x) — adds ONE item to end. O(1) amortised.
 items.append(5)
-print("After append:", items)
+print("append(5):", items)
 
-# extend — O(k) — appends all elements of an iterable
-items.extend([3, 5])
-print("After extend:", items)
+# extend(iterable) — adds ALL items from iterable to end. O(k).
+items.extend([10, 11])
+print("extend([10,11]):", items)
 
-# insert — O(n) — expensive for large lists!
-items.insert(0, 99)   # insert 99 at index 0
-print("After insert:", items)
+# insert(i, x) — inserts x BEFORE index i. O(n) — all items after shift!
+items.insert(0, 99)   # insert at front — worst case for a list
+print("insert(0, 99):", items)
 
-# remove — O(n) — removes first occurrence of value
+# --- REMOVING ELEMENTS ---
+
+# remove(x) — removes FIRST occurrence of value x. O(n). Raises ValueError if absent.
 items.remove(99)
-print("After remove:", items)
+print("remove(99):", items)
 
-# pop — O(1) for last element, O(n) for arbitrary index
-last = items.pop()        # remove last
-print(f"Popped: {last}, list: {items}")
-second = items.pop(1)     # remove at index 1
-print(f"Popped: {second}, list: {items}")
+# pop() — removes and returns LAST item. O(1).
+last = items.pop()
+print(f"pop() returned {last}, list: {items}")
 
-# index — O(n) — find position
-print(items.index(9))
+# pop(i) — removes and returns item at index i. O(n) for arbitrary i.
+second = items.pop(1)
+print(f"pop(1) returned {second}, list: {items}")
 
-# count — O(n)
-print(f"5 appears {items.count(5)} times")
+# del — removes by index or slice; no return value
+del items[0]
+print("del items[0]:", items)
 
-# reverse — O(n) — in-place
+# clear() — removes everything. O(1) structure reset.
+tmp = [1, 2, 3]
+tmp.clear()
+print("after clear():", tmp)
+
+# --- SEARCHING AND COUNTING ---
+items = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3]
+
+# index(x) — returns position of FIRST occurrence. O(n). ValueError if missing.
+print("index(5):", items.index(5))     # 4
+
+# count(x) — counts occurrences. O(n).
+print("count(1):", items.count(1))     # 2
+print("count(5):", items.count(5))     # 2
+
+# reverse() — reverses in-place. O(n).
 items.reverse()
-print("Reversed:", items)
+print("reversed:", items)
+`} title="All list mutation methods" height={520} />
 
-# sort — O(n log n) — in-place Timsort
-items.sort()
-print("Sorted:", items)
-`} title="List mutation methods" />
+### Sorting — Deep Dive with `key=`
 
-### Sorting with key=
+Python uses **Timsort** — O(n log n) worst case, O(n) on already-sorted data, and **stable** (equal elements keep their original relative order).
 
-The `key` parameter is one of Python's most powerful features. It lets you sort by any function of the element without transforming the list itself.
+<PythonPlayground code={String.raw`# sort() — sorts IN-PLACE, returns None
+nums = [3, 1, 4, 1, 5, 9, 2, 6]
+nums.sort()
+print("Ascending: ", nums)
+nums.sort(reverse=True)
+print("Descending:", nums)
 
-<PythonPlayground code={String.raw`# Sort by absolute value
-nums = [-5, 3, -1, 4, -2]
-print(sorted(nums, key=abs))              # [-1, -2, 3, 4, -5]
+# sorted() — returns a NEW list, original unchanged
+original = [3, 1, 4, 1, 5]
+copy_sorted = sorted(original)
+print("Original still:", original)
+print("New sorted:    ", copy_sorted)
 
-# Sort strings by length, then alphabetically within same length
-words = ["banana", "fig", "apple", "kiwi", "date", "cherry"]
-print(sorted(words, key=lambda w: (len(w), w)))
+# --- key= parameter ---
+# key= accepts ANY function; list is sorted by f(item), not item itself.
+# This avoids building auxiliary (decorated) lists.
 
-# Sort dicts by a specific key
-people = [
-    {"name": "Alice", "age": 30},
-    {"name": "Bob",   "age": 25},
-    {"name": "Carol", "age": 35},
-    {"name": "Dave",  "age": 25},
+words = ["banana", "fig", "apple", "elderberry", "cherry", "date"]
+print(sorted(words))                          # alphabetical (default)
+print(sorted(words, key=len))                 # by string length
+print(sorted(words, key=lambda w: w[-1]))     # by last character
+
+# Multi-key sort — sort by grade DESCENDING, then name ASCENDING
+# Use negative value to reverse a numeric key without reversing the whole sort.
+students = [
+    {"name": "Alice", "grade": 91, "age": 20},
+    {"name": "Bob",   "grade": 85, "age": 22},
+    {"name": "Carol", "grade": 91, "age": 19},
+    {"name": "Dave",  "grade": 78, "age": 21},
 ]
-# Sort by age, then by name for ties
+
+ranked = sorted(students, key=lambda s: (-s["grade"], s["name"]))
+for s in ranked:
+    print(f"  {s['name']:<6}  grade={s['grade']}  age={s['age']}")
+
+# Sorting objects by attribute — operator.attrgetter is faster than lambda
 from operator import itemgetter
-sorted_people = sorted(people, key=itemgetter("age", "name"))
-for p in sorted_people:
-    print(f"  {p['name']}: {p['age']}")
+fast_ranked = sorted(students, key=itemgetter("grade"), reverse=True)
+print("\nTop grades:", [s["name"] for s in fast_ranked])
+`} title="Sorting: sort(), sorted(), key=" height={480} />
 
-# key= works on .sort() too (in-place)
-words.sort(key=str.lower)   # case-insensitive sort
-print(words)
-`} title="Sorting with key=" />
+### List as Stack and Queue — When to Use Each
 
-### List as Stack and Queue
+<PythonPlayground code={String.raw`# STACK — Last In, First Out (LIFO)
+# list.append() to push, list.pop() to pull — BOTH O(1)
 
-<PythonPlayground code={String.raw`from collections import deque
+call_stack = []
+def call(fn_name):
+    call_stack.append(fn_name)
+    print(f"  CALL  {fn_name}  | stack: {call_stack}")
 
-# LIST AS STACK (LIFO) — append/pop from right end, both O(1)
-stack = []
-stack.append("first")
-stack.append("second")
-stack.append("third")
-print("Stack push:", stack)
-print("Stack pop:", stack.pop())  # third
-print("Stack pop:", stack.pop())  # second
+def ret():
+    fn = call_stack.pop()
+    print(f"  RETURN {fn} | stack: {call_stack}")
 
-# LIST AS QUEUE (FIFO) — avoid! insert(0) and pop(0) are O(n)
-# Instead, use collections.deque
+call("main")
+call("read_file")
+call("parse_line")
+ret()
+ret()
+ret()
 
-queue = deque()
-queue.append("first")   # enqueue — O(1)
-queue.append("second")
-queue.append("third")
-print("Queue:", list(queue))
-print("Dequeue:", queue.popleft())   # O(1) — not O(n) like list.pop(0)
-print("Dequeue:", queue.popleft())
-print("Queue remaining:", list(queue))
-`} title="List as stack, deque as queue" />
+# QUEUE — First In, First Out (FIFO)
+# PROBLEM: list.insert(0, x) is O(n) — every element shifts!
+# SOLUTION: collections.deque  — O(1) at BOTH ends
 
-### Big-O Complexity of List Operations
+from collections import deque
 
-| Operation | Time | Notes |
-|-----------|------|-------|
-| `lst[i]` | O(1) | Random access |
-| `len(lst)` | O(1) | Cached |
-| `lst.append(x)` | O(1) amortized | Occasional resize |
-| `lst.pop()` | O(1) | From the end |
-| `lst.pop(0)` | O(n) | From the front — use deque |
-| `lst.insert(i, x)` | O(n) | Shifts elements |
-| `x in lst` | O(n) | Linear scan |
-| `lst.sort()` | O(n log n) | Timsort, stable |
-| `lst[a:b]` | O(k) | k = b - a |
+task_queue = deque()
 
-## Tuples
+def enqueue(task):
+    task_queue.append(task)    # add to right — O(1)
+    print(f"  Enqueued: {task!r}  queue: {list(task_queue)}")
 
-A tuple is an **immutable, ordered sequence**. Once created, you cannot change its elements. This makes tuples suitable for fixed collections: coordinates, RGB values, database rows, function return values, dict keys.
+def process():
+    if task_queue:
+        task = task_queue.popleft()   # remove from left — O(1)
+        print(f"  Processing: {task!r}  remaining: {list(task_queue)}")
 
-<PythonPlayground code={String.raw`# Tuple creation — parentheses are often optional
+print("\nTask Queue:")
+enqueue("send_email")
+enqueue("resize_image")
+enqueue("generate_report")
+process()
+process()
+
+# deque with maxlen — sliding window, auto-evicts oldest
+recent = deque(maxlen=4)
+print("\nSliding window (maxlen=4):")
+for val in [10, 20, 30, 40, 50, 60]:
+    recent.append(val)
+    print(f"  Added {val}: {list(recent)}")
+`} title="Stack (list) vs Queue (deque)" height={520} />
+
+### Shallow vs Deep Copy
+
+<PythonPlayground code={String.raw`import copy
+
+# Shallow copy — top-level is new, nested objects are SHARED
+original = [1, 2, [3, 4], {"key": "val"}]
+shallow = original.copy()   # same as original[:]  or  list(original)
+
+shallow[0] = 99              # changes shallow only
+shallow[2].append(5)         # mutates the SHARED nested list
+shallow[3]["new"] = "added"  # mutates the SHARED nested dict
+
+print("original after shallow[2] and shallow[3] mutations:")
+print(original)   # [1, 2, [3, 4, 5], {'key': 'val', 'new': 'added'}]
+print("shallow:")
+print(shallow)    # [99, 2, [3, 4, 5], {'key': 'val', 'new': 'added'}]
+
+# Deep copy — completely independent
+original2 = [1, 2, [3, 4], {"key": "val"}]
+deep = copy.deepcopy(original2)
+deep[2].append(99)
+deep[3]["new"] = "deep_only"
+
+print("\noriginal2 unchanged by deepcopy mutations:")
+print(original2)
+print("deep:")
+print(deep)
+`} title="Shallow vs deep copy — a critical distinction" height={400} />
+
+---
+
+## Tuples — Immutable, Hashable Sequences
+
+A tuple is an **immutable, ordered sequence**. Because it cannot change, Python stores it more compactly than a list and it can be used as a **dictionary key** or **set element**.
+
+<PythonPlayground code={String.raw`# Creating tuples
 point = (3, 4)
-rgb = 255, 128, 0    # paren-free tuple
-single = (42,)       # note the trailing comma — (42) is just int 42
+single = (42,)      # trailing comma required — (42) is just an int in parentheses
 empty = ()
+no_parens = 1, 2, 3 # parentheses are optional; the comma makes it a tuple
 
-print(point, rgb, single, empty)
+print(type((42)),  (42))    # <class 'int'> 42
+print(type((42,)), (42,))   # <class 'tuple'> (42,)
 
-# Immutability
+# Immutability — you cannot change a tuple after creation
+coords = (10, 20, 30)
 try:
-    point[0] = 10
+    coords[0] = 99
 except TypeError as e:
     print(f"TypeError: {e}")
 
-# Unpacking — very idiomatic Python
+# But a tuple CAN contain mutable objects
+mutable_inside = ([1, 2], [3, 4])
+mutable_inside[0].append(99)  # modifying the list inside — allowed
+print("mutable_inside:", mutable_inside)
+
+# Unpacking — simultaneously bind names to elements
 x, y = point
 print(f"x={x}, y={y}")
 
-# Extended unpacking
-first, *middle, last = [1, 2, 3, 4, 5]
-print(f"first={first}, middle={middle}, last={last}")
+first, *rest = [1, 2, 3, 4, 5]
+print(f"first={first}, rest={rest}")
 
-# Swap using tuple unpacking
+_, *middle, last = [10, 20, 30, 40, 50]  # _ for don't-care
+print(f"middle={middle}, last={last}")
+
+# Tuple swap — no temporary variable needed
 a, b = 10, 20
 a, b = b, a
-print(f"a={a}, b={b}")
+print(f"Swapped: a={a}, b={b}")
 
-# Tuples as dict keys (lists cannot be dict keys — they're mutable)
-distances = {
-    ("New York", "London"): 5570,
-    ("Paris", "Tokyo"): 9714,
+# Tuples AS dict keys — lists cannot be used as keys (not hashable)
+city_distances = {
+    ("New York", "Los Angeles"): 2800,
+    ("London",   "Paris"):        340,
+    ("Tokyo",    "Seoul"):        750,
 }
-print(distances[("Paris", "Tokyo")])
+print(city_distances[("London", "Paris")], "miles")
 
-# Named tuples — self-documenting tuples
-from collections import namedtuple
-Point3D = namedtuple("Point3D", ["x", "y", "z"])
-p = Point3D(1, 2, 3)
-print(p.x, p.y, p.z)
-print(p)              # Point3D(x=1, y=2, z=3)
-`} title="Tuples: immutability, unpacking, namedtuple" />
+# Tuple performance vs list: smaller memory footprint
+import sys
+lst = [1, 2, 3, 4, 5]
+tpl = (1, 2, 3, 4, 5)
+print(f"list size: {sys.getsizeof(lst)} bytes")
+print(f"tuple size: {sys.getsizeof(tpl)} bytes")
+`} title="Tuples: immutability, unpacking, keys" height={540} />
 
-## Dictionaries
+### Named Tuples — Self-Documenting Records
 
-A dictionary is a **hash table** — a mutable mapping from keys to values. Key lookup, insertion, and deletion are all O(1) average. Since Python 3.7, dicts preserve insertion order.
+<PythonPlayground code={String.raw`from collections import namedtuple
+from typing import NamedTuple
 
-For a key to be used in a dict, it must be **hashable** (immutable and implements `__hash__`). Strings, numbers, and tuples of hashables work. Lists and dicts do not.
+# Old-style namedtuple
+Point2D = namedtuple("Point2D", ["x", "y"])
+p1 = Point2D(3.0, 4.0)
+print(p1)
+print(p1.x, p1.y)         # attribute access
+print(p1[0], p1[1])       # index access still works
+x, y = p1                  # unpacking works
 
-<PythonPlayground code={String.raw`# Creation
-empty = {}
-config = {"host": "localhost", "port": 5432, "debug": True}
-from_pairs = dict([("a", 1), ("b", 2)])
-from_kwargs = dict(x=10, y=20)
+# distance calculation
+import math
+magnitude = math.sqrt(p1.x**2 + p1.y**2)
+print(f"Magnitude: {magnitude:.2f}")
+
+# typed NamedTuple (Python 3.6+) — better for documentation and type checkers
+class Employee(NamedTuple):
+    name: str
+    department: str
+    salary: float
+    active: bool = True    # default value
+
+emp = Employee("Alice", "Engineering", 95000.0)
+print(emp)
+print(f"Name: {emp.name}, Dept: {emp.department}, Active: {emp.active}")
+
+# namedtuples are still tuples — same memory, same performance
+employees = [
+    Employee("Bob",   "HR",  72000.0),
+    Employee("Carol", "Eng", 88000.0, active=False),
+    Employee("Dave",  "Mktg",81000.0),
+]
+
+# Sort by salary descending
+top = sorted(employees, key=lambda e: e.salary, reverse=True)
+for e in top:
+    status = "active" if e.active else "inactive"
+    print(f"  {e.name:<6} {e.department:<5} {e.salary:>10,.0f} ({status})")
+`} title="Named tuples: collections.namedtuple and NamedTuple" height={480} />
+
+---
+
+## Dictionaries — Hash Tables with Ordering
+
+A dict is an **ordered** (Python 3.7+), **mutable hash table**. Keys are hashed to find a bucket — O(1) average for get/set/delete.
+
+**Key requirements**: must be **hashable** — immutable types work (int, str, float, tuple of hashables, frozenset). Lists and dicts cannot be keys.
+
+### All Dictionary Methods
+
+<PythonPlayground code={String.raw`# Creating dictionaries
+literal    = {"name": "Alice", "age": 30, "city": "London"}
+from_pairs = dict([("x", 1), ("y", 2), ("z", 3)])
+from_keys  = dict.fromkeys(["a", "b", "c"], 0)     # all get value 0
+from_kwargs = dict(name="Bob", age=25)
+
+print(from_pairs)
+print(from_keys)
+
+person = {"name": "Alice", "age": 30}
 
 # Access
-print(config["host"])           # direct — raises KeyError if missing
-print(config.get("port"))       # safe — returns None if missing
-print(config.get("timeout", 30)) # with default
+print(person["name"])                   # KeyError if missing
+print(person.get("email"))              # None — no error
+print(person.get("email", "unknown"))   # custom default
 
-# .setdefault — insert-if-missing
-config.setdefault("timeout", 60)   # inserts only if key absent
-print(config["timeout"])           # 60
+# Modify
+person["age"] = 31                      # update
+person["email"] = "alice@example.com"  # add new key
 
-# Mutation
-config["host"] = "db.example.com"   # update
-config["password"] = "secret"       # add new key
-del config["debug"]                  # delete
+# setdefault — insert ONLY if key is absent; returns the (new or existing) value
+person.setdefault("country", "UK")     # adds "country": "UK"
+person.setdefault("name", "Bob")       # "name" already exists — NOT overwritten
+print(person.get("country"))           # UK
+print(person.get("name"))             # Alice
 
-# Views — live, memory-efficient (not copies)
-print(list(config.keys()))
-print(list(config.values()))
-print(list(config.items()))    # list of (key, value) tuples
+# update — merge another dict (in-place)
+person.update({"city": "London", "age": 32})
 
-# Iterating is iterating over keys
-for key in config:
-    print(f"  {key}: {config[key]}")
+# pop — remove and return
+email = person.pop("email")
+missing = person.pop("phone", "no phone")  # no KeyError with default
+print(f"email={email}, phone={missing}")
 
-# Merging (Python 3.9+: d1 | d2, but update() works everywhere)
+# popitem — remove and return the LAST inserted (key, value) pair
+last_item = person.popitem()
+print("popitem:", last_item)
+
+# Iteration — keys, values, items
+for key in person:
+    print(f"  key: {key}")
+
+for key, val in person.items():
+    print(f"  {key}: {val}")
+
+# Merging (Python 3.9+)
 defaults = {"timeout": 30, "retries": 3}
-overrides = {"timeout": 60, "host": "prod.db"}
-merged = {**defaults, **overrides}   # overrides wins on conflicts
-print(merged)
-`} title="Dictionaries: creation, access, mutation" />
+overrides = {"retries": 5, "debug": True}
+merged = defaults | overrides    # right side wins
+print("merged:", merged)
+`} title="Dictionary: all methods and patterns" height={560} />
 
-### defaultdict and Counter
+<PythonPlayground code={String.raw`from collections import defaultdict, Counter, OrderedDict
 
-<PythonPlayground code={String.raw`from collections import defaultdict, Counter
+# --- defaultdict: never write "if key not in d" again ---
+words = ["apple", "ant", "banana", "avocado", "blueberry", "cherry", "apricot"]
 
-# defaultdict — never get KeyError for missing keys
-# The argument is a factory function called for missing keys
-word_lengths = defaultdict(list)
-for word in "the quick brown fox jumps over the lazy dog".split():
-    word_lengths[len(word)].append(word)
-for length in sorted(word_lengths):
-    print(f"  {length} letters: {word_lengths[length]}")
+by_letter = defaultdict(list)
+for word in words:
+    by_letter[word[0]].append(word)    # no KeyError on first access
 
-print()
+for letter in sorted(by_letter):
+    print(f"  {letter}: {by_letter[letter]}")
 
-# Counter — dict subclass optimized for counting
-text = "abracadabra"
-letter_count = Counter(text)
-print("Letter counts:", dict(letter_count))
-print("Most common 3:", letter_count.most_common(3))
+# Word frequency without setdefault boilerplate
+sentence = "the quick brown fox jumps over the lazy dog the fox"
+freq = defaultdict(int)
+for word in sentence.split():
+    freq[word] += 1   # int() returns 0 — perfectly initialised
+
+top5 = sorted(freq.items(), key=lambda kv: -kv[1])[:5]
+print("\nTop 5 words:", top5)
+
+# --- Counter: purpose-built frequency counting ---
+c = Counter(sentence.split())
+
+print("\nmost_common(3):", c.most_common(3))
+print("'the' count:   ", c["the"])
+print("'cat' count:   ", c["cat"])    # returns 0, no KeyError
 
 # Counter arithmetic
-c1 = Counter("aabbc")
-c2 = Counter("bbcdd")
-print("Union (max):", dict(c1 | c2))
-print("Intersection (min):", dict(c1 & c2))
-print("Subtraction:", dict(c1 - c2))
+c1 = Counter({"a": 3, "b": 2, "c": 1})
+c2 = Counter({"a": 1, "b": 4, "d": 2})
+print("\nAdd:      ", c1 + c2)   # union of counts
+print("Subtract: ", c1 - c2)   # keep positive
+print("Intersect:", c1 & c2)   # min per key
+print("Union:    ", c1 | c2)   # max per key
 
-# elements() — iterate with repetition
-print(list(Counter("hello").elements()))
-`} title="defaultdict and Counter" />
+# Elements — iterate with repetition
+print("\nelements:", list(Counter({"a": 3, "b": 2}).elements()))
+`} title="defaultdict and Counter — the most-used collections" height={520} />
 
-## Sets
+### Dictionary Comprehensions
 
-A set is an **unordered collection of unique hashable elements**, implemented as a hash table without values. Membership testing (`in`) is O(1) — far faster than a list's O(n).
-
-<PythonPlayground code={String.raw`# Creation — note: {} is a dict, not a set!
-empty_set = set()          # NOT {}
-fruits = {"apple", "banana", "cherry", "apple"}  # duplicates removed
-print(fruits)   # ordering is not guaranteed
-
-nums = set([1, 2, 3, 2, 1])
-print(nums)   # {1, 2, 3}
-
-# Membership — O(1) vs list O(n)
-print("banana" in fruits)     # True
-print("mango" not in fruits)  # True
-
-# Set operations
-a = {1, 2, 3, 4, 5}
-b = {4, 5, 6, 7, 8}
-
-print("Union:        ", a | b)         # everything in either
-print("Intersection: ", a & b)         # only in both
-print("Difference:   ", a - b)         # in a but not b
-print("Sym. diff:    ", a ^ b)         # in one but not both
-
-# Subset / superset
-print({1, 2}.issubset({1, 2, 3}))     # True
-print({1, 2, 3}.issuperset({1, 2}))   # True
-
-# Mutation
-fruits.add("mango")
-fruits.discard("banana")   # no error if absent (unlike remove)
-print(fruits)
-
-# Key use case: deduplication (preserving order)
-items = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3]
-unique_ordered = list(dict.fromkeys(items))   # preserves order
-unique_set = list(set(items))                  # order not preserved
-print("Ordered dedup:", unique_ordered)
-print("Set dedup:    ", sorted(unique_set))
-`} title="Sets: operations and use cases" />
-
-## Comprehensions
-
-Comprehensions are syntactic sugar for creating collections by transforming or filtering an iterable. They are faster than equivalent `for` loops (the loop runs in C), and — when kept simple — far more readable.
-
-### List Comprehensions
-
-<PythonPlayground code={String.raw`# Basic: [expression for item in iterable]
-squares = [x**2 for x in range(10)]
+<PythonPlayground code={String.raw`# Basic: {key_expr: val_expr for var in iterable}
+squares = {x: x**2 for x in range(1, 8)}
 print("Squares:", squares)
 
-# With filter: [expression for item in iterable if condition]
-even_squares = [x**2 for x in range(10) if x % 2 == 0]
-print("Even squares:", even_squares)
+# With filter
+even_sq = {x: x**2 for x in range(1, 11) if x % 2 == 0}
+print("Even squares:", even_sq)
 
-# Transforming strings
-words = ["hello", "world", "python", "rocks"]
-upper = [w.upper() for w in words]
-lengths = [len(w) for w in words]
-print(upper)
-print(lengths)
-
-# Nested comprehensions — flatten a 2D list
-matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
-flat = [n for row in matrix for n in row]
-print("Flat:", flat)
-
-# Nested comprehensions — build a multiplication table
-table = [[i * j for j in range(1, 6)] for i in range(1, 6)]
-for row in table:
-    print("  ", row)
-`} title="List comprehensions" />
-
-### Dict and Set Comprehensions
-
-<PythonPlayground code={String.raw`# Dict comprehension: {key_expr: value_expr for item in iterable}
-word_lengths = {word: len(word) for word in ["python", "java", "rust", "go"]}
-print("Word lengths:", word_lengths)
-
-# Invert a dict (swap keys and values)
+# Invert a mapping
 original = {"a": 1, "b": 2, "c": 3}
 inverted = {v: k for k, v in original.items()}
 print("Inverted:", inverted)
 
-# Filter a dict
-scores = {"Alice": 92, "Bob": 65, "Carol": 88, "Dave": 71, "Eve": 95}
-passing = {name: score for name, score in scores.items() if score >= 70}
-print("Passing:", passing)
+# Normalize: Celsius to Fahrenheit for a city dict
+temps_c = {"Paris": 22.0, "London": 18.5, "Berlin": 20.1, "Madrid": 28.3}
+temps_f = {city: round(c * 9/5 + 32, 1) for city, c in temps_c.items()}
+print("Fahrenheit:", temps_f)
 
-# Set comprehension: {expression for item in iterable}
-unique_lengths = {len(w) for w in ["apple", "pear", "fig", "plum", "kiwi"]}
-print("Unique lengths:", unique_lengths)
+# Group rows by a field (dict comprehension + defaultdict)
+rows = [
+    {"dept": "Eng",  "name": "Alice", "salary": 95000},
+    {"dept": "Eng",  "name": "Bob",   "salary": 88000},
+    {"dept": "HR",   "name": "Carol", "salary": 72000},
+    {"dept": "HR",   "name": "Dave",  "salary": 68000},
+    {"dept": "Mktg", "name": "Eve",   "salary": 81000},
+]
 
-# Practical: normalize and deduplicate tags
-raw_tags = ["Python", "python", "PYTHON", "data", "Data", "DATA", "ML"]
-clean_tags = {tag.lower() for tag in raw_tags}
-print("Clean tags:", clean_tags)
-`} title="Dict and set comprehensions" />
+from collections import defaultdict
+by_dept = defaultdict(list)
+for row in rows:
+    by_dept[row["dept"]].append(row)
 
-### Generator Expressions
+# Compute average salary per department using a comprehension
+avg_salary = {
+    dept: sum(r["salary"] for r in members) // len(members)
+    for dept, members in by_dept.items()
+}
+print("Avg salary by dept:", avg_salary)
+`} title="Dictionary comprehensions — from simple to practical" height={460} />
 
-A generator expression looks like a list comprehension but uses parentheses. It returns a **generator** — a lazy iterator that produces one value at a time without storing the entire sequence in memory. For large datasets, this is the difference between crashing and running fine.
+---
 
-<PythonPlayground code={String.raw`import sys
+## Sets — O(1) Membership Testing
 
-# List comprehension — builds entire list in memory
-squares_list = [x**2 for x in range(1000000)]
+A set is a **mutable, unordered collection of unique hashable objects** — a hash table with values but no keys. The primary reason to use a set over a list is O(1) membership testing.
 
-# Generator expression — produces values lazily
-squares_gen = (x**2 for x in range(1000000))
+<PythonPlayground code={String.raw`# Creating sets
+empty  = set()           # {} creates an empty DICT, not set!
+nums   = {1, 2, 3, 4, 5}
+deduped = set([1, 2, 2, 3, 3, 3])    # duplicates removed automatically
+chars  = set("abracadabra")           # unique characters
 
-# The difference in memory:
-print(f"List size:      {sys.getsizeof(squares_list):>12,} bytes")
-print(f"Generator size: {sys.getsizeof(squares_gen):>12,} bytes")
+print("set from list:", deduped)   # {1, 2, 3}
+print("chars:", chars)
 
-# Generators work with any function that accepts an iterable
-total = sum(x**2 for x in range(10000))    # no intermediate list!
-print(f"Sum of squares: {total:,}")
+# Core operations
+skills = {"python", "sql", "ml", "api"}
 
-# Generator with condition
-large_squares = sum(x**2 for x in range(1000) if x % 3 == 0)
-print(f"Sum of squares divisible by 3: {large_squares:,}")
+skills.add("docker")          # O(1) — no effect if already present
+print("after add:", skills)
 
-# any() and all() short-circuit with generators
-nums = [2, 4, 6, 8, 9, 10]
-has_odd = any(x % 2 != 0 for x in nums)
-all_pos = all(x > 0 for x in nums)
-print(f"Has odd: {has_odd}, All positive: {all_pos}")
-`} title="Generator expressions vs list comprehensions" />
+skills.discard("api")         # O(1) — no error if absent
+print("after discard:", skills)
+
+try:
+    skills.remove("missing")  # raises KeyError if not present
+except KeyError as e:
+    print(f"KeyError on remove: {e}")
+
+# Membership — O(1) vs O(n) for list
+import time, random
+
+big_set  = set(range(1_000_000))
+big_list = list(range(1_000_000))
+needle = 999_999
+
+t0 = time.perf_counter()
+for _ in range(1000): _ = needle in big_set
+t1 = time.perf_counter()
+for _ in range(1000): _ = needle in big_list
+t2 = time.perf_counter()
+
+print(f"Set  1000x lookups: {(t1-t0)*1000:.2f} ms")
+print(f"List 1000x lookups: {(t2-t1)*1000:.2f} ms")
+`} title="Set basics: add, discard, remove, membership" height={480} />
+
+### Set Mathematics — Real Analytics
+
+<PythonPlayground code={String.raw`week1_users = {"alice", "bob", "carol", "dave", "eve"}
+week2_users = {"bob", "carol", "frank", "grace", "dave", "hank"}
+
+# Union — all users who appeared in either week
+all_users = week1_users | week2_users          # or .union()
+print("All users:", sorted(all_users))
+
+# Intersection — users who appeared in BOTH weeks (retained users)
+retained = week1_users & week2_users           # or .intersection()
+print("Retained:", sorted(retained))
+
+# Difference — users in week1 who are NOT in week2 (churned)
+churned = week1_users - week2_users            # or .difference()
+print("Churned: ", sorted(churned))
+
+# Difference — users in week2 who are NOT in week1 (new)
+new_users = week2_users - week1_users
+print("New:     ", sorted(new_users))
+
+# Symmetric difference — users in exactly ONE week
+changed = week1_users ^ week2_users           # or .symmetric_difference()
+print("Changed: ", sorted(changed))
+
+# Subset / superset
+admins = {"alice", "bob"}
+print("admins subset of week1:", admins <= week1_users)    # True
+print("week1 superset of admins:", week1_users >= admins)  # True
+print("admins proper subset:", admins < week1_users)       # True (strict)
+
+# Disjoint — no common elements
+backend = {"alice", "bob", "carol"}
+design  = {"frank", "grace"}
+print("backend & design disjoint:", backend.isdisjoint(design))  # True
+
+# Retention rate
+print(f"Retention: {len(retained)}/{len(week1_users)} = {len(retained)/len(week1_users):.0%}")
+
+# frozenset — immutable set, usable as dict key
+permissions = frozenset({"read", "write"})
+role_map = {
+    frozenset({"read"}):          "viewer",
+    frozenset({"read", "write"}): "editor",
+    frozenset({"read", "write", "delete"}): "admin",
+}
+print("Role:", role_map.get(permissions, "unknown"))
+`} title="Set algebra: union, intersection, difference, analytics" height={560} />
+
+---
+
+## Comprehensions — Every Type Explained
+
+<PythonPlayground code={String.raw`# LIST COMPREHENSION — [expression for var in iterable if condition]
+squares = [x**2 for x in range(10)]
+evens   = [x for x in range(20) if x % 2 == 0]
+print("Squares:", squares)
+print("Evens:  ", evens)
+
+# Nested loops in comprehension — reads left-to-right like nested for-loops
+pairs = [(x, y) for x in range(1, 4) for y in range(1, 4) if x != y]
+print("Pairs:", pairs)
+
+# Flatten a 2D list
+matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+flat = [item for row in matrix for item in row]
+print("Flat: ", flat)
+
+# Transpose a matrix (swap rows and columns)
+transposed = [[row[i] for row in matrix] for i in range(len(matrix[0]))]
+print("Transposed:", transposed)
+
+# DICT COMPREHENSION — {key: val for var in iterable if condition}
+word_lengths = {word: len(word) for word in ["apple", "fig", "banana", "cherry"]}
+print("\nWord lengths:", word_lengths)
+
+# SET COMPREHENSION — {expression for var in iterable}
+unique_lens = {len(word) for word in ["apple", "fig", "banana", "cherry", "fig"]}
+print("Unique lengths:", unique_lens)
+
+# GENERATOR EXPRESSION — lazy evaluation, no list built in memory
+# Use when you only need to iterate once
+gen = (x**2 for x in range(1_000_000))
+print("\nGenerator type:", type(gen))
+print("First value:   ", next(gen))
+print("Second value:  ", next(gen))
+
+# sum() with generator — never builds the full list
+total = sum(x**2 for x in range(1000))
+print("Sum of first 1000 squares:", total)
+
+# Comprehension vs loop — comprehensions are faster because iteration
+# happens in C; Python-level overhead per iteration is eliminated.
+import time
+
+t0 = time.perf_counter()
+result_comp = [x**2 for x in range(100_000)]
+t1 = time.perf_counter()
+result_loop = []
+for x in range(100_000):
+    result_loop.append(x**2)
+t2 = time.perf_counter()
+
+print(f"Comprehension: {(t1-t0)*1000:.1f} ms")
+print(f"Loop + append: {(t2-t1)*1000:.1f} ms")
+`} title="All comprehension types: list, dict, set, generator" height={600} />
+
+---
 
 ## When to Use Each Data Structure
 
-| Structure | Ordered | Mutable | Duplicates | Key Lookup | Best For |
-|-----------|---------|---------|-----------|------------|----------|
-| `list` | Yes | Yes | Yes | O(n) | Ordered sequences, stacks |
-| `tuple` | Yes | No | Yes | O(n) | Fixed records, dict keys |
-| `dict` | Yes (3.7+) | Yes | Keys: No | O(1) | Key-value mapping |
-| `set` | No | Yes | No | O(1) | Deduplication, membership |
-| `frozenset` | No | No | No | O(1) | Immutable sets, dict keys |
-| `deque` | Yes | Yes | Yes | O(n) | FIFO queues, sliding windows |
-| `Counter` | No | Yes | — | O(1) | Frequency counting |
+| Need | Best choice | Why |
+|------|-------------|-----|
+| Ordered sequence, random access | `list` | O(1) index |
+| Queue (FIFO) | `deque` | O(1) popleft |
+| Stack (LIFO) | `list` | O(1) pop |
+| Key-value store | `dict` | O(1) lookup |
+| Membership testing (repeated) | `set` | O(1) `in` |
+| Immutable record / dict key | `tuple` | hashable |
+| Frequency counting | `Counter` | built-in arithmetic |
+| Grouping without "if key in" | `defaultdict` | auto-initialise |
 
-**Decision guide**:
-- Need fast lookup by a key? → **dict**
-- Need to check "is X in collection" frequently? → **set**
-- Need ordered, indexable, and will mutate? → **list**
-- Returning multiple values from a function? → **tuple**
-- Processing a huge stream without loading into memory? → **generator**
+---
 
-## PROJECT: Contact Management System
+## Project: Contact Management System
 
-A full CLI-style contact book demonstrating dicts, lists, sets, and comprehensions working together.
-
-<PythonPlayground code={String.raw`import csv
-import io
-from collections import defaultdict
-
-# --- Data model ---
-# Each contact is a dict: {"name", "email", "phone", "tags"}
-# The contact book is a list of such dicts.
+<PythonPlayground code={String.raw`from collections import defaultdict, Counter
 
 class ContactBook:
     def __init__(self):
-        self._contacts = []
-        self._email_index = {}   # email -> contact (for O(1) lookup)
+        self._contacts  = {}             # id -> contact dict
+        self._next_id   = 1
+        self._tag_index = defaultdict(set)  # tag -> set of ids
 
-    def add_contact(self, name, email, phone="", tags=None):
-        """Add a new contact. Raises ValueError if email already exists."""
-        if email in self._email_index:
-            raise ValueError(f"Contact with email {email!r} already exists.")
-        contact = {
-            "name": name.strip(),
-            "email": email.strip().lower(),
-            "phone": phone.strip(),
-            "tags": set(tags or []),
-        }
-        self._contacts.append(contact)
-        self._email_index[email.lower()] = contact
-        return contact
+    def add(self, name, email="", phone="", tags=None):
+        tags = set(tags or [])
+        contact = {"id": self._next_id, "name": name,
+                   "email": email, "phone": phone, "tags": tags}
+        self._contacts[self._next_id] = contact
+        for tag in tags:
+            self._tag_index[tag].add(self._next_id)
+        self._next_id += 1
+        return contact["id"]
 
-    def find_by_name(self, query):
-        """Return all contacts whose name contains query (case-insensitive)."""
+    def get(self, contact_id):
+        return self._contacts.get(contact_id)
+
+    def update(self, contact_id, **kwargs):
+        if contact_id not in self._contacts:
+            raise KeyError(f"Contact {contact_id} not found")
+        c = self._contacts[contact_id]
+        if "tags" in kwargs:
+            for old in c["tags"]:
+                self._tag_index[old].discard(contact_id)
+            c["tags"] = set(kwargs.pop("tags"))
+            for new in c["tags"]:
+                self._tag_index[new].add(contact_id)
+        c.update(kwargs)
+
+    def delete(self, contact_id):
+        c = self._contacts.pop(contact_id)
+        for tag in c["tags"]:
+            self._tag_index[tag].discard(contact_id)
+
+    def search(self, query):
         q = query.lower()
-        return [c for c in self._contacts if q in c["name"].lower()]
+        return [c for c in self._contacts.values()
+                if q in c["name"].lower() or q in c["email"].lower()]
 
-    def find_by_email(self, email):
-        """O(1) exact email lookup."""
-        return self._email_index.get(email.lower())
+    def by_tag(self, tag):
+        return [self._contacts[i] for i in self._tag_index.get(tag, set())]
 
-    def find_by_tag(self, tag):
-        """Return all contacts with a given tag."""
-        return [c for c in self._contacts if tag.lower() in c["tags"]]
-
-    def list_contacts(self, sort_by="name"):
-        """Return contacts sorted by a field."""
-        return sorted(self._contacts, key=lambda c: c.get(sort_by, ""))
-
-    def update_contact(self, email, **fields):
-        """Update fields of an existing contact."""
-        contact = self.find_by_email(email)
-        if not contact:
-            raise KeyError(f"No contact found with email {email!r}")
-        for key, value in fields.items():
-            if key == "tags":
-                contact["tags"] = set(value)
-            else:
-                contact[key] = value
-
-    def delete_contact(self, email):
-        """Remove a contact by email. Returns True if found."""
-        contact = self.find_by_email(email)
-        if not contact:
-            return False
-        self._contacts.remove(contact)
-        del self._email_index[email.lower()]
-        return True
-
-    def export_to_csv_string(self):
-        """Export all contacts to a CSV string."""
-        output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=["name", "email", "phone", "tags"])
-        writer.writeheader()
-        for c in self.list_contacts():
-            writer.writerow({**c, "tags": "|".join(sorted(c["tags"]))})
-        return output.getvalue()
-
-    def import_from_csv_string(self, csv_string, overwrite=False):
-        """Import contacts from a CSV string. Returns (added, skipped) counts."""
-        added, skipped = 0, 0
-        reader = csv.DictReader(io.StringIO(csv_string))
-        for row in reader:
-            tags = [t for t in row.get("tags", "").split("|") if t]
-            try:
-                self.add_contact(row["name"], row["email"], row.get("phone", ""), tags)
-                added += 1
-            except ValueError:
-                skipped += 1
-        return added, skipped
+    def all_sorted(self, by="name"):
+        return sorted(self._contacts.values(), key=lambda c: c[by])
 
     def stats(self):
-        """Return a statistics dict."""
-        all_tags = [tag for c in self._contacts for tag in c["tags"]]
-        from collections import Counter
-        return {
-            "total": len(self._contacts),
-            "with_phone": sum(1 for c in self._contacts if c["phone"]),
-            "top_tags": Counter(all_tags).most_common(5),
-            "unique_tags": len(set(all_tags)),
-        }
+        total = len(self._contacts)
+        with_email = sum(1 for c in self._contacts.values() if c["email"])
+        all_tags = Counter(t for c in self._contacts.values() for t in c["tags"])
+        return {"total": total, "with_email": with_email,
+                "top_tags": all_tags.most_common(3)}
 
-    def __len__(self):
-        return len(self._contacts)
+    def export_csv(self):
+        lines = ["id,name,email,phone,tags"]
+        for c in self.all_sorted():
+            tags = "|".join(sorted(c["tags"]))
+            lines.append(f"{c['id']},{c['name']},{c['email']},{c['phone']},{tags}")
+        return "\n".join(lines)
 
-    def __repr__(self):
-        return f"ContactBook({len(self)} contacts)"
-
-
-# --- Full demo ---
+# --- Demo ---
 book = ContactBook()
+book.add("Alice Smith",  "alice@example.com", "555-0101", tags=["friend", "python"])
+book.add("Bob Jones",    "bob@work.com",       "555-0102", tags=["work",   "python"])
+book.add("Carol White",  "carol@example.com",  "555-0103", tags=["friend"])
+book.add("Dave Brown",   "",                   "555-0104", tags=["work",   "manager"])
+book.add("Eve Davis",    "eve@example.com",    "",         tags=["friend", "python"])
 
-# Add contacts
-book.add_contact("Alice Smith",  "alice@example.com",  "+1-555-0101", ["work", "python"])
-book.add_contact("Bob Jones",    "bob@example.com",    "+1-555-0102", ["friend", "python"])
-book.add_contact("Carol White",  "carol@example.com",  "+1-555-0103", ["work", "design"])
-book.add_contact("Dave Brown",   "dave@example.com",   "",            ["friend"])
-book.add_contact("Eve Wilson",   "eve@example.com",    "+1-555-0105", ["work", "python", "ml"])
+print("Search 'alice':", [c["name"] for c in book.search("alice")])
+print("Python devs:   ", [c["name"] for c in book.by_tag("python")])
+book.update(1, email="alice.smith@newdomain.com", tags=["friend","python","lead"])
+print("Stats:", book.stats())
+print("\nAll contacts (sorted by name):")
+for c in book.all_sorted():
+    tags = ", ".join(sorted(c["tags"]))
+    print(f"  [{c['id']}] {c['name']:<15}  {c['email'] or '(no email)':<25}  tags: {tags}")
+print("\nCSV Export:")
+print(book.export_csv())
+`} title="PROJECT: Contact Management System" height={580} />
 
-print(f"Contacts in book: {len(book)}")
-print()
+---
 
-# Find by name
-results = book.find_by_name("e")
-print("Contacts with 'e' in name:")
-for c in results:
-    print(f"  {c['name']} <{c['email']}>")
-print()
+## Exercises
 
-# Find by email
-contact = book.find_by_email("alice@example.com")
-print(f"Found by email: {contact['name']}, tags: {contact['tags']}")
-print()
+### Exercise 1 — Anagram Detector
 
-# Find by tag
-python_devs = book.find_by_tag("python")
-print("Python developers:")
-for c in python_devs:
-    print(f"  {c['name']}")
-print()
+<PythonPlayground code={String.raw`# TASK: is_anagram(a, b) returns True if a and b contain exactly
+# the same letters in any order (case-insensitive).
+# BONUS: group_anagrams(words) groups words that are anagrams of each other.
+# Hint: Counter or sorted() can represent the "signature" of a word.
 
-# Update a contact
-book.update_contact("bob@example.com", phone="+1-555-9999", tags=["friend", "python", "rust"])
-updated = book.find_by_email("bob@example.com")
-print(f"Bob's tags after update: {updated['tags']}")
-print()
+from collections import Counter
 
-# Delete a contact
-book.delete_contact("dave@example.com")
-print(f"After deleting Dave: {len(book)} contacts")
-print()
+def is_anagram(a, b):
+    # YOUR CODE HERE
+    pass
 
-# Stats
-s = book.stats()
-print("Stats:")
-print(f"  Total: {s['total']}")
-print(f"  With phone: {s['with_phone']}")
-print(f"  Unique tags: {s['unique_tags']}")
-print(f"  Top tags: {s['top_tags']}")
-print()
+def group_anagrams(words):
+    # YOUR CODE HERE — use a defaultdict keyed by sorted-tuple of chars
+    pass
 
-# Export and re-import
-csv_data = book.export_to_csv_string()
-print("CSV export:")
-print(csv_data)
+print(is_anagram("listen", "silent"))   # True
+print(is_anagram("hello",  "world"))    # False
+print(is_anagram("Astronomer", "Moon starer".replace(" ", "").lower()))  # True
 
-# Fresh book, import from CSV
-book2 = ContactBook()
-added, skipped = book2.import_from_csv_string(csv_data)
-print(f"Imported: {added} added, {skipped} skipped")
-print(f"Book2 contacts: {len(book2)}")
-`} title="PROJECT: Contact Management System" />
+print("\nGrouped anagrams:")
+for group in group_anagrams(["eat","tea","tan","ate","nat","bat"]):
+    print(" ", sorted(group))
+# Expected groups: ['ate','eat','tea']  ['bat']  ['nat','tan']
+`} title="Exercise 1: Anagram Detector" height={380} />
 
-## Challenge
+### Exercise 2 — Two-Sum (O(n) with dict)
 
-Push your skills further with these exercises:
+<PythonPlayground code={String.raw`# TASK: Given a list of integers and a target sum, return the INDICES
+# of the two numbers that add up to target. Assume exactly one solution exists.
+#
+# Naive approach: O(n^2) nested loops — too slow for large inputs
+# Optimal approach: O(n) single pass using a dict
+#
+# Key insight: for each number x, you need (target - x).
+# Store each number in a dict as you scan: {value: index}
 
-1. **LRU Cache** — implement an `LRUCache(capacity)` class using a `dict` and `collections.deque`. It should support `get(key)` and `put(key, value)` in O(1) time, evicting the least recently used item when at capacity.
+def two_sum(nums, target):
+    seen = {}   # value -> index
+    for i, x in enumerate(nums):
+        complement = target - x
+        if complement in seen:
+            return [seen[complement], i]
+        seen[x] = i
+    return []
 
-2. **Frequency analysis** — given a list of strings, use a `defaultdict(Counter)` to build a map of `first_letter -> Counter of words`. Find which starting letter has the most lexical diversity.
+# Tests
+print(two_sum([2, 7, 11, 15], 9))   # [0, 1]  — 2+7
+print(two_sum([3, 2, 4], 6))        # [1, 2]  — 2+4
+print(two_sum([3, 3], 6))           # [0, 1]  — 3+3
 
-3. **Set operations for analytics** — you have two sets of user IDs: `users_week1` and `users_week2`. Compute: retained users (in both), churned users (only in week1), new users (only in week2), and the retention rate.
+# CHALLENGE: three_sum — return all unique triplets that sum to 0
+def three_sum(nums):
+    # Sort first; for each element use two-pointer for remaining pair
+    # YOUR CODE HERE
+    pass
 
-4. **Comprehension golf** — write these as single-line comprehensions:
-   - All prime numbers below 100
-   - A dict mapping each word in a sentence to its reverse
-   - The transpose of a 4x4 matrix
+print(three_sum([-1, 0, 1, 2, -1, -4]))  # [[-1,-1,2], [-1,0,1]]
+`} title="Exercise 2: Two-Sum O(n) — dict pattern" height={400} />
 
-5. **Contact book extension** — add a `merge(other_book)` method that merges two ContactBooks, handling duplicates by keeping the one with more fields filled in.
+### Exercise 3 — LRU Cache
+
+<PythonPlayground code={String.raw`# Implement an LRU (Least Recently Used) Cache with O(1) get and put.
+# When at capacity, evict the least recently used item.
+# Use OrderedDict: it tracks insertion order and supports move_to_end()
+
+from collections import OrderedDict
+
+class LRUCache:
+    def __init__(self, capacity):
+        self.cap   = capacity
+        self.cache = OrderedDict()  # key -> value, ordered by recency
+
+    def get(self, key):
+        """Return value if found; mark it as recently used. Return -1 if absent."""
+        if key not in self.cache:
+            return -1
+        self.cache.move_to_end(key)   # mark as most recently used
+        return self.cache[key]
+
+    def put(self, key, value):
+        """Insert key-value. Evict LRU item if over capacity."""
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        self.cache[key] = value
+        if len(self.cache) > self.cap:
+            self.cache.popitem(last=False)  # remove OLDEST (front)
+
+# Tests — trace through what should be evicted
+cache = LRUCache(3)
+cache.put("a", 1)
+cache.put("b", 2)
+cache.put("c", 3)
+print(cache.get("a"))   # 1 — "a" is now most recent; order: b, c, a
+cache.put("d", 4)       # evicts "b" (least recently used)
+print(cache.get("b"))   # -1 — evicted!
+print(cache.get("c"))   # 3
+print(cache.get("d"))   # 4
+print(cache.get("a"))   # 1
+
+# CHALLENGE: Implement the same using a plain dict + deque (no OrderedDict)
+`} title="Exercise 3: LRU Cache with OrderedDict" height={440} />
+
+### Exercise 4 — BFS Shortest Path (Graph as dict of sets)
+
+<PythonPlayground code={String.raw`from collections import defaultdict, deque
+
+class Graph:
+    def __init__(self):
+        self.adj = defaultdict(set)
+
+    def add_edge(self, u, v, directed=False):
+        self.adj[u].add(v)
+        if not directed:
+            self.adj[v].add(u)
+
+    def bfs_shortest_path(self, start, end):
+        """Return list of nodes forming the shortest path from start to end."""
+        if start == end:
+            return [start]
+        visited = {start}
+        queue = deque([[start]])    # queue of PATHS
+        while queue:
+            path = queue.popleft()
+            node = path[-1]
+            for neighbor in sorted(self.adj[node]):  # sorted for determinism
+                if neighbor == end:
+                    return path + [neighbor]
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(path + [neighbor])
+        return []   # no path found
+
+    def connected_components(self):
+        """Return list of sets, each set is one connected component."""
+        visited   = set()
+        components = []
+        for node in self.adj:
+            if node not in visited:
+                component = set()
+                q = deque([node])
+                while q:
+                    n = q.popleft()
+                    if n not in visited:
+                        visited.add(n)
+                        component.add(n)
+                        q.extend(self.adj[n] - visited)
+                components.append(component)
+        return components
+
+g = Graph()
+for u, v in [("A","B"),("A","C"),("B","D"),("C","D"),("D","E"),("E","F"),("C","G")]:
+    g.add_edge(u, v)
+
+print("Shortest A->F:", g.bfs_shortest_path("A", "F"))
+print("Shortest A->G:", g.bfs_shortest_path("A", "G"))
+
+g2 = Graph()
+g2.add_edge("X", "Y"); g2.add_edge("P", "Q"); g2.add_edge("P", "R")
+print("Components:", g2.connected_components())
+`} title="Exercise 4: BFS Shortest Path" height={500} />
+
+### Exercise 5 — Word Frequency Pipeline
+
+<PythonPlayground code={String.raw`# Build a complete text frequency analysis pipeline using Counter and dict.
+# Steps: tokenise -> normalise -> remove stop words -> count -> report
+
+from collections import Counter
+import re
+
+STOP_WORDS = {
+    "the","a","an","is","it","in","on","at","to","for","of","and",
+    "or","but","not","with","this","that","was","are","be","as","by",
+    "from","have","had","has","he","she","they","we","i","you","do",
+    "did","will","would","can","could","should","so","if","its","been"
+}
+
+def analyze_text(text, top_n=10):
+    # Tokenise: extract all alphabetic tokens
+    tokens = re.findall(r"[a-z]+", text.lower())
+    # Remove stop words
+    tokens = [t for t in tokens if t not in STOP_WORDS and len(t) > 2]
+
+    freq      = Counter(tokens)
+    total     = sum(freq.values())
+    vocab_size = len(freq)
+    top       = freq.most_common(top_n)
+
+    print(f"Total content words : {total}")
+    print(f"Vocabulary size     : {vocab_size}")
+    print(f"Type-token ratio    : {vocab_size/total:.3f}")
+    print(f"\nTop {top_n} words:")
+    for word, count in top:
+        bar = "#" * (count * 30 // max(c for _, c in top))
+        print(f"  {word:<15} {count:>4}  {bar}")
+
+    return freq
+
+text = """
+Python is an interpreted high-level general-purpose programming language.
+Python design philosophy emphasizes code readability with the use of significant
+indentation. Python is dynamically typed and garbage collected. It supports
+multiple programming paradigms including structured, object oriented and functional
+programming. Python is often described as a batteries included language due to its
+comprehensive standard library. Python was created by Guido van Rossum and first
+released in 1991. Python consistently ranks as one of the most popular programming
+languages. Python developers emphasize a culture of readable, clean, and explicit code.
+"""
+
+freq = analyze_text(text, top_n=8)
+
+# Bonus: bigrams — pairs of consecutive words
+tokens = [t for t in re.findall(r"[a-z]+", text.lower())
+          if t not in STOP_WORDS and len(t) > 2]
+bigrams = [(tokens[i], tokens[i+1]) for i in range(len(tokens)-1)]
+bigram_freq = Counter(bigrams)
+print("\nTop bigrams:")
+for (w1, w2), cnt in bigram_freq.most_common(5):
+    print(f"  '{w1} {w2}': {cnt}")
+`} title="Exercise 5: Word Frequency Pipeline" height={560} />
+
+### Exercise 6 — Social Network with Set Operations
+
+<PythonPlayground code={String.raw`from collections import defaultdict, Counter
+
+class SocialNetwork:
+    def __init__(self):
+        self.following = defaultdict(set)   # user -> set of users they follow
+        self.followers = defaultdict(set)   # user -> set of users who follow them
+
+    def follow(self, follower, followee):
+        self.following[follower].add(followee)
+        self.followers[followee].add(follower)
+
+    def unfollow(self, follower, followee):
+        self.following[follower].discard(followee)
+        self.followers[followee].discard(follower)
+
+    def mutual(self, u, v):
+        """Do u and v follow each other?"""
+        return v in self.following[u] and u in self.following[v]
+
+    def common_followers(self, u, v):
+        """Users who follow BOTH u and v (set intersection)."""
+        return self.followers[u] & self.followers[v]
+
+    def suggested(self, user, n=3):
+        """Suggest accounts: followed-by-people-you-follow, ranked by frequency."""
+        candidates = Counter()
+        for friend in self.following[user]:
+            for candidate in self.following[friend]:
+                if candidate != user and candidate not in self.following[user]:
+                    candidates[candidate] += 1
+        return candidates.most_common(n)
+
+    def influencers(self, n=3):
+        return Counter({u: len(fs) for u, fs in self.followers.items()}).most_common(n)
+
+net = SocialNetwork()
+follows = [
+    ("alice","bob"), ("alice","carol"), ("alice","dave"),
+    ("bob","alice"), ("bob","carol"),   ("carol","alice"),
+    ("dave","carol"), ("dave","eve"),   ("eve","alice"),
+    ("frank","alice"), ("frank","bob"), ("frank","carol"),
+]
+for a, b in follows:
+    net.follow(a, b)
+
+print("alice<->bob mutual?", net.mutual("alice", "bob"))    # True
+print("alice<->dave mutual?", net.mutual("alice", "dave"))  # False
+print("Common followers alice & carol:", net.common_followers("alice", "carol"))
+print("Suggested for dave:", net.suggested("dave", n=3))
+print("Top influencers:", net.influencers(3))
+`} title="Exercise 6: Social Network (sets + dicts)" height={520} />
+
+### Exercise 7 — Sliding Window Maximum
+
+<PythonPlayground code={String.raw`from collections import deque
+
+def sliding_window_max(nums, k):
+    """
+    Return the maximum value in every window of size k.
+    Naive: O(n*k). Optimal with deque: O(n).
+
+    Key insight: maintain a deque of INDICES where values are
+    in DECREASING order. The front of the deque is always the
+    max of the current window.
+    """
+    result = []
+    dq = deque()   # stores indices; front = index of current max
+
+    for i, num in enumerate(nums):
+        # Remove indices outside this window
+        while dq and dq[0] < i - k + 1:
+            dq.popleft()
+        # Remove indices of smaller values — they can never be the max
+        while dq and nums[dq[-1]] < num:
+            dq.pop()
+        dq.append(i)
+        # Window is full once i >= k-1
+        if i >= k - 1:
+            result.append(nums[dq[0]])
+
+    return result
+
+print(sliding_window_max([1,3,-1,-3,5,3,6,7], k=3))  # [3,3,5,5,6,7]
+print(sliding_window_max([1,3,1,2,0,5],       k=3))  # [3,3,2,5]
+print(sliding_window_max([4,3,2,1],            k=2))  # [4,3,2]
+
+# CHALLENGE: sliding window AVERAGE (use deque as circular buffer)
+def sliding_window_avg(nums, k):
+    window = deque(maxlen=k)
+    result = []
+    total  = 0
+    for num in nums:
+        if len(window) == k:
+            total -= window[0]
+        window.append(num)
+        total += num
+        if len(window) == k:
+            result.append(round(total / k, 2))
+    return result
+
+print(sliding_window_avg([1, 3, -1, -3, 5, 3, 6, 7], k=3))
+`} title="Exercise 7: Sliding Window Maximum (deque O(n))" height={480} />
+
+### Exercise 8 — Sparse Matrix as dict of dicts
+
+<PythonPlayground code={String.raw`# A sparse matrix stores only non-zero values.
+# Representing it as dict-of-dicts uses far less memory than a full 2D list.
+
+class SparseMatrix:
+    def __init__(self, rows, cols):
+        self.rows = rows
+        self.cols = cols
+        self._data = {}   # {row: {col: value}}
+
+    def set(self, r, c, val):
+        if val == 0:
+            # Remove zero entries to keep it truly sparse
+            if r in self._data and c in self._data[r]:
+                del self._data[r][c]
+            return
+        if r not in self._data:
+            self._data[r] = {}
+        self._data[r][c] = val
+
+    def get(self, r, c):
+        return self._data.get(r, {}).get(c, 0)
+
+    def add(self, other):
+        result = SparseMatrix(self.rows, self.cols)
+        all_rows = set(self._data) | set(other._data)
+        for r in all_rows:
+            all_cols = set(self._data.get(r, {})) | set(other._data.get(r, {}))
+            for c in all_cols:
+                result.set(r, c, self.get(r, c) + other.get(r, c))
+        return result
+
+    def transpose(self):
+        result = SparseMatrix(self.cols, self.rows)
+        for r, cols in self._data.items():
+            for c, val in cols.items():
+                result.set(c, r, val)
+        return result
+
+    def nnz(self):
+        return sum(len(cols) for cols in self._data.values())
+
+    def display(self):
+        for r in range(self.rows):
+            row_str = " ".join(f"{self.get(r, c):3}" for c in range(self.cols))
+            print(f"  [{row_str}]")
+
+m1 = SparseMatrix(4, 4)
+m1.set(0, 0, 1); m1.set(0, 3, 2)
+m1.set(1, 1, 3)
+m1.set(3, 0, 4); m1.set(3, 3, 5)
+
+print(f"M1 — {m1.nnz()} non-zero elements:")
+m1.display()
+
+m2 = SparseMatrix(4, 4)
+m2.set(0, 0, 10); m2.set(1, 1, 20); m2.set(3, 3, 30)
+
+print("M1 + M2:")
+(m1.add(m2)).display()
+
+print("M1 transposed:")
+m1.transpose().display()
+`} title="Exercise 8: Sparse Matrix as dict-of-dicts" height={540} />
 
 ## Key Takeaways
 
-- Lists are O(1) for indexed access and tail operations, but O(n) for arbitrary insertion/deletion — use `deque` for queue operations
-- Tuples signal immutability and are hashable — they work as dict keys and can represent fixed records
-- Dict lookups are O(1) average thanks to hashing — for frequent "is X in collection" checks, always prefer a set or dict over a list
-- `defaultdict` and `Counter` solve 80% of grouping and counting tasks without boilerplate
-- Comprehensions are faster than `for` loops for building collections and express intent more clearly
-- Generator expressions produce values lazily — always prefer them over list comprehensions when you only need to iterate once
-- The `key=` parameter in `sorted()` is one of Python's most powerful features — it avoids DSU (Decorate-Sort-Undecorate) patterns
-- Choose your container by its O-complexity and semantics: the right choice is often obvious once you ask "what operations will I do most?"
+- **Lists** are O(1) at the tail and by index — use `deque` for O(1) operations at both ends
+- **Tuples** signal immutability and are hashable — use them as dict keys and to represent fixed records
+- **Dict** lookups, inserts, and deletes are O(1) average — always prefer a dict over a list for key-based access
+- **Sets** give O(1) membership testing — use them whenever you repeatedly ask "is X in collection?"
+- **`defaultdict`** eliminates "if key not in dict" boilerplate for grouping, counting, and graph adjacency
+- **`Counter`** supports frequency counting, arithmetic on counts, and `most_common(n)`
+- **Comprehensions** are faster than for-loops for building collections; they express intent clearly
+- **Generator expressions** produce values lazily — prefer them when you need to iterate only once
+- The **`key=`** parameter in `sorted()` makes multi-key sorting trivial with no auxiliary data structures
+- Choose your container by asking: "What operation will I do most often?" — then pick the O(1) one

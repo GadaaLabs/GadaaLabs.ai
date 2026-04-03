@@ -1,494 +1,699 @@
 ---
-title: "Object-Oriented Programming — Classes to Protocols"
-description: "Python OOP from first principles: classes, inheritance, magic methods, dataclasses, and protocols. Build a complete bank account system with transaction history and interest calculation."
-duration: 30
+title: "Object-Oriented Programming — From Classes to Protocols"
+description: "Master OOP in Python completely — classes, inheritance, MRO, dunder methods, properties, descriptors, abstract classes, dataclasses, and protocols. Build a full bank account system."
+duration: 38
 order: 5
 ---
 
-## Why OOP? The Python Take
+## Part 1: Classes from Scratch
 
-Object-Oriented Programming organizes code around **objects** — things that bundle data (attributes) and behavior (methods) together. The four pillars are:
+### The Class Statement and `__init__`
 
-- **Encapsulation** — hide internal state, expose a clean interface
-- **Abstraction** — present only what callers need to know
-- **Inheritance** — share behavior across related types
-- **Polymorphism** — different objects respond to the same interface
+A class is a blueprint for objects. When you call `MyClass()`, Python allocates a new instance (`__new__`), then calls `__init__` to initialize it. `self` is not a keyword — it is simply the first parameter of every instance method, and Python automatically passes the instance as that first argument.
 
-Python's approach is more pragmatic than Java's. There are no truly private attributes (just conventions). Multiple inheritance is supported but should be used carefully. And Python adds something Java lacks: **duck typing** — if it walks like a duck and quacks like a duck, it is a duck. An object does not need to inherit from a class to be treated as that type; it just needs the right methods.
+<PythonPlayground code={String.raw`class Point:
+    """Represents a 2D point in Cartesian space."""
 
-## Class Definition and `__init__`
+    def __init__(self, x, y):
+        # Instance attributes live in the instance's __dict__
+        self.x = x
+        self.y = y
 
-A class is a blueprint. An instance is a concrete object built from that blueprint. The `__init__` method is called when a new instance is created — it initializes instance attributes.
-
-<PythonPlayground code={String.raw`class Dog:
-    # Class attribute — shared by ALL instances
-    species = "Canis familiaris"
-
-    def __init__(self, name, age, breed):
-        # Instance attributes — unique to each instance
-        self.name = name
-        self.age = age
-        self.breed = breed
-
-    def describe(self):
-        return f"{self.name} is a {self.age}-year-old {self.breed}."
-
-    def speak(self, sound="Woof"):
-        return f"{self.name} says {sound}!"
-
-# Create instances
-rex = Dog("Rex", 3, "German Shepherd")
-luna = Dog("Luna", 1, "Labrador")
-
-print(rex.describe())
-print(luna.speak("Bark bark!"))
-
-# Class vs instance attributes
-print(rex.species)     # from class
-print(Dog.species)     # from class directly
-
-# Instance attributes shadow class attributes
-rex.species = "Wolf"   # creates an instance attribute (doesn't change class)
-print(rex.species)     # Wolf
-print(luna.species)    # Canis familiaris — class attribute unchanged
-print(Dog.species)     # Canis familiaris
-
-# Introspection
-print(rex.__dict__)     # instance attributes only
-print(type(rex))        # <class '__main__.Dog'>
-print(isinstance(rex, Dog))  # True
-`} title="Class definition and instance attributes" />
-
-## Methods: Instance, Class, and Static
-
-<PythonPlayground code={String.raw`class Temperature:
-    """Represent a temperature with conversion utilities."""
-
-    # Class attribute
-    absolute_zero_c = -273.15
-
-    def __init__(self, celsius):
-        self._celsius = celsius
-
-    # Instance method — operates on self
-    def to_fahrenheit(self):
-        return self._celsius * 9/5 + 32
-
-    def to_kelvin(self):
-        return self._celsius - self.absolute_zero_c
+    def distance_to(self, other):
+        dx = self.x - other.x
+        dy = self.y - other.y
+        return (dx**2 + dy**2) ** 0.5
 
     def __repr__(self):
-        return f"Temperature({self._celsius}°C)"
+        return f"Point({self.x}, {self.y})"
 
-    # Class method — receives the class as first arg (cls)
-    # Common use: alternative constructors
+p1 = Point(0, 0)
+p2 = Point(3, 4)
+
+print(p1)
+print(p2)
+print(f"Distance: {p1.distance_to(p2)}")  # 5.0
+
+# self is just a name — Python passes the instance automatically
+print(Point.distance_to(p1, p2))   # same call, explicit first arg
+
+# Instance dict — where attributes live
+print(vars(p1))   # {'x': 0, 'y': 0}
+p1.label = "origin"
+print(vars(p1))   # {'x': 0, 'y': 0, 'label': 'origin'}
+`} height={300} />
+
+### Instance vs Class Attributes
+
+<PythonPlayground code={String.raw`class Counter:
+    # Class attribute — shared across all instances
+    total_instances = 0
+
+    def __init__(self, name):
+        Counter.total_instances += 1
+        self.name = name     # instance attribute
+        self.count = 0       # instance attribute
+
+    def increment(self):
+        self.count += 1
+
+    def reset(self):
+        self.count = 0
+
+c1 = Counter("c1")
+c2 = Counter("c2")
+c3 = Counter("c3")
+
+print(f"Total instances created: {Counter.total_instances}")  # 3
+
+c1.increment()
+c1.increment()
+c2.increment()
+
+print(f"c1.count = {c1.count}")   # 2
+print(f"c2.count = {c2.count}")   # 1
+print(f"c3.count = {c3.count}")   # 0
+
+# Danger: assigning to instance shadows the class attribute
+c1.total_instances = 99
+print(f"c1.total_instances: {c1.total_instances}")    # 99 (instance)
+print(f"Counter.total_instances: {Counter.total_instances}")  # 3 (class)
+
+# Attribute lookup order: instance __dict__ -> class __dict__ -> bases
+print(vars(c1))
+`} height={340} />
+
+### classmethod and staticmethod
+
+<PythonPlayground code={String.raw`from datetime import date
+
+class Person:
+    def __init__(self, name, birth_year):
+        self.name = name
+        self.birth_year = birth_year
+
     @classmethod
-    def from_fahrenheit(cls, fahrenheit):
-        return cls((fahrenheit - 32) * 5/9)
+    def from_birth_date(cls, name, birth_date_str):
+        """Factory method — alternative constructor. cls is the class itself."""
+        year = int(birth_date_str.split("-")[0])
+        return cls(name, year)    # cls() works correctly in subclasses!
 
     @classmethod
-    def from_kelvin(cls, kelvin):
-        return cls(kelvin + cls.absolute_zero_c)
+    def from_dict(cls, data):
+        return cls(data["name"], data["birth_year"])
 
-    # Static method — no access to instance or class
-    # Use when function is logically related but doesn't need self/cls
     @staticmethod
-    def is_valid_celsius(value):
-        return value >= -273.15
+    def is_valid_birth_year(year):
+        """Utility function — no access to cls or self."""
+        return 1900 <= year <= date.today().year
 
-# Instance methods
-t1 = Temperature(100)
-print(t1)
-print(f"{t1._celsius}°C = {t1.to_fahrenheit():.1f}°F = {t1.to_kelvin():.2f}K")
+    @property
+    def age(self):
+        return date.today().year - self.birth_year
 
-# Class methods as alternative constructors
-t2 = Temperature.from_fahrenheit(98.6)
-print(f"98.6°F = {t2._celsius:.1f}°C")
+    def __repr__(self):
+        return f"Person(name={self.name!r}, birth_year={self.birth_year})"
 
-t3 = Temperature.from_kelvin(0)
-print(f"0K = {t3._celsius:.2f}°C")
+# Using factory classmethods
+p1 = Person("Alice", 1990)
+p2 = Person.from_birth_date("Bob", "1985-06-15")
+p3 = Person.from_dict({"name": "Carol", "birth_year": 1995})
 
-# Static method
-print(Temperature.is_valid_celsius(-300))  # False
-print(Temperature.is_valid_celsius(-273))  # True
-`} title="Instance, class, and static methods" />
+print(p1, p1.age)
+print(p2, p2.age)
+print(p3, p3.age)
 
-## Magic / Dunder Methods
+print(Person.is_valid_birth_year(1995))   # True
+print(Person.is_valid_birth_year(1800))   # False
 
-Magic methods (also called dunder methods, for double underscore) are how Python's operator overloading and protocol system works. When you write `a + b`, Python calls `a.__add__(b)`. When you write `len(x)`, Python calls `x.__len__()`.
+# Why classmethod > staticmethod for factories?
+# classmethod works correctly with inheritance:
+class Employee(Person):
+    def __init__(self, name, birth_year, company="Unknown"):
+        super().__init__(name, birth_year)
+        self.company = company
+
+emp = Employee.from_birth_date("Dave", "1988-03-20")
+print(type(emp))   # Employee — not Person!
+`} height={420} />
+
+---
+
+## Part 2: Dunder (Magic) Methods
+
+### `__repr__` and `__str__`
 
 <PythonPlayground code={String.raw`class Vector:
-    """2D vector with full operator support."""
+    def __init__(self, x, y, z=0):
+        self.x = x
+        self.y = y
+        self.z = z
 
+    def __repr__(self):
+        # __repr__: unambiguous, for developers — eval(repr(v)) should recreate v
+        return f"Vector({self.x!r}, {self.y!r}, {self.z!r})"
+
+    def __str__(self):
+        # __str__: human-readable, for users
+        return f"({self.x}, {self.y}, {self.z})"
+
+    def __format__(self, spec):
+        if spec == "polar":
+            mag = (self.x**2 + self.y**2) ** 0.5
+            import math
+            angle = math.degrees(math.atan2(self.y, self.x))
+            return f"|{mag:.2f}|<{angle:.1f}deg>"
+        return str(self)
+
+v = Vector(1, 2, 3)
+
+print(repr(v))   # Vector(1, 2, 3)
+print(str(v))    # (1, 2, 3)
+print(v)         # (1, 2, 3)
+
+# In containers, Python calls __repr__
+print([v, Vector(4, 5)])
+
+print(f"Vector: {v}")
+print(f"Polar: {Vector(3, 4):polar}")
+
+# If only __repr__ is defined, it also serves as __str__
+class Simple:
+    def __repr__(self):
+        return "Simple()"
+
+s = Simple()
+print(str(s))    # Simple() — falls back to __repr__
+`} height={360} />
+
+### Comparison Operators and `@total_ordering`
+
+<PythonPlayground code={String.raw`from functools import total_ordering
+
+@total_ordering   # only need __eq__ and ONE comparison method
+class Version:
+    """Semantic version comparison."""
+    def __init__(self, version_str):
+        parts = version_str.split(".")
+        self.major = int(parts[0])
+        self.minor = int(parts[1]) if len(parts) > 1 else 0
+        self.patch = int(parts[2]) if len(parts) > 2 else 0
+
+    def _tuple(self):
+        return (self.major, self.minor, self.patch)
+
+    def __eq__(self, other):
+        if not isinstance(other, Version):
+            return NotImplemented
+        return self._tuple() == other._tuple()
+
+    def __lt__(self, other):
+        if not isinstance(other, Version):
+            return NotImplemented
+        return self._tuple() < other._tuple()
+
+    def __repr__(self):
+        return f"Version('{self.major}.{self.minor}.{self.patch}')"
+
+    def __hash__(self):
+        return hash(self._tuple())   # required when __eq__ is defined
+
+v1 = Version("1.0.0")
+v2 = Version("1.2.3")
+v3 = Version("2.0.0")
+v4 = Version("1.2.3")
+
+print(f"v1 < v2: {v1 < v2}")     # True
+print(f"v2 == v4: {v2 == v4}")   # True
+print(f"v3 > v2: {v3 > v2}")     # True — generated by @total_ordering
+print(f"v1 <= v2: {v1 <= v2}")   # True — generated
+
+versions = [Version("1.5.0"), Version("2.0.1"), Version("1.0.0"), Version("1.5.1")]
+print(sorted(versions))
+
+# Works in a set because __hash__ is defined
+version_set = {v1, v2, v4}
+print(f"Set size: {len(version_set)}")   # 2 (v2 and v4 are equal)
+`} height={380} />
+
+### Arithmetic Operators and Reflected Methods
+
+<PythonPlayground code={String.raw`class Vector:
+    def __init__(self, *components):
+        self.components = tuple(components)
+
+    def __repr__(self):
+        return f"Vector{self.components}"
+
+    def __len__(self):
+        return len(self.components)
+
+    def __add__(self, other):
+        if isinstance(other, Vector):
+            if len(self) != len(other):
+                raise ValueError("Vectors must have same dimension")
+            return Vector(*(a + b for a, b in zip(self.components, other.components)))
+        return NotImplemented
+
+    def __radd__(self, other):
+        """Called when left operand does not support __add__ with Vector.
+        Makes sum([v1, v2, v3]) work (sum starts with integer 0)."""
+        if other == 0:
+            return self
+        return NotImplemented
+
+    def __mul__(self, scalar):
+        if isinstance(scalar, (int, float)):
+            return Vector(*(c * scalar for c in self.components))
+        return NotImplemented
+
+    def __rmul__(self, scalar):
+        return self.__mul__(scalar)   # 3 * v == v * 3
+
+    def __neg__(self):
+        return Vector(*(-c for c in self.components))
+
+    def __abs__(self):
+        return sum(c**2 for c in self.components) ** 0.5
+
+    def __iadd__(self, other):
+        if isinstance(other, Vector):
+            self.components = tuple(a + b for a, b in zip(self.components, other.components))
+            return self
+        return NotImplemented
+
+v1 = Vector(1, 2, 3)
+v2 = Vector(4, 5, 6)
+
+print(v1 + v2)
+print(v1 * 3)
+print(3 * v1)       # __rmul__
+print(-v1)
+print(f"magnitude: {abs(v1):.4f}")
+
+# sum() uses __radd__ with initial value 0
+vectors = [Vector(1, 0, 0), Vector(0, 1, 0), Vector(0, 0, 1)]
+print(sum(vectors))   # Vector(1, 1, 1)
+
+v3 = Vector(0, 0, 0)
+v3 += v1
+print(v3)
+`} height={400} />
+
+### Container Protocol
+
+<PythonPlayground code={String.raw`class SortedList:
+    """A list that always maintains sorted order."""
+
+    def __init__(self, iterable=None):
+        self._data = []
+        if iterable:
+            for item in iterable:
+                self.add(item)
+
+    def add(self, item):
+        import bisect
+        bisect.insort(self._data, item)
+
+    def __len__(self):
+        return len(self._data)
+
+    def __getitem__(self, index):
+        return self._data[index]
+
+    def __setitem__(self, index, value):
+        raise TypeError("SortedList does not support item assignment")
+
+    def __delitem__(self, index):
+        del self._data[index]
+
+    def __contains__(self, item):
+        import bisect
+        i = bisect.bisect_left(self._data, item)
+        return i < len(self._data) and self._data[i] == item
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __reversed__(self):
+        return reversed(self._data)
+
+    def __repr__(self):
+        return f"SortedList({self._data!r})"
+
+sl = SortedList([5, 3, 8, 1, 9, 2])
+print(sl)
+print(len(sl))
+print(sl[0], sl[-1])
+print(5 in sl)
+print(4 in sl)
+
+sl.add(4)
+print(sl)
+
+for item in sl:
+    print(item, end=" ")
+print()
+
+del sl[0]
+print(sl)
+`} height={380} />
+
+### Context Manager, `__call__`, `__bool__`, and `__slots__`
+
+<PythonPlayground code={String.raw`import sys
+import time
+
+# __enter__ / __exit__ — context manager protocol
+class Timer:
+    def __init__(self, name=""):
+        self.name = name
+        self.elapsed = None
+
+    def __enter__(self):
+        self._start = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.elapsed = time.perf_counter() - self._start
+        if self.name:
+            print(f"[{self.name}] {self.elapsed*1000:.3f} ms")
+        return False   # do not suppress exceptions
+
+with Timer("example") as t:
+    result = sum(range(500000))
+print(f"Result: {result}, Time: {t.elapsed*1000:.3f} ms")
+
+# __call__ — makes instances callable
+class Multiplier:
+    def __init__(self, factor):
+        self.factor = factor
+    def __call__(self, value):
+        return value * self.factor
+
+double = Multiplier(2)
+print(double(10))
+print(list(map(double, [1, 2, 3, 4, 5])))
+
+# __bool__ — truthiness
+class Account:
+    def __init__(self, balance):
+        self.balance = balance
+    def __bool__(self):
+        return self.balance > 0
+
+acc = Account(100)
+empty = Account(0)
+print(bool(acc))    # True
+print(bool(empty))  # False
+if acc:
+    print("Account has funds")
+
+# __slots__ — replaces per-instance __dict__ with fixed-size array
+class WithDict:
     def __init__(self, x, y):
         self.x = x
         self.y = y
 
-    # String representations
-    def __repr__(self):
-        """Unambiguous — for developers. Used in REPL and repr()."""
-        return f"Vector({self.x}, {self.y})"
+class WithSlots:
+    __slots__ = ("x", "y")
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
 
-    def __str__(self):
-        """Readable — for end users. Used by print() and str()."""
-        return f"({self.x}, {self.y})"
-
-    # Arithmetic operators
-    def __add__(self, other):
-        return Vector(self.x + other.x, self.y + other.y)
-
-    def __sub__(self, other):
-        return Vector(self.x - other.x, self.y - other.y)
-
-    def __mul__(self, scalar):
-        return Vector(self.x * scalar, self.y * scalar)
-
-    def __rmul__(self, scalar):  # handles: 3 * vector
-        return self.__mul__(scalar)
-
-    def __neg__(self):
-        return Vector(-self.x, -self.y)
-
-    def __abs__(self):
-        return (self.x**2 + self.y**2) ** 0.5
-
-    # Comparison
-    def __eq__(self, other):
-        return self.x == other.x and self.y == other.y
-
-    def __lt__(self, other):
-        return abs(self) < abs(other)
-
-    # Container-like behaviour
-    def __len__(self):
-        return 2   # a 2D vector has 2 components
-
-    def __getitem__(self, index):
-        return (self.x, self.y)[index]
-
-    def __iter__(self):
-        yield self.x
-        yield self.y
-
-    def __contains__(self, item):
-        return item in (self.x, self.y)
-
-v1 = Vector(3, 4)
-v2 = Vector(1, 2)
-
-print(repr(v1))
-print(str(v1))
-print(v1 + v2)
-print(v1 - v2)
-print(v1 * 3)
-print(3 * v1)
-print(-v1)
-print(f"|v1| = {abs(v1)}")
-print(f"v1 == v2: {v1 == v2}")
-print(f"v1 > v2: {v1 > v2}")   # uses __lt__ via functools logic
-
-# Iteration
-x, y = v1   # __iter__
-print(f"Unpacked: x={x}, y={y}")
-
-# len and indexing
-print(f"len: {len(v1)}, v1[0]={v1[0]}")
-print(f"3 in v1: {3 in v1}")
-`} title="Magic methods: __repr__, arithmetic, comparison, iteration" />
-
-### The Iterator Protocol
-
-An object is iterable if it implements `__iter__`. An object is an iterator if it implements both `__iter__` and `__next__`. The two are often combined.
-
-<PythonPlayground code={String.raw`class CountUp:
-    """Iterator that counts from start to stop (inclusive)."""
-
-    def __init__(self, start, stop, step=1):
-        self.start = start
-        self.stop = stop
-        self.step = step
-        self._current = start
-
-    def __iter__(self):
-        """Iterable protocol — return the iterator (self)."""
-        self._current = self.start   # reset on each new iteration
-        return self
-
-    def __next__(self):
-        """Iterator protocol — return next value or raise StopIteration."""
-        if self._current > self.stop:
-            raise StopIteration
-        value = self._current
-        self._current += self.step
-        return value
-
-    def __len__(self):
-        return max(0, (self.stop - self.start) // self.step + 1)
-
-counter = CountUp(1, 10, 2)
-print(list(counter))        # [1, 3, 5, 7, 9]
-print(sum(counter))         # 25 — can iterate again (resets)
-print(len(counter))         # 5
-
-# Works in all iteration contexts
-for n in CountUp(0, 6, 3):
-    print(n, end=" ")
-print()
-
-# List/set/dict comprehension
-evens = [x for x in CountUp(0, 20, 2)]
-print(evens)
-`} title="Iterator protocol: __iter__ and __next__" />
-
-## Properties
-
-Properties replace explicit getter/setter methods with attribute-style access while keeping validation and computation in Python. This is idiomatic Python; writing `get_balance()` and `set_balance()` is not.
-
-<PythonPlayground code={String.raw`class Circle:
-    def __init__(self, radius):
-        self._radius = radius   # _radius is the backing store
-
-    @property
-    def radius(self):
-        """Get the radius."""
-        return self._radius
-
-    @radius.setter
-    def radius(self, value):
-        if value < 0:
-            raise ValueError(f"Radius cannot be negative: {value}")
-        self._radius = value
-
-    @radius.deleter
-    def radius(self):
-        del self._radius
-
-    @property
-    def diameter(self):
-        """Computed property — no setter needed."""
-        return self._radius * 2
-
-    @property
-    def area(self):
-        import math
-        return math.pi * self._radius ** 2
-
-    @property
-    def circumference(self):
-        import math
-        return 2 * math.pi * self._radius
-
-    def __repr__(self):
-        return f"Circle(r={self._radius})"
-
-c = Circle(5)
-print(c.radius)          # calls getter
-c.radius = 10            # calls setter
-print(c.diameter)        # 20 — computed
-print(f"Area: {c.area:.3f}")
+d = WithDict(1, 2)
+s = WithSlots(1, 2)
+print(f"WithDict:  {sys.getsizeof(d) + sys.getsizeof(d.__dict__)} bytes total")
+print(f"WithSlots: {sys.getsizeof(s)} bytes")
 
 try:
-    c.radius = -1         # calls setter → raises ValueError
-except ValueError as e:
-    print(e)
+    s.z = 3
+except AttributeError as e:
+    print(f"AttributeError: {e}")
+`} height={460} />
 
-# Properties make APIs clean — users use attribute syntax
-# even though there's logic running behind the scenes
-`} title="Properties with @property, @setter, @deleter" />
+---
 
-## Inheritance and super()
+## Part 3: Inheritance and MRO
 
-Inheritance lets a class reuse and extend another class's behavior. The subclass inherits all methods and attributes of the parent.
+### Single Inheritance and super()
 
 <PythonPlayground code={String.raw`class Animal:
     def __init__(self, name, species):
         self.name = name
         self.species = species
-        self._sounds = []
 
     def speak(self):
-        raise NotImplementedError("Subclasses must implement speak()")
+        raise NotImplementedError(f"{self.__class__.__name__} must implement speak()")
 
-    def log_sound(self, sound):
-        self._sounds.append(sound)
+    def describe(self):
+        return f"{self.name} ({self.species})"
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.name!r})"
 
-
 class Dog(Animal):
     def __init__(self, name, breed):
-        super().__init__(name, species="Canis familiaris")  # call parent __init__
+        super().__init__(name, species="Canis lupus familiaris")
         self.breed = breed
 
     def speak(self):
-        sound = f"Woof! I'm {self.name} the {self.breed}."
-        self.log_sound(sound)
-        return sound
+        return f"{self.name} says: Woof!"
 
     def fetch(self, item):
         return f"{self.name} fetches the {item}!"
 
+    def describe(self):
+        base = super().describe()
+        return f"{base}, Breed: {self.breed}"
 
-class Cat(Animal):
-    def __init__(self, name, indoor=True):
-        super().__init__(name, species="Felis catus")
-        self.indoor = indoor
+class GuideDog(Dog):
+    def __init__(self, name, breed, owner):
+        super().__init__(name, breed)
+        self.owner = owner
 
-    def speak(self):
-        sound = f"Meow. I am {self.name}."
-        self.log_sound(sound)
-        return sound
+    def describe(self):
+        return f"{super().describe()}, Guide for: {self.owner}"
 
+d = Dog("Rex", "German Shepherd")
+g = GuideDog("Buddy", "Labrador", "Alice")
 
-# Polymorphism: same interface, different behaviour
-animals = [Dog("Rex", "Shepherd"), Cat("Whiskers"), Dog("Buddy", "Lab")]
-for animal in animals:
-    print(animal.speak())   # each Dog/Cat implements speak() differently
+print(d.speak())
+print(d.describe())
+print(g.describe())
+print(g.fetch("ball"))   # inherited from Dog
 
-# Method Resolution Order
-print(Dog.__mro__)  # [Dog, Animal, object]
-print(isinstance(Dog("x", "y"), Animal))   # True
-`} title="Inheritance and super()" />
+print(isinstance(g, GuideDog))   # True
+print(isinstance(g, Dog))        # True
+print(isinstance(g, Animal))     # True
+print(issubclass(GuideDog, Dog)) # True
+`} height={380} />
 
-## Multiple Inheritance and Mixins
+### Method Resolution Order (MRO) — C3 Linearization
 
-Python supports multiple inheritance. The correct use of it is the **mixin pattern**: small, single-purpose classes that add specific behavior, mixed into a concrete class.
+Python uses the **C3 linearization algorithm** to compute the MRO. The invariant: a class always appears before its parents, and if two classes share an ancestor, the one listed first in the inheritance list takes precedence. This guarantees the ancestor is called exactly once in the diamond problem.
 
-<PythonPlayground code={String.raw`class JSONMixin:
-    """Adds JSON serialization to any class with a to_dict() method."""
-    def to_json(self, indent=2):
+<PythonPlayground code={String.raw`class A:
+    def method(self):
+        print("A.method")
+
+class B(A):
+    def method(self):
+        print("B.method")
+        super().method()   # super() follows MRO — NOT necessarily A
+
+class C(A):
+    def method(self):
+        print("C.method")
+        super().method()
+
+class D(B, C):
+    def method(self):
+        print("D.method")
+        super().method()
+
+d = D()
+d.method()
+# Output order: D -> B -> C -> A (A called once)
+
+print("\nMRO for D:")
+for cls in D.__mro__:
+    print(f"  {cls.__name__}")
+
+# Each super() call advances to the NEXT class in the ORIGINAL instance's MRO.
+# This is cooperative multiple inheritance.
+
+# Mixin pattern — add functionality without deep inheritance
+class JSONMixin:
+    """Adds to_json() to any class with __dict__."""
+    def to_json(self):
         import json
-        return json.dumps(self.to_dict(), indent=indent, default=str)
+        return json.dumps(vars(self), default=str)
 
-    @classmethod
-    def from_json(cls, json_str):
-        import json
-        data = json.loads(json_str)
-        return cls(**data)
+class LogMixin:
+    """Adds log() to any class."""
+    def log(self, msg):
+        print(f"[{self.__class__.__name__}] {msg}")
 
-
-class ValidateMixin:
-    """Adds validation hooks."""
-    def validate(self):
-        """Override to perform validation. Raise ValueError on failure."""
-        pass
-
-    def save(self):
-        self.validate()
-        print(f"{self.__class__.__name__} saved.")
-
-
-class User(JSONMixin, ValidateMixin):
-    def __init__(self, name, email, age):
+class User(JSONMixin, LogMixin):
+    def __init__(self, name, email):
         self.name = name
         self.email = email
-        self.age = age
 
-    def to_dict(self):
-        return {"name": self.name, "email": self.email, "age": self.age}
+u = User("Alice", "alice@example.com")
+print(u.to_json())
+u.log("User created")
+print([cls.__name__ for cls in User.__mro__])
+`} height={420} />
 
-    def validate(self):
-        import re
-        if not self.name.strip():
-            raise ValueError("Name cannot be empty")
-        if not re.match(r'\S+@\S+\.\S+', self.email):
-            raise ValueError(f"Invalid email: {self.email}")
-        if not (0 < self.age < 150):
-            raise ValueError(f"Unrealistic age: {self.age}")
+---
 
-user = User("Alice", "alice@example.com", 30)
-print(user.to_json())    # from JSONMixin
-user.save()              # from ValidateMixin — calls validate() first
+## Part 4: Properties and Descriptors
 
-# MRO for multiple inheritance
-print(User.__mro__)
+### Properties — Controlled Attribute Access
 
-# Invalid user
+<PythonPlayground code={String.raw`class Temperature:
+    def __init__(self, celsius=0):
+        self._celsius = celsius
+
+    @property
+    def celsius(self):
+        return self._celsius
+
+    @celsius.setter
+    def celsius(self, value):
+        if not isinstance(value, (int, float)):
+            raise TypeError(f"Temperature must be a number, got {type(value)}")
+        if value < -273.15:
+            raise ValueError(f"Temperature below absolute zero: {value}")
+        self._celsius = float(value)
+
+    @celsius.deleter
+    def celsius(self):
+        print("Resetting to absolute zero")
+        self._celsius = -273.15
+
+    @property
+    def fahrenheit(self):
+        return self._celsius * 9/5 + 32
+
+    @fahrenheit.setter
+    def fahrenheit(self, value):
+        self.celsius = (value - 32) * 5/9   # goes through celsius setter!
+
+    def __repr__(self):
+        return f"Temperature({self._celsius:.1f}C / {self.fahrenheit:.1f}F)"
+
+t = Temperature(25)
+print(t)
+
+t.celsius = 100
+print(t)
+
+t.fahrenheit = 32   # converts to 0C
+print(t)
+
 try:
-    bad_user = User("", "not-an-email", 999)
-    bad_user.save()
+    t.celsius = -300
 except ValueError as e:
-    print(f"Validation failed: {e}")
-`} title="Mixins and multiple inheritance" />
+    print(f"ValueError: {e}")
 
-## @dataclass
+del t.celsius
+print(t)
+`} height={360} />
 
-The `@dataclass` decorator auto-generates `__init__`, `__repr__`, and `__eq__` from annotated class attributes. Use it for data-holding classes that don't need custom constructor logic.
+### Descriptors — The Engine Behind Properties
 
-<PythonPlayground code={String.raw`from dataclasses import dataclass, field
-from datetime import datetime
+Any class defining `__get__`, `__set__`, or `__delete__` is a **descriptor**. Properties, classmethods, and staticmethods are all descriptors under the hood. Writing your own descriptor lets you reuse validation logic across multiple classes.
 
-@dataclass
-class Point:
-    x: float
-    y: float
+<PythonPlayground code={String.raw`class Validated:
+    """Reusable descriptor for numeric range validation."""
 
-    def distance_to(self, other):
-        return ((self.x - other.x)**2 + (self.y - other.y)**2) ** 0.5
+    def __init__(self, min_val, max_val, doc=""):
+        self.min_val = min_val
+        self.max_val = max_val
+        self.__doc__ = doc
+        self.name = None
 
-# Auto-generated __init__, __repr__, __eq__
-p1 = Point(1, 2)
-p2 = Point(3, 4)
-print(p1)              # Point(x=1, y=2)
-print(p1 == Point(1, 2))  # True
-print(p1.distance_to(p2))
+    def __set_name__(self, owner, name):
+        # Called at class creation time — gives us the attribute name
+        self.name = name
 
-# Ordered dataclass — also generates __lt__, __le__, __gt__, __ge__
-@dataclass(order=True)
-class Product:
-    name: str
-    price: float
-    in_stock: bool = True
-    tags: list = field(default_factory=list)  # mutable default!
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return obj.__dict__.get(self.name, self.min_val)
 
-products = [Product("Widget", 9.99), Product("Gadget", 24.99), Product("Donut", 1.99)]
-products.sort()   # sorts by (name, price, in_stock, tags)
-for p in products:
-    print(p)
+    def __set__(self, obj, value):
+        if not isinstance(value, (int, float)):
+            raise TypeError(f"{self.name} must be a number")
+        if not (self.min_val <= value <= self.max_val):
+            raise ValueError(
+                f"{self.name} must be between {self.min_val} and {self.max_val}, got {value}"
+            )
+        obj.__dict__[self.name] = value
 
-# Frozen dataclass — immutable, hashable (can use as dict key)
-@dataclass(frozen=True)
-class RGB:
-    r: int
-    g: int
-    b: int
+    def __delete__(self, obj):
+        obj.__dict__.pop(self.name, None)
 
-    def to_hex(self):
-        return f"#{self.r:02x}{self.g:02x}{self.b:02x}"
+class Sensor:
+    temperature = Validated(-40, 125, "Temperature in Celsius")
+    humidity    = Validated(0, 100, "Relative humidity percent")
+    pressure    = Validated(300, 1100, "Atmospheric pressure in hPa")
 
-red = RGB(255, 0, 0)
-print(red.to_hex())
+    def __init__(self, temp, humidity, pressure):
+        self.temperature = temp
+        self.humidity = humidity
+        self.pressure = pressure
 
-# Can be used as a dict key since it's frozen (hashable)
-palette = {RGB(255, 0, 0): "red", RGB(0, 255, 0): "green"}
-print(palette[RGB(255, 0, 0)])
-`} title="@dataclass decorator" />
+    def __repr__(self):
+        return f"Sensor(T={self.temperature}C, H={self.humidity}%, P={self.pressure}hPa)"
 
-## Abstract Base Classes and Protocols
+s = Sensor(25, 60, 1013)
+print(s)
 
-Abstract Base Classes (ABCs) enforce an interface at class definition time. If a subclass does not implement all abstract methods, instantiation raises `TypeError`.
+s.temperature = 35
+print(s)
+
+try:
+    s.temperature = 200
+except ValueError as e:
+    print(f"ValueError: {e}")
+
+print(Sensor.temperature.__doc__)
+`} height={380} />
+
+---
+
+## Part 5: Abstract Classes and Protocols
+
+### ABC — Enforced Interfaces
 
 <PythonPlayground code={String.raw`from abc import ABC, abstractmethod
+import math
 
 class Shape(ABC):
-    """Abstract base class for geometric shapes."""
-
     @abstractmethod
     def area(self) -> float:
-        """Return the area."""
         ...
 
     @abstractmethod
     def perimeter(self) -> float:
-        """Return the perimeter."""
         ...
 
     def describe(self):
-        """Concrete method — available to all subclasses."""
         return (f"{self.__class__.__name__}: "
                 f"area={self.area():.2f}, perimeter={self.perimeter():.2f}")
 
+class Circle(Shape):
+    def __init__(self, radius):
+        self.radius = radius
+
+    def area(self):
+        return math.pi * self.radius ** 2
+
+    def perimeter(self):
+        return 2 * math.pi * self.radius
 
 class Rectangle(Shape):
     def __init__(self, width, height):
@@ -501,267 +706,866 @@ class Rectangle(Shape):
     def perimeter(self):
         return 2 * (self.width + self.height)
 
-
-class Circle(Shape):
-    def __init__(self, radius):
-        self.radius = radius
-
-    def area(self):
-        import math
-        return math.pi * self.radius ** 2
-
-    def perimeter(self):
-        import math
-        return 2 * math.pi * self.radius
-
-
-# Can't instantiate abstract class
+# Cannot instantiate abstract class
 try:
     s = Shape()
 except TypeError as e:
-    print(f"Can't instantiate ABC: {e}")
+    print(f"TypeError: {e}")
 
-shapes = [Rectangle(4, 6), Circle(5), Rectangle(3, 3)]
+shapes = [Circle(5), Rectangle(4, 6), Circle(3)]
 for shape in shapes:
     print(shape.describe())
 
-# Total area
-total = sum(s.area() for s in shapes)
-print(f"Total area: {total:.2f}")
-`} title="Abstract base classes" />
+shapes.sort(key=lambda s: s.area())
+print([s.__class__.__name__ for s in shapes])
+`} height={360} />
 
-## PROJECT: Bank Account System
+### typing.Protocol — Structural Subtyping
 
-A full implementation demonstrating classes, inheritance, dataclasses, properties, and magic methods working together.
+<PythonPlayground code={String.raw`from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class Drawable(Protocol):
+    def draw(self) -> str:
+        ...
+
+@runtime_checkable
+class Resizable(Protocol):
+    def resize(self, factor: float) -> "Resizable":
+        ...
+
+# These classes do NOT inherit from Drawable or Resizable
+class Circle:
+    def __init__(self, radius):
+        self.radius = radius
+    def draw(self) -> str:
+        return f"O (radius={self.radius})"
+    def resize(self, factor: float) -> "Circle":
+        return Circle(self.radius * factor)
+
+class Square:
+    def __init__(self, side):
+        self.side = side
+    def draw(self) -> str:
+        return f"[{self.side}x{self.side}]"
+    def resize(self, factor: float) -> "Square":
+        return Square(self.side * factor)
+
+class Label:
+    def __init__(self, text):
+        self.text = text
+    def draw(self) -> str:
+        return f"'{self.text}'"
+    # No resize method!
+
+print(isinstance(Circle(5), Drawable))    # True
+print(isinstance(Label("hi"), Drawable))  # True
+print(isinstance(Label("hi"), Resizable)) # False — no resize
+
+def render_all(items):
+    for item in items:
+        if isinstance(item, Drawable):
+            print(f"  Drawing: {item.draw()}")
+
+render_all([Circle(5), Square(3), Label("Hello"), Circle(2)])
+
+# Protocol vs ABC:
+# - ABC: inheritance-based, enforces implementation, can share code
+# - Protocol: structural (duck typing), no inheritance needed, great for type checking
+`} height={380} />
+
+---
+
+## Part 6: Dataclasses
+
+### `@dataclass` — Auto-generated Boilerplate
 
 <PythonPlayground code={String.raw`from dataclasses import dataclass, field
-from datetime import datetime
-from abc import ABC, abstractmethod
-from typing import List
 
-# --- Transaction record ---
 @dataclass
+class Point:
+    x: float
+    y: float
+    z: float = 0.0   # default value
+
+p1 = Point(1.0, 2.0)
+p2 = Point(3.0, 4.0, 5.0)
+p3 = Point(1.0, 2.0)
+
+print(p1)              # Point(x=1.0, y=2.0, z=0.0)
+print(p1 == p3)        # True — __eq__ compares all fields
+print(p1 == p2)        # False
+
+# field() for complex defaults and metadata
+@dataclass
+class Product:
+    name: str
+    quantity: int = 0
+    # NEVER use mutable default directly — use field(default_factory=...)
+    tags: list = field(default_factory=list)
+    price: float = field(default=0.0)
+    _internal: str = field(default="", repr=False, compare=False, init=False)
+
+    def add_tag(self, tag):
+        self.tags.append(tag)
+
+    def total_value(self):
+        return self.quantity * self.price
+
+item1 = Product("Widget", quantity=100, price=2.50)
+item2 = Product("Widget", quantity=100, price=2.50)
+item1.add_tag("electronics")
+
+print(item1)
+print(item1.total_value())
+print(item1 == item2)   # False — tags differ
+`} height={360} />
+
+### `__post_init__`, frozen, and inheritance
+
+<PythonPlayground code={String.raw`from dataclasses import dataclass, field, asdict
+import math
+
+@dataclass
+class Circle:
+    radius: float
+
+    def __post_init__(self):
+        # Called after __init__ — perfect for validation
+        if self.radius <= 0:
+            raise ValueError(f"Radius must be positive, got {self.radius}")
+
+    @property
+    def area(self):
+        return math.pi * self.radius ** 2
+
+c = Circle(5.0)
+print(c)
+print(f"Area: {c.area:.2f}")
+
+try:
+    Circle(-1)
+except ValueError as e:
+    print(f"ValueError: {e}")
+
+# frozen=True — immutable, hashable dataclass
+@dataclass(frozen=True)
+class RGB:
+    r: int
+    g: int
+    b: int
+
+    def __post_init__(self):
+        for name, val in [("r", self.r), ("g", self.g), ("b", self.b)]:
+            if not 0 <= val <= 255:
+                raise ValueError(f"{name} must be 0-255, got {val}")
+
+    def to_hex(self):
+        return f"#{self.r:02X}{self.g:02X}{self.b:02X}"
+
+red = RGB(255, 0, 0)
+print(red, red.to_hex())
+palette = {RGB(255, 0, 0), RGB(0, 255, 0), RGB(0, 0, 255)}
+print(palette)
+
+try:
+    red.r = 128   # FrozenInstanceError
+except Exception as e:
+    print(f"{type(e).__name__}: {e}")
+
+# Dataclass inheritance
+from datetime import datetime
+
+@dataclass
+class Entity:
+    id: int
+    created_at: datetime = field(default_factory=datetime.now)
+
+@dataclass
+class Person(Entity):
+    name: str = ""
+    email: str = ""
+
+emp = Person(id=1, name="Alice", email="alice@example.com")
+print(emp)
+print(asdict(emp))
+`} height={440} />
+
+---
+
+## Part 7: Advanced OOP Patterns
+
+### Metaclasses and `__init_subclass__`
+
+<PythonPlayground code={String.raw`# type() creates classes dynamically
+Dog = type("Dog", (object,), {
+    "species": "Canis lupus",
+    "speak": lambda self: f"{self.name} says Woof!",
+    "__init__": lambda self, name: setattr(self, "name", name),
+})
+d = Dog("Rex")
+print(d.speak())
+
+# Custom metaclass — Singleton pattern
+class SingletonMeta(type):
+    _instances = {}
+
+    def __call__(cls, *args, **kwargs):
+        if cls not in cls._instances:
+            cls._instances[cls] = super().__call__(*args, **kwargs)
+        return cls._instances[cls]
+
+class Database(metaclass=SingletonMeta):
+    def __init__(self, host="localhost"):
+        self.host = host
+        self.connections = 0
+
+    def connect(self):
+        self.connections += 1
+        return f"Connection #{self.connections} to {self.host}"
+
+db1 = Database("primary")
+db2 = Database("secondary")   # ignored — returns same instance
+print(db1 is db2)
+print(db1.host)
+
+# __init_subclass__ — plugin registry pattern (no metaclass needed)
+class Plugin:
+    _registry = {}
+
+    def __init_subclass__(cls, plugin_name=None, **kwargs):
+        super().__init_subclass__(**kwargs)
+        name = plugin_name or cls.__name__.lower()
+        Plugin._registry[name] = cls
+        print(f"Registered plugin: {name!r}")
+
+class JSONPlugin(Plugin, plugin_name="json"):
+    def process(self, data):
+        import json
+        return json.dumps(data)
+
+class CSVPlugin(Plugin, plugin_name="csv"):
+    def process(self, data):
+        return ",".join(str(v) for v in data)
+
+print(Plugin._registry)
+plugin = Plugin._registry["json"]()
+print(plugin.process({"key": "value"}))
+`} height={440} />
+
+### Observer Pattern
+
+<PythonPlayground code={String.raw`from typing import Callable
+
+class EventEmitter:
+    def __init__(self):
+        self._handlers: dict = {}
+
+    def on(self, event: str, handler: Callable):
+        self._handlers.setdefault(event, []).append(handler)
+        return self
+
+    def off(self, event: str, handler: Callable):
+        if event in self._handlers:
+            self._handlers[event].remove(handler)
+
+    def emit(self, event: str, *args, **kwargs):
+        for handler in self._handlers.get(event, []):
+            handler(*args, **kwargs)
+
+class StockPrice(EventEmitter):
+    def __init__(self, symbol, price):
+        super().__init__()
+        self.symbol = symbol
+        self._price = price
+
+    @property
+    def price(self):
+        return self._price
+
+    @price.setter
+    def price(self, new_price):
+        old_price = self._price
+        self._price = new_price
+        change = new_price - old_price
+        self.emit("change", self.symbol, old_price, new_price, change)
+        if new_price > old_price * 1.05:
+            self.emit("spike", self.symbol, new_price, change)
+        elif new_price < old_price * 0.95:
+            self.emit("drop", self.symbol, new_price, change)
+
+def on_change(symbol, old, new, change):
+    direction = "UP" if change > 0 else "DOWN"
+    print(f"  [{symbol}] {direction}  {old:.2f} -> {new:.2f} ({change:+.2f})")
+
+def on_spike(symbol, price, change):
+    print(f"  ALERT: {symbol} SPIKE! Now at {price:.2f} (+{change:.2f})")
+
+aapl = StockPrice("AAPL", 185.00)
+aapl.on("change", on_change).on("spike", on_spike)
+
+aapl.price = 187.50
+aapl.price = 195.00   # > 5% triggers spike
+aapl.price = 193.00
+`} height={380} />
+
+---
+
+## Project: Bank Account System
+
+<PythonPlayground code={String.raw`from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+
+class TransactionType(Enum):
+    DEPOSIT = "deposit"
+    WITHDRAWAL = "withdrawal"
+    TRANSFER_IN = "transfer_in"
+    TRANSFER_OUT = "transfer_out"
+    INTEREST = "interest"
+    FEE = "fee"
+
+@dataclass(frozen=True)
 class Transaction:
-    type: str          # "deposit", "withdrawal", "transfer", "interest"
+    type: TransactionType
     amount: float
     balance_after: float
+    description: str = ""
     timestamp: datetime = field(default_factory=datetime.now)
-    note: str = ""
 
     def __str__(self):
-        ts = self.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-        sign = "+" if self.type in ("deposit", "interest") else "-"
-        return (f"  {ts}  {self.type:<12} {sign}{chr(36)}{self.amount:>9,.2f}  "
-                f"Balance: {chr(36)}{self.balance_after:>10,.2f}"
-                + (f"  ({self.note})" if self.note else ""))
+        credits = {TransactionType.DEPOSIT, TransactionType.TRANSFER_IN, TransactionType.INTEREST}
+        sign = "+" if self.type in credits else "-"
+        return (f"{self.timestamp.strftime('%Y-%m-%d %H:%M')} | "
+                f"{self.type.value:12} | {sign}{abs(self.amount):9.2f} | "
+                f"Balance: {self.balance_after:9.2f} | {self.description}")
 
+class InsufficientFundsError(Exception):
+    pass
 
-# --- Base account ---
 class BankAccount(ABC):
     _next_id = 1000
 
     def __init__(self, owner: str, initial_deposit: float = 0):
-        if initial_deposit < 0:
-            raise ValueError("Initial deposit cannot be negative.")
         BankAccount._next_id += 1
-        self.account_id = f"ACC-{BankAccount._next_id}"
+        self.account_number = f"ACC{BankAccount._next_id:04d}"
         self.owner = owner
         self._balance = 0.0
-        self.transaction_history: List[Transaction] = []
+        self._transactions = []
         if initial_deposit > 0:
-            self._record("deposit", initial_deposit, note="Account opening")
+            self._record(TransactionType.DEPOSIT, initial_deposit, "Initial deposit")
 
     @property
     def balance(self):
         return self._balance
 
-    def _record(self, type_, amount, note=""):
-        """Internal: apply amount change and record transaction."""
-        if type_ in ("deposit", "interest"):
-            self._balance += amount
-        else:
-            self._balance -= amount
-        tx = Transaction(type_, amount, self._balance,
-                         timestamp=datetime.now(), note=note)
-        self.transaction_history.append(tx)
+    def _record(self, tx_type, amount, description=""):
+        credits = {TransactionType.DEPOSIT, TransactionType.TRANSFER_IN, TransactionType.INTEREST}
+        self._balance += amount if tx_type in credits else -amount
+        tx = Transaction(tx_type, abs(amount), self._balance, description)
+        self._transactions.append(tx)
         return tx
 
-    def deposit(self, amount: float, note="") -> "BankAccount":
+    def deposit(self, amount, description="Deposit"):
         if amount <= 0:
-            raise ValueError("Deposit amount must be positive.")
-        self._record("deposit", amount, note)
-        return self   # enable chaining
-
-    def withdraw(self, amount: float, note="") -> float:
-        if amount <= 0:
-            raise ValueError("Withdrawal amount must be positive.")
-        self._check_withdrawal(amount)
-        self._record("withdrawal", amount, note)
-        return amount
+            raise ValueError("Deposit amount must be positive")
+        return self._record(TransactionType.DEPOSIT, amount, description)
 
     @abstractmethod
-    def _check_withdrawal(self, amount: float):
-        """Subclasses implement their withdrawal rules here."""
+    def withdraw(self, amount, description="Withdrawal"):
         ...
-
-    def transfer(self, target: "BankAccount", amount: float) -> float:
-        self.withdraw(amount, note=f"Transfer to {target.account_id}")
-        target.deposit(amount, note=f"Transfer from {self.account_id}")
-        return amount
 
     @abstractmethod
-    def apply_interest(self):
-        """Apply periodic interest."""
+    def apply_monthly_maintenance(self):
         ...
 
-    def get_statement(self, last_n=None) -> str:
-        txs = self.transaction_history if not last_n else self.transaction_history[-last_n:]
-        lines = [
-            f"{'=' * 65}",
-            f"  Account: {self.account_id}  |  Owner: {self.owner}",
-            f"  Type:    {self.__class__.__name__}",
-            f"  Balance: {chr(36)}{self._balance:,.2f}",
-            f"{'=' * 65}",
-            f"  {'DATE/TIME':<21} {'TYPE':<12} {'AMOUNT':>12}  {'BALANCE':>13}",
-            f"  {'-' * 62}",
-        ]
-        for tx in txs:
-            lines.append(str(tx))
-        lines.append(f"{'=' * 65}")
-        return "\n".join(lines)
+    def transfer_to(self, other: "BankAccount", amount: float):
+        self.withdraw(amount, f"Transfer to {other.account_number}")
+        other._record(TransactionType.TRANSFER_IN, amount, f"Transfer from {self.account_number}")
+
+    def statement(self, last_n=10):
+        print(f"\n{'='*72}")
+        print(f"Account: {self.account_number}  |  Owner: {self.owner}  |  Type: {self.__class__.__name__}")
+        print(f"Balance: {self._balance:.2f}")
+        print(f"{'='*72}")
+        for tx in self._transactions[-last_n:]:
+            print(tx)
 
     def __repr__(self):
-        return (f"{self.__class__.__name__}("
-                f"id={self.account_id!r}, owner={self.owner!r}, "
-                f"balance={chr(36)}{self._balance:.2f})")
+        return f"{self.__class__.__name__}(acct={self.account_number!r}, owner={self.owner!r}, bal={self._balance:.2f})"
 
-
-# --- Savings account ---
 class SavingsAccount(BankAccount):
-    """Higher interest rate; limited withdrawals per month."""
+    ANNUAL_RATE = 0.035
 
-    ANNUAL_RATE = 0.045          # 4.5% annual
-    MAX_WITHDRAWALS_PER_MONTH = 6
-
-    def __init__(self, owner, initial_deposit=0):
+    def __init__(self, owner, initial_deposit=0, min_balance=100):
         super().__init__(owner, initial_deposit)
-        self._withdrawals_this_month = 0
+        self.min_balance = min_balance
 
-    def _check_withdrawal(self, amount):
-        if self._balance < amount:
-            raise ValueError(
-                f"Insufficient funds: balance {chr(36)}{self._balance:.2f}, "
-                f"requested {chr(36)}{amount:.2f}."
-            )
-        if self._withdrawals_this_month >= self.MAX_WITHDRAWALS_PER_MONTH:
-            raise RuntimeError(
-                f"Monthly withdrawal limit ({self.MAX_WITHDRAWALS_PER_MONTH}) reached."
-            )
-        self._withdrawals_this_month += 1
-
-    def apply_interest(self):
-        monthly_rate = self.ANNUAL_RATE / 12
-        interest = round(self._balance * monthly_rate, 2)
-        if interest > 0:
-            self._record("interest", interest,
-                         note=f"{self.ANNUAL_RATE:.1%} APR monthly")
-        return interest
-
-    def reset_monthly_withdrawals(self):
-        self._withdrawals_this_month = 0
-
-
-# --- Checking account ---
-class CheckingAccount(BankAccount):
-    """Overdraft protection up to a limit; no interest."""
-
-    def __init__(self, owner, initial_deposit=0, overdraft_limit=500):
-        super().__init__(owner, initial_deposit)
-        self.overdraft_limit = overdraft_limit
-
-    def _check_withdrawal(self, amount):
-        available = self._balance + self.overdraft_limit
+    def withdraw(self, amount, description="Withdrawal"):
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
+        available = self._balance - self.min_balance
         if amount > available:
-            raise ValueError(
-                f"Exceeds overdraft limit: available {chr(36)}{available:.2f}, "
-                f"requested {chr(36)}{amount:.2f}."
+            raise InsufficientFundsError(
+                f"Withdrawal exceeds available balance. Available: {available:.2f}"
             )
+        return self._record(TransactionType.WITHDRAWAL, amount, description)
 
-    def apply_interest(self):
-        return 0.0   # Checking accounts don't earn interest
+    def apply_monthly_maintenance(self):
+        interest = self._balance * (self.ANNUAL_RATE / 12)
+        return self._record(TransactionType.INTEREST, interest, "Monthly interest")
 
+class CheckingAccount(BankAccount):
+    MONTHLY_FEE = 12.00
+    OVERDRAFT_LIMIT = 500.0
 
-# ========================================
-# FULL DEMO
-# ========================================
-print("Creating accounts...\n")
+    def withdraw(self, amount, description="Withdrawal"):
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
+        if self._balance - amount < -self.OVERDRAFT_LIMIT:
+            raise InsufficientFundsError(f"Exceeds overdraft limit of {self.OVERDRAFT_LIMIT:.2f}")
+        return self._record(TransactionType.WITHDRAWAL, amount, description)
 
-savings = SavingsAccount("Alice", initial_deposit=5000)
-checking = CheckingAccount("Alice", initial_deposit=1500, overdraft_limit=500)
-bob_savings = SavingsAccount("Bob", initial_deposit=2000)
+    def apply_monthly_maintenance(self):
+        if self._balance > 1500:
+            return   # fee waived for high-balance accounts
+        return self._record(TransactionType.FEE, self.MONTHLY_FEE, "Monthly maintenance fee")
 
-# --- Deposits and withdrawals ---
-savings.deposit(2000, note="Paycheck")
-savings.withdraw(300, note="Rent")
-checking.deposit(1000, note="Freelance payment")
-checking.withdraw(200, note="Groceries")
-checking.withdraw(50, note="Coffee")
+# --- Demo ---
+savings = SavingsAccount("Alice", initial_deposit=500)
+checking = CheckingAccount("Alice", initial_deposit=2000)
 
-# --- Transfer between accounts ---
-savings.transfer(checking, 500)
+savings.deposit(200, "Paycheck")
+savings.apply_monthly_maintenance()
 
-# --- Test overdraft ---
-print("Testing overdraft protection...")
+checking.withdraw(300, "Rent")
+checking.withdraw(150, "Groceries")
+checking.apply_monthly_maintenance()   # waived: balance > 1500
+
+savings.transfer_to(checking, 100)
+
+savings.statement()
+checking.statement()
+`} height={600} />
+
+---
+
+## Exercises
+
+### Easy
+
+**1. Immutable Point3D**
+
+<PythonPlayground code={String.raw`from dataclasses import dataclass
+import math
+
+@dataclass(frozen=True)
+class Point3D:
+    x: float
+    y: float
+    z: float = 0.0
+
+    def distance_to(self, other: "Point3D") -> float:
+        return math.sqrt(
+            (self.x - other.x)**2 +
+            (self.y - other.y)**2 +
+            (self.z - other.z)**2
+        )
+
+    def __add__(self, other: "Point3D") -> "Point3D":
+        return Point3D(self.x + other.x, self.y + other.y, self.z + other.z)
+
+    def __sub__(self, other: "Point3D") -> "Point3D":
+        return Point3D(self.x - other.x, self.y - other.y, self.z - other.z)
+
+    def magnitude(self) -> float:
+        return self.distance_to(Point3D(0, 0, 0))
+
+p1 = Point3D(1, 2, 3)
+p2 = Point3D(4, 5, 6)
+
+print(p1 + p2)
+print(p1 - p2)
+print(f"Distance: {p1.distance_to(p2):.4f}")
+print(f"|p1|: {p1.magnitude():.4f}")
+
+# Frozen dataclasses are hashable
+visited = {p1, p2, Point3D(1, 2, 3)}
+print(f"Unique points: {len(visited)}")  # 2
+`} height={280} />
+
+**2. StringBuilder**
+
+<PythonPlayground code={String.raw`class StringBuilder:
+    """Efficient mutable string buffer."""
+
+    def __init__(self, initial=""):
+        self._parts = [initial] if initial else []
+
+    def append(self, text):
+        self._parts.append(str(text))
+        return self   # enable chaining
+
+    def __iadd__(self, text):
+        self._parts.append(str(text))
+        return self
+
+    def __len__(self):
+        return sum(len(p) for p in self._parts)
+
+    def __str__(self):
+        return "".join(self._parts)
+
+    def __repr__(self):
+        return f"StringBuilder({str(self)!r})"
+
+    def clear(self):
+        self._parts.clear()
+        return self
+
+    def insert(self, index, text):
+        current = str(self)
+        self._parts = [current[:index] + str(text) + current[index:]]
+        return self
+
+sb = StringBuilder()
+sb += "Hello"
+sb += ", "
+sb.append("World").append("!")
+print(sb)
+print(len(sb))
+sb.insert(5, " Beautiful")
+print(sb)
+`} height={280} />
+
+### Medium
+
+**3. Cached Property Descriptor**
+
+<PythonPlayground code={String.raw`class cached_property:
+    """Compute on first access, cache the result."""
+
+    def __init__(self, func):
+        self.func = func
+        self.attrname = None
+        self.__doc__ = func.__doc__
+
+    def __set_name__(self, owner, name):
+        self.attrname = name
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        cache_name = f"_cache_{self.attrname}"
+        if not hasattr(obj, cache_name):
+            print(f"  [Computing {self.attrname}...]")
+            setattr(obj, cache_name, self.func(obj))
+        return getattr(obj, cache_name)
+
+class DataSet:
+    def __init__(self, data):
+        self.data = data
+
+    @cached_property
+    def mean(self):
+        return sum(self.data) / len(self.data)
+
+    @cached_property
+    def variance(self):
+        m = self.mean   # reuses cached mean
+        return sum((x - m)**2 for x in self.data) / len(self.data)
+
+    @cached_property
+    def std_dev(self):
+        return self.variance ** 0.5
+
+ds = DataSet(list(range(1, 101)))
+
+print("First access:")
+print(f"  mean    = {ds.mean:.2f}")
+print(f"  std_dev = {ds.std_dev:.4f}")
+
+print("Second access (cached):")
+print(f"  mean    = {ds.mean:.2f}")
+`} height={320} />
+
+**4. Type-checked Model**
+
+<PythonPlayground code={String.raw`class TypedField:
+    def __set_name__(self, owner, name):
+        self.name = name
+        self.private = f"_{name}"
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return getattr(obj, self.private, None)
+
+    def __set__(self, obj, value):
+        hints = obj.__class__.__annotations__
+        expected_type = hints.get(self.name)
+        if expected_type and not isinstance(value, expected_type):
+            raise TypeError(
+                f"Field {self.name!r}: expected {expected_type.__name__}, got {type(value).__name__}"
+            )
+        setattr(obj, self.private, value)
+
+class TypedModel:
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        for name in getattr(cls, "__annotations__", {}):
+            setattr(cls, name, TypedField())
+
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+    def __repr__(self):
+        fields = {k: getattr(self, k) for k in self.__annotations__}
+        pairs = ", ".join(f"{k}={v!r}" for k, v in fields.items())
+        return f"{self.__class__.__name__}({pairs})"
+
+class User(TypedModel):
+    name: str
+    age: int
+    email: str
+
+u = User(name="Alice", age=30, email="alice@example.com")
+print(u)
+
 try:
-    checking.withdraw(3000, note="Too much")
-except ValueError as e:
-    print(f"  Blocked: {e}\n")
+    u.age = "thirty"
+except TypeError as e:
+    print(f"TypeError: {e}")
 
-# --- Interest ---
-print("Applying monthly interest to savings accounts...")
-earned = savings.apply_interest()
-bob_earned = bob_savings.apply_interest()
-print(f"  {savings.owner}'s savings interest: {chr(36)}{earned:.2f}")
-print(f"  {bob_savings.owner}'s savings interest: {chr(36)}{bob_earned:.2f}\n")
+u.age = 31
+print(u)
+`} height={320} />
 
-# --- Apply multiple months ---
-for _ in range(11):
-    savings.apply_interest()
+### Hard
 
-print("After 12 months of interest:")
-print(f"  Alice savings: {chr(36)}{savings.balance:,.2f}\n")
+**5. Decorator-based Event Handling**
 
-# --- Statements ---
-print(savings.get_statement(last_n=8))
-print()
-print(checking.get_statement())
-`} title="PROJECT: Bank Account System" />
+<PythonPlayground code={String.raw`class EventSystem:
+    """Mixin that adds decorator-based event handling."""
 
-## Challenge
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls._event_handlers = {}
 
-1. **`__slots__`** — add `__slots__` to the `Transaction` dataclass and compare memory usage between 100,000 normal Transaction instances vs slotted ones using `sys.getsizeof` and `tracemalloc`.
+    def on(self, event):
+        def decorator(func):
+            self._event_handlers.setdefault(event, []).append(func)
+            return func
+        return decorator
 
-2. **Observable pattern** — implement a `Subject` mixin and `Observer` ABC so that any class can call `self.notify("event", data)` and all registered observers receive it. Apply it to `BankAccount` to notify on every transaction.
+    def emit(self, event, *args, **kwargs):
+        for handler in self._event_handlers.get(event, []):
+            handler(*args, **kwargs)
 
-3. **Descriptor protocol** — implement a `Typed` descriptor that validates attribute types on assignment:
-```python
-class Person:
-    name = Typed(str)
-    age  = Typed(int)
-```
-Any assignment of the wrong type should raise `TypeError`.
+class Button(EventSystem):
+    def __init__(self, label):
+        self.label = label
 
-4. **Generic Stack** — implement a type-safe `Stack[T]` class using Python's `typing.Generic`. It should support `push`, `pop`, `peek`, `is_empty`, and `__len__`. Add an `__iter__` that yields from top to bottom.
+    def click(self, x=0, y=0):
+        print(f"Button '{self.label}' clicked at ({x}, {y})")
+        self.emit("click", x=x, y=y)
 
-5. **Protocol instead of ABC** — rewrite the `Shape` hierarchy using `typing.Protocol` instead of `abc.ABC`. Demonstrate that any class implementing `area()` and `perimeter()` is structurally compatible without inheriting from `Shape`.
+    def hover(self):
+        self.emit("hover")
 
-## Key Takeaways
+btn = Button("Submit")
 
-- Instance attributes live in `self.__dict__`; class attributes are shared across all instances — mutating a mutable class attribute from one instance affects all instances
-- `@classmethod` is ideal for alternative constructors; `@staticmethod` is for utility functions logically grouped with the class but not needing `self` or `cls`
-- Magic methods are how Python's operator and protocol system works — implementing them makes your objects work seamlessly with built-ins and the language itself
-- Properties replace Java-style getters/setters with clean attribute-style access while keeping validation logic
-- `super()` in Python 3 uses the MRO (C3 linearization) to resolve which parent class's method to call — it handles multiple inheritance correctly
-- Use mixins for cross-cutting concerns (serialization, logging, validation) — keep them focused and stateless
-- `@dataclass` eliminates boilerplate for data-holding classes; use `frozen=True` for immutable, hashable records
-- Prefer `Protocol` (structural subtyping) over ABC (nominal subtyping) for interfaces between modules you don't fully control
+@btn.on("click")
+def handle_click(x, y):
+    print(f"  Handler 1: click at ({x}, {y})")
+
+@btn.on("click")
+def validate(x, y):
+    print(f"  Handler 2: validating form...")
+
+@btn.on("hover")
+def show_tooltip():
+    print(f"  Tooltip: Click to submit the form")
+
+btn.click(100, 200)
+btn.hover()
+btn.click(50, 50)
+`} height={320} />
+
+**6. Unit Conversion Descriptors**
+
+<PythonPlayground code={String.raw`class UnitField:
+    """Store a value in a base unit, expose it in multiple units."""
+
+    def __init__(self, conversions):
+        self.conversions = conversions
+        self.private = None
+        self._owner_attr = None
+
+    def __set_name__(self, owner, name):
+        self._owner_attr = name
+        self.private = f"_{name}_base"
+        for unit, factor in self.conversions.items():
+            def make_property(f):
+                def getter(obj):
+                    return getattr(obj, self.private, 0) * f
+                def setter(obj, value):
+                    setattr(obj, self.private, value / f)
+                return property(getter, setter)
+            setattr(owner, f"{name}_{unit}", make_property(factor))
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return getattr(obj, self.private, 0)
+
+    def __set__(self, obj, value):
+        setattr(obj, self.private, float(value))
+
+class Distance:
+    meters = UnitField({"km": 0.001, "cm": 100, "mm": 1000, "miles": 0.000621371, "feet": 3.28084})
+
+    def __init__(self, meters=0):
+        self.meters = meters
+
+    def __repr__(self):
+        return f"Distance({self.meters}m)"
+
+d = Distance(1000)
+print(f"{d.meters} m")
+print(f"{d.meters_km} km")
+print(f"{d.meters_miles:.4f} miles")
+print(f"{d.meters_feet:.2f} feet")
+
+d.meters_km = 5
+print(f"5 km = {d.meters} m = {d.meters_miles:.4f} miles")
+`} height={340} />
+
+**7. Composable Pipeline**
+
+<PythonPlayground code={String.raw`class Pipeline:
+    """Chainable function pipeline using operator overloading."""
+
+    def __init__(self, *funcs):
+        self.funcs = list(funcs)
+
+    def __or__(self, other_func):
+        """p | func creates a new pipeline with func appended."""
+        if callable(other_func):
+            return Pipeline(*self.funcs, other_func)
+        return NotImplemented
+
+    def __call__(self, value):
+        result = value
+        for func in self.funcs:
+            result = func(result)
+        return result
+
+    def __repr__(self):
+        names = [getattr(f, "__name__", repr(f)) for f in self.funcs]
+        return f"Pipeline({' | '.join(names)})"
+
+# Build a text processing pipeline
+def remove_punct(text):
+    import re
+    return re.sub(r"[^\w\s]", "", text)
+
+def to_lower(text):
+    return text.lower()
+
+def split_words(text):
+    return text.split()
+
+def count_words(words):
+    from collections import Counter
+    return Counter(words).most_common(5)
+
+text_pipeline = (Pipeline(remove_punct) | to_lower | split_words | count_words)
+
+print(text_pipeline)
+
+text = "Python is great! Python is powerful. Python is readable, and Python is fun!"
+result = text_pipeline(text)
+print(result)
+
+# Number pipeline
+import math
+num_pipeline = Pipeline(abs) | math.sqrt | (lambda x: round(x, 4))
+print(num_pipeline(-144))
+`} height={360} />
+
+**8. Abstract Shape Registry**
+
+<PythonPlayground code={String.raw`from abc import ABC, abstractmethod
+import math
+
+class ShapeRegistry(type):
+    """Metaclass that maintains a registry of all Shape subclasses."""
+    _registry = {}
+
+    def __new__(mcs, name, bases, namespace):
+        cls = super().__new__(mcs, name, bases, namespace)
+        if bases:   # don't register the base class itself
+            ShapeRegistry._registry[name.lower()] = cls
+        return cls
+
+class Shape(ABC, metaclass=ShapeRegistry):
+    @abstractmethod
+    def area(self) -> float: ...
+
+    @abstractmethod
+    def perimeter(self) -> float: ...
+
+    @classmethod
+    def create(cls, shape_name, **kwargs):
+        """Factory method — create any shape by name."""
+        shape_cls = ShapeRegistry._registry.get(shape_name.lower())
+        if shape_cls is None:
+            raise ValueError(f"Unknown shape: {shape_name!r}. Available: {list(ShapeRegistry._registry)}")
+        return shape_cls(**kwargs)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(area={self.area():.2f})"
+
+class Circle(Shape):
+    def __init__(self, radius):
+        self.radius = radius
+    def area(self):
+        return math.pi * self.radius ** 2
+    def perimeter(self):
+        return 2 * math.pi * self.radius
+
+class Triangle(Shape):
+    def __init__(self, a, b, c):
+        self.a, self.b, self.c = a, b, c
+    def area(self):
+        s = (self.a + self.b + self.c) / 2
+        return math.sqrt(s * (s-self.a) * (s-self.b) * (s-self.c))
+    def perimeter(self):
+        return self.a + self.b + self.c
+
+class Rectangle(Shape):
+    def __init__(self, width, height):
+        self.width, self.height = width, height
+    def area(self):
+        return self.width * self.height
+    def perimeter(self):
+        return 2 * (self.width + self.height)
+
+# Create shapes by name
+shapes_config = [
+    ("circle", {"radius": 5}),
+    ("rectangle", {"width": 4, "height": 6}),
+    ("triangle", {"a": 3, "b": 4, "c": 5}),
+]
+
+total_area = 0
+for shape_name, kwargs in shapes_config:
+    s = Shape.create(shape_name, **kwargs)
+    total_area += s.area()
+    print(f"{s}  perimeter={s.perimeter():.2f}")
+
+print(f"Total area: {total_area:.2f}")
+`} height={400} />

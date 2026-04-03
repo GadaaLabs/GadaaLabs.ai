@@ -1,28 +1,24 @@
 ---
-title: "Error Handling, Logging & Testing with pytest"
-description: "Write robust Python: catch and raise exceptions correctly, log structured events, and test your code with pytest. Build a validated data pipeline with full test coverage."
-duration: 26
+title: "Error Handling, Debugging, Logging & Testing with pytest"
+description: "Master Python's exception system completely — all built-in exceptions, custom exception hierarchies, context managers, logging, and writing professional tests with pytest."
+duration: 32
 order: 7
 ---
 
-## Why Error Handling Matters
+## Part 1: Python Exception System Internals
 
-Amateur code crashes. Professional code fails gracefully.
+Every Python program you write will eventually fail. The question is not *if* an error occurs but *how gracefully you handle it*. Python's exception system is one of the most expressive in any language — deeply object-oriented, fully inspectable, and designed to be extended. Understanding it at the internals level transforms error handling from defensive boilerplate into a deliberate design tool.
 
-Every program encounters unexpected conditions: a file doesn't exist, a network times out, a user passes bad data. How your code responds to those conditions is the difference between software people trust and software people avoid.
+### The Exception Hierarchy Tree
 
-Python's exception system is one of the most expressive in any language. Understanding it deeply — not just the mechanics, but the *design* — will change how you write every function.
-
-## The Exception Hierarchy
-
-Python's exceptions form an inheritance tree rooted at `BaseException`. Understanding the hierarchy explains which `except` clauses catch what:
+Python's exceptions form a strict inheritance hierarchy rooted at `BaseException`. Every exception class you can catch or raise is a node in this tree:
 
 ```
 BaseException
-├── SystemExit              ← raised by sys.exit()
-├── KeyboardInterrupt       ← raised by Ctrl+C
-├── GeneratorExit           ← raised when a generator is closed
-└── Exception               ← base for all "normal" exceptions
+├── SystemExit                 ← raised by sys.exit()
+├── KeyboardInterrupt          ← Ctrl+C
+├── GeneratorExit              ← generator.close() / garbage collection
+└── Exception                  ← all "normal" exceptions
     ├── ArithmeticError
     │   ├── ZeroDivisionError
     │   ├── OverflowError
@@ -33,884 +29,1718 @@ BaseException
     ├── ValueError
     ├── TypeError
     ├── AttributeError
+    ├── NameError
+    │   └── UnboundLocalError
     ├── ImportError
     │   └── ModuleNotFoundError
-    ├── OSError
+    ├── OSError  (also IOError, EnvironmentError — aliases)
     │   ├── FileNotFoundError
-    │   └── PermissionError
+    │   ├── PermissionError
+    │   ├── IsADirectoryError
+    │   ├── FileExistsError
+    │   ├── TimeoutError
+    │   └── ConnectionError
+    │       ├── ConnectionResetError
+    │       └── ConnectionRefusedError
     ├── RuntimeError
+    │   └── RecursionError
     ├── StopIteration
-    └── ...hundreds more
+    ├── StopAsyncIteration
+    ├── MemoryError
+    ├── BufferError
+    ├── EOFError
+    ├── SyntaxError
+    │   └── IndentationError
+    │       └── TabError
+    ├── UnicodeError
+    │   ├── UnicodeDecodeError
+    │   ├── UnicodeEncodeError
+    │   └── UnicodeTranslateError
+    ├── Warning
+    │   ├── DeprecationWarning
+    │   ├── UserWarning
+    │   └── RuntimeWarning
+    └── ExceptionGroup (Python 3.11+)
 ```
 
-The key insight: `except Exception` catches everything *except* `SystemExit`, `KeyboardInterrupt`, and `GeneratorExit`. Those three inherit directly from `BaseException` because they represent program lifecycle events, not errors in your logic. Catching them accidentally is a bug — your program would ignore Ctrl+C, for example.
+The critical insight: `except Exception` catches everything *except* `SystemExit`, `KeyboardInterrupt`, and `GeneratorExit`. Those three inherit directly from `BaseException` because they represent program lifecycle events, not errors in your logic. Accidentally catching `KeyboardInterrupt` would make your program unresponsive to Ctrl+C.
 
-<PythonPlayground code={String.raw`# The hierarchy in action
-exceptions_to_try = [
+<PythonPlayground code={String.raw`# Exploring the hierarchy with isinstance()
+exceptions_to_examine = [
     ZeroDivisionError("division by zero"),
-    KeyError("missing_key"),
-    ValueError("invalid value"),
+    KeyError("missing"),
+    ValueError("bad value"),
     TypeError("wrong type"),
-    IndexError("list index out of range"),
+    IndexError("out of range"),
+    FileNotFoundError("no such file"),
+    RecursionError("max depth"),
+    MemoryError("out of memory"),
 ]
 
-for exc in exceptions_to_try:
-    # Check inheritance
-    print(f"{type(exc).__name__}:")
+for exc in exceptions_to_examine:
+    name = type(exc).__name__
+    mro = " -> ".join(c.__name__ for c in type(exc).__mro__)
+    print(f"{name}")
+    print(f"  MRO: {mro}")
     print(f"  is Exception?       {isinstance(exc, Exception)}")
-    print(f"  is BaseException?   {isinstance(exc, BaseException)}")
     print(f"  is LookupError?     {isinstance(exc, LookupError)}")
     print(f"  is ArithmeticError? {isinstance(exc, ArithmeticError)}")
+    print(f"  is OSError?         {isinstance(exc, OSError)}")
     print()
-`} />
+`} height={500} />
 
-## try / except / else / finally
+### How Exceptions Propagate: Call Stack Unwinding
 
-Each block has a specific purpose — using them correctly communicates intent:
+When an exception is raised, Python does *call stack unwinding*: it travels up the call stack frame by frame, looking for a matching `except` handler. If none is found at the outermost frame, the program prints a traceback and terminates.
 
-```python
+<PythonPlayground code={String.raw`import traceback
+import sys
+
+def level_3():
+    # This is where the exception originates
+    result = 10 / 0
+
+def level_2():
+    level_3()
+
+def level_1():
+    level_2()
+
+# Capture the traceback without terminating
 try:
-    # Code that might raise an exception
-    result = risky_operation()
-except SomeError as e:
-    # Handle the specific error
-    handle_error(e)
-else:
-    # Runs ONLY if no exception was raised in try
-    # This is where you put code that should run on success
-    # but that you don't want inside the try block
-    use_result(result)
-finally:
-    # ALWAYS runs — even if an exception propagated
-    # Use for cleanup: closing files, releasing locks
-    cleanup()
-```
+    level_1()
+except ZeroDivisionError as e:
+    print("Caught at the top level!")
+    print(f"Exception type: {type(e).__name__}")
+    print(f"Exception args: {e.args}")
+    print(f"Exception str:  {str(e)}")
+    print()
+    print("Full traceback:")
+    traceback.print_exc()
+`} height={400} />
 
-The `else` block is underused but important. Code in `else` runs only when `try` succeeded, but is *outside* the `try` block — so if `else` itself raises an exception, it won't be caught by the `except` clauses above. This makes the intent clear: the `except` handlers are for `risky_operation()` specifically, not for everything that follows.
+The traceback shows the full path — `level_1` called `level_2` called `level_3`, which is where the exception originated. Each frame has its own local variables (accessible via `traceback.extract_tb`).
+
+### try / except / else / finally — Every Clause
+
+Each block has a specific semantic purpose. Using them correctly communicates intent to readers.
+
+<PythonPlayground code={String.raw`import io
+
+def process_data(raw):
+    """Demonstrate all four clauses of try/except/else/finally."""
+    file_opened = False
+    result = None
+
+    try:
+        # The try block: code that might raise
+        print(f"[try]     Attempting to parse: {repr(raw)}")
+        value = int(raw)
+        if value < 0:
+            raise ValueError(f"Value must be non-negative, got {value}")
+        result = value * 2
+
+    except ValueError as e:
+        # except: runs ONLY if an exception was raised in try
+        print(f"[except]  Caught ValueError: {e}")
+        result = 0
+
+    else:
+        # else: runs ONLY if NO exception was raised
+        # Perfect for code that should only run on success
+        print(f"[else]    No exception — result is {result}")
+
+    finally:
+        # finally: ALWAYS runs, even with return/break/continue/raise
+        # Use for cleanup: close files, release locks, end transactions
+        print(f"[finally] Cleanup — result so far: {result}")
+
+    return result
+
+print("=== Case 1: valid positive input ===")
+r = process_data("42")
+print(f"Returned: {r}")
+print()
+
+print("=== Case 2: invalid string ===")
+r = process_data("hello")
+print(f"Returned: {r}")
+print()
+
+print("=== Case 3: negative number ===")
+r = process_data("-5")
+print(f"Returned: {r}")
+`} height={500} />
+
+**The `else` clause is underused.** It was designed exactly for "code that should only run when the `try` block succeeded." Using `else` instead of putting success code inside `try` avoids accidentally catching exceptions raised by the success code itself.
+
+**The `finally` clause always runs.** Even if you `return` inside `try` or `except`, Python executes `finally` before actually returning. This makes it the right place for resource cleanup.
+
+<PythonPlayground code={String.raw`# Demonstrating finally with return
+def demo_finally_with_return(x):
+    try:
+        if x == 0:
+            return "returned from try"
+        raise ValueError("nonzero")
+    except ValueError:
+        return "returned from except"
+    finally:
+        # This prints BEFORE the function actually returns
+        print("[finally] I always run!")
+
+print(demo_finally_with_return(0))
+print(demo_finally_with_return(1))
+`} height={300} />
+
+### Multiple except Clauses and Exception Tuples
+
+Python evaluates `except` clauses top to bottom. Subclasses must come before parent classes.
 
 <PythonPlayground code={String.raw`import json
 
-def parse_config(text):
-    """Demonstrate try/except/else/finally."""
-    print(f"Attempting to parse: {repr(text)}")
+def parse_config(raw_json, key):
     try:
-        data = json.loads(text)
-    except json.JSONDecodeError as e:
-        print(f"  [except] Parse failed: {e.msg} at position {e.pos}")
-        return None
-    else:
-        # Only runs if json.loads() succeeded
-        print(f"  [else]   Parse succeeded, got {type(data).__name__}")
-        return data
-    finally:
-        # Always runs
-        print(f"  [finally] Cleaning up")
-
-print("--- Test 1: valid JSON ---")
-result = parse_config('{"name": "Alice", "age": 30}')
-print(f"Result: {result}")
-print()
-
-print("--- Test 2: invalid JSON ---")
-result = parse_config('{"name": "Alice", age: 30}')
-print(f"Result: {result}")
-print()
-
-print("--- Test 3: finally even on success ---")
-result = parse_config("[1, 2, 3]")
-print(f"Result: {result}")
-`} />
-
-## Catching Specific vs Broad Exceptions
-
-The cardinal rule: **catch the most specific exception you can handle**.
-
-```python
-# BAD: catches everything, including bugs in your own code
-try:
-    process_user_input(data)
-except Exception as e:
-    log.error(f"Something went wrong: {e}")
-    # You've now silently swallowed a NameError, AttributeError,
-    # or any bug you introduced — it looks like "user input was bad"
-
-# GOOD: catch only what you can actually handle
-try:
-    process_user_input(data)
-except ValueError as e:
-    # We know exactly what this means and how to respond
-    return {"error": f"Invalid input: {e}"}
-except KeyError as e:
-    return {"error": f"Missing required field: {e}"}
-# Everything else propagates — that's intentional
-```
-
-When *is* `except Exception` acceptable? At the outermost layer of a system — a web server's request handler, a background job runner — where you truly want to catch and log any crash without killing the process. Even then, log the full traceback.
-
-<PythonPlayground code={String.raw`def safe_divide(a, b):
-    """Shows layered exception handling."""
-    try:
-        return a / b
-    except ZeroDivisionError:
-        print(f"  Cannot divide {a} by zero")
-        return float('inf')
-    except TypeError as e:
-        print(f"  Wrong types: {type(a).__name__} / {type(b).__name__}: {e}")
-        return None
-
-# Multiple except clauses — Python tries them top-to-bottom
-def parse_int_from_dict(d, key):
-    try:
-        value = d[key]
+        data = json.loads(raw_json)
+        value = data[key]
         return int(value)
+
+    except json.JSONDecodeError as e:
+        print(f"JSONDecodeError at line {e.lineno}: {e.msg}")
+        return None
+
     except KeyError:
-        print(f"  Key '{key}' not found in dict")
-        return 0
-    except ValueError:
-        print(f"  Value '{d[key]}' cannot be converted to int")
-        return 0
-    except TypeError:
-        print(f"  Value '{d[key]}' is of wrong type: {type(d[key]).__name__}")
-        return 0
+        print(f"Key '{key}' not found in config")
+        return None
 
-print("--- safe_divide ---")
-print(safe_divide(10, 2))
-print(safe_divide(10, 0))
-print(safe_divide(10, "2"))
+    except (TypeError, ValueError) as e:
+        # Tuple of exceptions: catch either
+        print(f"Type/value error: {e}")
+        return None
 
-print()
-print("--- parse_int_from_dict ---")
-data = {"age": "25", "score": "abc", "count": [1,2,3]}
-print(parse_int_from_dict(data, "age"))
-print(parse_int_from_dict(data, "missing"))
-print(parse_int_from_dict(data, "score"))
-print(parse_int_from_dict(data, "count"))
-`} />
-
-## raise, raise from, and Re-raising
-
-**raise** creates a new exception. **raise from** chains exceptions, preserving the original context. **bare raise** re-raises the current exception.
-
-```python
-# raise with a message
-raise ValueError("expected positive number, got -5")
-
-# raise from — tells Python (and the user) that this new exception
-# was CAUSED BY the original one. Shows both tracebacks.
-try:
-    data = json.loads(raw_input)
-except json.JSONDecodeError as e:
-    raise ConfigurationError("Invalid config file") from e
-
-# raise from None — suppress the original exception chain
-# Use when the cause is an implementation detail not useful to callers
-try:
-    result = cache[key]
-except KeyError:
-    raise MissingResourceError(key) from None
-
-# Bare re-raise — re-raises the current exception unchanged
-# Use when you want to log but still propagate
-try:
-    risky()
-except Exception:
-    log.exception("Unexpected error in risky()")
-    raise  # propagates the original exception
-```
-
-<PythonPlayground code={String.raw`class DatabaseError(Exception):
-    pass
-
-class ConnectionError(DatabaseError):
-    pass
-
-def connect_to_db(host):
-    """Simulates a database connection that might fail."""
-    if host == "bad-host":
-        # Simulate a low-level OS error
-        original = OSError(f"Connection refused by {host}")
-        # Wrap it in our domain exception, chaining the cause
-        raise ConnectionError(f"Cannot connect to database at {host}") from original
-    return f"Connection to {host}"
-
-def get_user(host, user_id):
-    try:
-        conn = connect_to_db(host)
-        print(f"Connected: {conn}")
-        return {"id": user_id, "name": "Alice"}
-    except ConnectionError as e:
-        # Log and re-raise
-        print(f"[LOG] Database connection failed: {e}")
-        if e.__cause__:
-            print(f"[LOG] Caused by: {e.__cause__}")
-        raise  # re-raise unchanged
-
-# Test exception chaining
-try:
-    user = get_user("bad-host", 42)
-except ConnectionError as e:
-    print(f"[CAUGHT] {type(e).__name__}: {e}")
-    print(f"[CAUGHT] __cause__: {e.__cause__}")
-    print(f"[CAUGHT] __suppress_context__: {e.__suppress_context__}")
-
-print()
-print("--- Successful connection ---")
-try:
-    user = get_user("good-host", 42)
-    print(f"Got user: {user}")
-except ConnectionError as e:
-    print(f"Error: {e}")
-`} />
-
-## Custom Exception Classes
-
-Custom exceptions are first-class objects. Give them structured data, not just strings:
-
-<PythonPlayground code={String.raw`class AppError(Exception):
-    """Base class for all application errors."""
-    def __init__(self, message, code=None, context=None):
-        super().__init__(message)
-        self.code = code
-        self.context = context or {}
-
-    def __str__(self):
-        parts = [self.args[0]]
-        if self.code:
-            parts.append(f"(code={self.code})")
-        if self.context:
-            ctx_str = ", ".join(f"{k}={v!r}" for k, v in self.context.items())
-            parts.append(f"[{ctx_str}]")
-        return " ".join(parts)
-
-class ValidationError(AppError):
-    """Raised when input data fails validation."""
-    pass
-
-class ProcessingError(AppError):
-    """Raised when data processing fails."""
-    pass
-
-class SchemaError(AppError):
-    """Raised when data structure doesn't match expected schema."""
-    pass
-
-def validate_user(data):
-    if not isinstance(data, dict):
-        raise SchemaError(
-            "User data must be a dict",
-            code="SCHEMA_001",
-            context={"got_type": type(data).__name__}
-        )
-    if "email" not in data:
-        raise ValidationError(
-            "Email is required",
-            code="VAL_001",
-            context={"fields_present": list(data.keys())}
-        )
-    if "@" not in data.get("email", ""):
-        raise ValidationError(
-            "Invalid email format",
-            code="VAL_002",
-            context={"email": data["email"]}
-        )
-    if data.get("age", 0) < 0:
-        raise ValidationError(
-            "Age cannot be negative",
-            code="VAL_003",
-            context={"age": data["age"]}
-        )
-    return True
-
-# Test our rich exceptions
-test_cases = [
-    {"email": "alice@example.com", "age": 25},
-    "not a dict",
-    {"name": "Bob", "age": 30},
-    {"email": "not-an-email", "age": 25},
-    {"email": "carol@example.com", "age": -5},
-]
-
-for i, case in enumerate(test_cases, 1):
-    try:
-        validate_user(case)
-        print(f"[{i}] VALID: {case}")
-    except AppError as e:
-        print(f"[{i}] {type(e).__name__}: {e}")
-        print(f"     code={e.code}, context={e.context}")
-`} />
-
-## Context Managers
-
-Context managers guarantee cleanup — they run `__exit__` even if an exception occurs inside the `with` block. This is more reliable than `try/finally` because it packages the cleanup *with* the resource.
-
-<PythonPlayground code={String.raw`import time
-from contextlib import contextmanager
-
-# Class-based context manager
-class Timer:
-    """Measures execution time of a block."""
-    def __init__(self, name="block"):
-        self.name = name
-
-    def __enter__(self):
-        self.start = time.perf_counter()
-        print(f"[{self.name}] Starting...")
-        return self  # returned as the 'as' variable
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        elapsed = time.perf_counter() - self.start
-        if exc_type is None:
-            print(f"[{self.name}] Finished in {elapsed*1000:.3f}ms")
-        else:
-            print(f"[{self.name}] FAILED after {elapsed*1000:.3f}ms: {exc_val}")
-        return False  # False = don't suppress the exception
-
-# Generator-based context manager (simpler for simple cases)
-@contextmanager
-def managed_resource(name):
-    print(f"Acquiring {name}")
-    try:
-        yield name.upper()  # value bound to 'as' variable
     except Exception as e:
-        print(f"Error while using {name}: {e}")
+        # Catch-all for unexpected errors — log and re-raise
+        print(f"Unexpected {type(e).__name__}: {e}")
         raise
-    finally:
-        print(f"Releasing {name}")
 
-# Test class-based
-print("--- Timer context manager ---")
-with Timer("computation") as t:
-    total = sum(range(100000))
-    print(f"  Sum = {total:,}")
-print(f"  Timer object still accessible: t.name = {t.name}")
+# Test all paths
+print(parse_config('{"timeout": "30"}', "timeout"))
+print(parse_config('{"timeout": "abc"}', "timeout"))
+print(parse_config('{"other": 1}', "timeout"))
+print(parse_config('{bad json}', "timeout"))
+`} height={400} />
 
-print()
-print("--- Generator context manager ---")
-with managed_resource("database connection") as conn:
-    print(f"  Using: {conn}")
+### Accessing Exception Attributes
 
-print()
-print("--- Context manager with exception ---")
+<PythonPlayground code={String.raw`# Exceptions are objects with attributes
 try:
-    with Timer("failing block"):
-        x = 1 / 0
-except ZeroDivisionError:
-    print("  Exception was propagated (not suppressed)")
-`} />
+    # UnicodeDecodeError has extra attributes
+    b'\xff\xfe'.decode('utf-8')
+except UnicodeDecodeError as e:
+    print(f"Type:     {type(e).__name__}")
+    print(f"args:     {e.args}")
+    print(f"str(e):   {str(e)}")
+    print(f"encoding: {e.encoding}")
+    print(f"reason:   {e.reason}")
+    print(f"start:    {e.start}")
+    print(f"end:      {e.end}")
+    print(f"object:   {e.object}")
 
-## The logging Module
+print()
 
-`print()` is for development. `logging` is for production. The difference: log records have levels, timestamps, caller info, and can be routed to multiple destinations (console, file, external service) simultaneously.
+# OSError / FileNotFoundError
+try:
+    open("/tmp/absolutely_not_here_xyz.txt")
+except FileNotFoundError as e:
+    print(f"Type:     {type(e).__name__}")
+    print(f"errno:    {e.errno}")
+    print(f"strerror: {e.strerror}")
+    print(f"filename: {e.filename}")
+`} height={400} />
 
-```
-DEBUG    → Detailed diagnostic info — only for troubleshooting
-INFO     → Confirmation that things are working as expected
-WARNING  → Something unexpected happened, but the program continues
-ERROR    → A serious problem that prevented an operation
-CRITICAL → A serious error that may crash the program
-```
+### Re-raising Exceptions: bare raise, raise e, raise NewExc from e
 
-<PythonPlayground code={String.raw`import logging
+<PythonPlayground code={String.raw`import traceback
 import sys
 
-# Configure logging — in real apps, do this once at startup
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-    stream=sys.stdout  # Pyodide needs stdout
-)
-
-# Get a named logger — always use __name__ in real code
-logger = logging.getLogger("myapp.pipeline")
-
-def process_record(record_id, data):
-    logger.debug("Processing record %s: %r", record_id, data)
-
-    if not data:
-        logger.warning("Record %s has empty data", record_id)
-        return None
-
-    if data.get("value", 0) < 0:
-        logger.error(
-            "Invalid value in record %s",
-            record_id,
-            extra={"record_id": record_id, "value": data["value"]}
-        )
-        return None
-
-    result = {"id": record_id, "processed": data["value"] * 2}
-    logger.info("Record %s processed successfully: %r", record_id, result)
-    return result
-
-# Demonstrate each log level
-records = [
-    (1, {"value": 42}),
-    (2, {"value": -10}),
-    (3, {}),
-    (4, {"value": 100}),
-]
-
-results = []
-for rid, data in records:
-    result = process_record(rid, data)
-    if result:
-        results.append(result)
-
-logger.info("Pipeline complete. Processed %d/%d records", len(results), len(records))
-print()
-print("Results:", results)
-`} />
-
-## pytest: Testing Your Code
-
-pytest is Python's most popular testing framework. Its philosophy: test functions are just functions, assertions use Python's built-in `assert` statement, and failures give you rich context.
-
-The core patterns:
-
-```python
-# Test function — must start with test_
-def test_add():
-    assert add(2, 3) == 5
-
-# Testing exceptions
-def test_divide_by_zero():
-    with pytest.raises(ZeroDivisionError):
-        divide(10, 0)
-
-# Testing exception message
-def test_bad_input():
-    with pytest.raises(ValueError, match="must be positive"):
-        process(-1)
-
-# Fixtures — reusable setup/teardown
-@pytest.fixture
-def sample_data():
-    return {"name": "Alice", "age": 30}
-
-def test_with_fixture(sample_data):
-    assert sample_data["name"] == "Alice"
-
-# Parametrize — run one test with many inputs
-@pytest.mark.parametrize("input,expected", [
-    (2, 4),
-    (3, 9),
-    (-4, 16),
-    (0, 0),
-])
-def test_square(input, expected):
-    assert square(input) == expected
-```
-
-<PythonPlayground code={String.raw`# Simulate what pytest runs — we can't import pytest in Pyodide,
-# but we can run the same assertions manually to demonstrate
-
-import traceback
-
-# --- Code under test ---
-class ValidationError(ValueError):
-    pass
-
-def validate_age(age):
-    if not isinstance(age, int):
-        raise TypeError(f"age must be int, got {type(age).__name__}")
-    if age < 0:
-        raise ValidationError(f"age must be non-negative, got {age}")
-    if age > 150:
-        raise ValidationError(f"age too large: {age}")
-    return age
-
-def calculate_discount(price, percentage):
-    if price < 0:
-        raise ValueError("price cannot be negative")
-    if not (0 <= percentage <= 100):
-        raise ValueError("percentage must be 0-100")
-    return price * (1 - percentage / 100)
-
-# --- Tests (what pytest would run) ---
-def test_validate_age_valid():
-    assert validate_age(25) == 25
-    assert validate_age(0) == 0
-    assert validate_age(150) == 150
-    print("PASS test_validate_age_valid")
-
-def test_validate_age_negative():
+# 1. bare raise: re-raise the active exception unchanged
+def log_and_reraise(fn):
     try:
-        validate_age(-1)
-        print("FAIL test_validate_age_negative: no exception raised")
-    except ValidationError:
-        print("PASS test_validate_age_negative")
+        return fn()
+    except Exception as e:
+        print(f"Logging: {type(e).__name__}: {e}")
+        raise  # re-raises the original exception with original traceback
 
-def test_validate_age_wrong_type():
+# 2. raise NewException from e: explicit chaining
+# Sets __cause__ on the new exception
+def convert_exception(fn):
     try:
-        validate_age("25")
-        print("FAIL test_validate_age_wrong_type: no exception raised")
-    except TypeError:
-        print("PASS test_validate_age_wrong_type")
+        return fn()
+    except KeyError as e:
+        raise ValueError(f"Config missing required key: {e}") from e
 
-def test_discount_parametrized():
-    cases = [
-        (100.0, 0,   100.0),
-        (100.0, 10,  90.0),
-        (100.0, 100, 0.0),
-        (200.0, 25,  150.0),
+# 3. raise NewException (no from): sets __context__ implicitly
+def implicit_chain(fn):
+    try:
+        return fn()
+    except KeyError:
+        raise RuntimeError("Something went wrong internally")
+
+# Demonstrate chaining
+config = {"host": "localhost"}
+
+try:
+    convert_exception(lambda: config["port"])
+except ValueError as e:
+    print(f"Caught: {e}")
+    print(f"__cause__:   {e.__cause__}")
+    print(f"__context__: {e.__context__}")
+    print(f"__suppress_context__: {e.__suppress_context__}")
+    print()
+
+try:
+    implicit_chain(lambda: config["port"])
+except RuntimeError as e:
+    print(f"Caught: {e}")
+    print(f"__cause__:   {e.__cause__}")
+    print(f"__context__: {e.__context__}")
+    print(f"__suppress_context__: {e.__suppress_context__}")
+`} height={500} />
+
+The `from e` syntax sets `__suppress_context__ = True`, which makes the traceback cleaner — Python only shows the chained exception, not the original context. Without `from`, Python prints both, with "During handling of the above exception, another exception occurred."
+
+### Suppressing Exceptions with contextlib.suppress
+
+<PythonPlayground code={String.raw`from contextlib import suppress
+import os
+
+# Without suppress
+path = "/tmp/file_that_doesnt_exist_xyz.txt"
+try:
+    os.remove(path)
+except FileNotFoundError:
+    pass  # Idiomatic but verbose
+
+# With suppress — reads as prose
+with suppress(FileNotFoundError):
+    os.remove(path)
+print("Clean removal (no crash if file missing)")
+
+# suppress multiple exceptions
+with suppress(KeyError, IndexError):
+    d = {"a": 1}
+    _ = d["z"]  # raises KeyError — silently ignored
+print("After suppressed KeyError")
+
+# suppress is a context manager — check if exception was suppressed
+from contextlib import contextmanager
+
+@contextmanager
+def maybe_suppress(*exceptions):
+    suppressed = False
+    try:
+        yield
+    except exceptions:
+        suppressed = True
+    print(f"  Exception was suppressed: {suppressed}")
+
+print("Test 1:")
+with maybe_suppress(ValueError):
+    int("not_a_number")
+
+print("Test 2:")
+with maybe_suppress(ValueError):
+    int("42")
+`} height={400} />
+
+---
+
+## Part 2: All Built-in Exceptions — Thorough Reference
+
+Understanding when Python raises each exception — and what data it carries — lets you write precise `except` clauses instead of catching `Exception` everywhere.
+
+<PythonPlayground code={String.raw`# ValueError and TypeError — most common
+def demonstrate_value_type_errors():
+    print("=== ValueError ===")
+    # Raised when operation receives correct type but wrong value
+    tests = [
+        (int, "hello"),
+        (float, "not_a_float"),
     ]
-    for price, pct, expected in cases:
-        result = calculate_discount(price, pct)
-        assert abs(result - expected) < 1e-9, f"discount({price}, {pct}) = {result}, expected {expected}"
-    print(f"PASS test_discount_parametrized ({len(cases)} cases)")
+    for fn, arg in tests:
+        try:
+            fn(arg)
+        except ValueError as e:
+            print(f"  int({repr(arg)}): {e}")
 
-def test_discount_invalid():
-    try:
-        calculate_discount(-10, 50)
-        print("FAIL: should have raised")
-    except ValueError:
-        print("PASS test_discount_invalid price")
-    try:
-        calculate_discount(100, 101)
-        print("FAIL: should have raised")
-    except ValueError:
-        print("PASS test_discount_invalid percentage")
+    print()
+    print("=== TypeError ===")
+    # Raised when operation receives wrong type entirely
+    type_tests = [
+        lambda: "hello" + 5,
+        lambda: len(42),
+        lambda: None + 1,
+    ]
+    for fn in type_tests:
+        try:
+            fn()
+        except TypeError as e:
+            print(f"  TypeError: {e}")
 
-# Run all tests
-test_validate_age_valid()
-test_validate_age_negative()
-test_validate_age_wrong_type()
-test_discount_parametrized()
-test_discount_invalid()
+demonstrate_value_type_errors()
+`} height={400} />
+
+<PythonPlayground code={String.raw`# KeyError, IndexError, AttributeError
+print("=== KeyError ===")
+d = {"name": "Alice", "age": 30}
+try:
+    _ = d["email"]
+except KeyError as e:
+    print(f"  Missing key: {e}")
+    print(f"  e.args[0] is the key: {e.args[0]!r}")
+
 print()
-print("All tests complete.")
-`} />
+print("=== IndexError ===")
+lst = [1, 2, 3]
+for idx in [0, 2, 5, -1, -4]:
+    try:
+        val = lst[idx]
+        print(f"  lst[{idx}] = {val}")
+    except IndexError as e:
+        print(f"  lst[{idx}] -> IndexError: {e}")
 
-## PROJECT: Validated Data Pipeline
+print()
+print("=== AttributeError ===")
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
 
-We'll build a complete data processing pipeline with:
-- Three custom exception classes with structured context
-- A `DataValidator` that enforces schema, types, and value ranges
-- A `DataProcessor` that reads CSV data, validates each row, transforms, and reports errors
-- A full test suite demonstrating every failure mode
+p = Point(3, 4)
+for attr in ["x", "z", "magnitude"]:
+    try:
+        val = getattr(p, attr)
+        print(f"  p.{attr} = {val}")
+    except AttributeError as e:
+        print(f"  p.{attr} -> AttributeError: {e}")
+`} height={400} />
 
-<PythonPlayground code={String.raw`import io
-import csv
-import json
+<PythonPlayground code={String.raw`# NameError and UnboundLocalError — subtle difference
+print("=== NameError ===")
+try:
+    result = undefined_variable_xyz * 2
+except NameError as e:
+    print(f"  {e}")
 
-# --- Custom Exceptions ---
+print()
+print("=== UnboundLocalError (subclass of NameError) ===")
+# This is the classic Python gotcha with closures and assignments
+def broken():
+    try:
+        # Python sees the assignment below and marks x as LOCAL
+        # to this function scope, so reading it first raises UnboundLocalError
+        print(x)   # x hasn't been assigned yet in this scope
+    except UnboundLocalError as e:
+        print(f"  UnboundLocalError: {e}")
+    x = 42
 
-class PipelineError(Exception):
-    """Base exception for the pipeline."""
-    def __init__(self, message, row_num=None, field=None, value=None):
-        super().__init__(message)
-        self.row_num = row_num
-        self.field = field
-        self.value = value
+x = 100  # global
+broken()
+print(f"  global x is still: {x}")
 
-    def __str__(self):
-        msg = self.args[0]
-        parts = []
-        if self.row_num is not None:
-            parts.append(f"row={self.row_num}")
-        if self.field:
-            parts.append(f"field={self.field!r}")
-        if self.value is not None:
-            parts.append(f"value={self.value!r}")
-        if parts:
-            msg += f" ({', '.join(parts)})"
-        return msg
+print()
+print("=== ImportError / ModuleNotFoundError ===")
+for module_name in ["json", "nonexistent_module_xyz_123"]:
+    try:
+        __import__(module_name)
+        print(f"  import {module_name}: OK")
+    except ModuleNotFoundError as e:
+        print(f"  ModuleNotFoundError: {e}")
+    except ImportError as e:
+        print(f"  ImportError: {e}")
+`} height={400} />
 
-class ValidationError(PipelineError):
-    pass
+<PythonPlayground code={String.raw`# OSError family
+import os
+import errno
 
-class ProcessingError(PipelineError):
-    pass
+print("=== OSError subclasses ===")
+# FileNotFoundError
+try:
+    open("/no/such/path/xyz.txt")
+except FileNotFoundError as e:
+    print(f"FileNotFoundError: errno={e.errno}, strerror='{e.strerror}'")
+    print(f"  isinstance OSError? {isinstance(e, OSError)}")
 
-class SchemaError(PipelineError):
-    pass
+# PermissionError (simulate via errno)
+import ctypes
+try:
+    raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), "/etc/shadow")
+except PermissionError as e:
+    print(f"PermissionError: {e.strerror} on '{e.filename}'")
 
-# --- Validator ---
+# IsADirectoryError
+try:
+    open("/tmp")  # /tmp is a directory
+except (IsADirectoryError, PermissionError) as e:
+    print(f"{type(e).__name__}: {e.strerror}")
 
-SCHEMA = {
-    "id":       {"type": int,   "required": True,  "min": 1},
-    "name":     {"type": str,   "required": True,  "min_len": 2},
-    "age":      {"type": int,   "required": True,  "min": 0, "max": 120},
-    "salary":   {"type": float, "required": False, "min": 0.0},
-    "email":    {"type": str,   "required": False},
-}
+print()
+print("=== RuntimeError / RecursionError ===")
+import sys
+old_limit = sys.getrecursionlimit()
+sys.setrecursionlimit(50)  # Low limit to trigger quickly
 
-class DataValidator:
-    def __init__(self, schema):
-        self.schema = schema
+def recurse(n):
+    return recurse(n + 1)
 
-    def validate(self, row, row_num=None):
-        """Validate a dict against the schema. Returns cleaned dict."""
-        cleaned = {}
+try:
+    recurse(0)
+except RecursionError as e:
+    print(f"RecursionError caught: {str(e)[:50]}")
+    print(f"  is RuntimeError? {isinstance(e, RuntimeError)}")
+finally:
+    sys.setrecursionlimit(old_limit)
+`} height={400} />
 
-        # Check required fields
-        for field, rules in self.schema.items():
-            if rules.get("required") and field not in row:
-                raise ValidationError(
-                    f"Required field missing",
-                    row_num=row_num, field=field
-                )
+<PythonPlayground code={String.raw`# ArithmeticError family
+import decimal
+import math
 
-        # Validate and coerce each field present
-        for field, raw_value in row.items():
-            if field not in self.schema:
-                raise SchemaError(
-                    f"Unknown field in data",
-                    row_num=row_num, field=field
-                )
-            rules = self.schema[field]
-            expected_type = rules["type"]
-
-            # Coerce type
-            try:
-                if expected_type == int:
-                    value = int(raw_value)
-                elif expected_type == float:
-                    value = float(raw_value)
-                else:
-                    value = str(raw_value).strip()
-            except (ValueError, TypeError):
-                raise ValidationError(
-                    f"Cannot convert to {expected_type.__name__}",
-                    row_num=row_num, field=field, value=raw_value
-                )
-
-            # Range checks
-            if "min" in rules and value < rules["min"]:
-                raise ValidationError(
-                    f"Value below minimum ({rules['min']})",
-                    row_num=row_num, field=field, value=value
-                )
-            if "max" in rules and value > rules["max"]:
-                raise ValidationError(
-                    f"Value above maximum ({rules['max']})",
-                    row_num=row_num, field=field, value=value
-                )
-            if "min_len" in rules and len(str(value)) < rules["min_len"]:
-                raise ValidationError(
-                    f"String too short (min {rules['min_len']} chars)",
-                    row_num=row_num, field=field, value=value
-                )
-
-            cleaned[field] = value
-
-        return cleaned
-
-# --- Processor ---
-
-class DataProcessor:
-    def __init__(self, validator):
-        self.validator = validator
-        self.processed = []
-        self.errors = []
-
-    def process_csv(self, csv_text):
-        reader = csv.DictReader(io.StringIO(csv_text))
-        for row_num, row in enumerate(reader, start=2):  # row 1 = header
-            try:
-                cleaned = self.validator.validate(row, row_num=row_num)
-                transformed = self._transform(cleaned)
-                self.processed.append(transformed)
-            except PipelineError as e:
-                self.errors.append({
-                    "row": row_num,
-                    "error_type": type(e).__name__,
-                    "message": str(e),
-                    "raw_row": dict(row),
-                })
-
-    def _transform(self, row):
-        """Business logic: compute a seniority level based on age."""
-        age = row.get("age", 0)
-        if age < 25:
-            seniority = "junior"
-        elif age < 35:
-            seniority = "mid"
-        else:
-            seniority = "senior"
-        return {**row, "seniority": seniority}
-
-    def report(self):
-        print(f"=== Pipeline Report ===")
-        print(f"Processed successfully: {len(self.processed)}")
-        print(f"Errors:                 {len(self.errors)}")
-        print()
-        print("--- Successful Records ---")
-        for rec in self.processed:
-            print(f"  {rec}")
-        if self.errors:
-            print()
-            print("--- Errors ---")
-            for err in self.errors:
-                print(f"  Row {err['row']}: [{err['error_type']}] {err['message']}")
-                print(f"    Raw data: {err['raw_row']}")
-
-# --- Test Data (intentionally messy) ---
-
-CSV_DATA = """id,name,age,salary,email
-1,Alice,30,75000.0,alice@example.com
-2,Bob,25,60000.0,bob@example.com
-3,,28,50000.0,missing@name.com
-4,Dave,-5,45000.0,dave@example.com
-5,Eve,200,90000.0,eve@example.com
-6,Frank,abc,55000.0,frank@example.com
-7,Grace,35,bad_salary,grace@example.com
-8,Hank,40,80000.0,hank@example.com
-9,Iris,22,42000.0,iris@example.com
-10,Jack,55,,jack@example.com
-"""
-
-# Run the pipeline
-validator = DataValidator(SCHEMA)
-processor = DataProcessor(validator)
-processor.process_csv(CSV_DATA)
-processor.report()
-`} />
-
-Now let's see the full test suite:
-
-<PythonPlayground code={String.raw`import io
-import traceback
-
-# Re-define the pipeline components inline for this playground
-
-class PipelineError(Exception):
-    def __init__(self, message, row_num=None, field=None, value=None):
-        super().__init__(message)
-        self.row_num = row_num
-        self.field = field
-        self.value = value
-
-class ValidationError(PipelineError): pass
-class ProcessingError(PipelineError): pass
-class SchemaError(PipelineError): pass
-
-SCHEMA = {
-    "id":   {"type": int,   "required": True,  "min": 1},
-    "name": {"type": str,   "required": True,  "min_len": 1},
-    "age":  {"type": int,   "required": True,  "min": 0, "max": 120},
-}
-
-class DataValidator:
-    def __init__(self, schema): self.schema = schema
-    def validate(self, row, row_num=None):
-        cleaned = {}
-        for field, rules in self.schema.items():
-            if rules.get("required") and field not in row:
-                raise ValidationError("Required field missing", row_num=row_num, field=field)
-        for field, raw_value in row.items():
-            if field not in self.schema:
-                raise SchemaError("Unknown field", row_num=row_num, field=field)
-            rules = self.schema[field]
-            try:
-                if rules["type"] == int: value = int(raw_value)
-                elif rules["type"] == float: value = float(raw_value)
-                else: value = str(raw_value).strip()
-            except (ValueError, TypeError):
-                raise ValidationError("Type coercion failed", row_num=row_num, field=field, value=raw_value)
-            if "min" in rules and value < rules["min"]:
-                raise ValidationError("Below minimum", row_num=row_num, field=field, value=value)
-            if "max" in rules and value > rules["max"]:
-                raise ValidationError("Above maximum", row_num=row_num, field=field, value=value)
-            if "min_len" in rules and len(str(value)) < rules["min_len"]:
-                raise ValidationError("String too short", row_num=row_num, field=field, value=value)
-            cleaned[field] = value
-        return cleaned
-
-# --- Test Suite ---
-
-passed = 0
-failed = 0
-
-def run_test(name, fn):
-    global passed, failed
+print("=== ZeroDivisionError ===")
+for expr, fn in [
+    ("10 / 0", lambda: 10 / 0),
+    ("10 // 0", lambda: 10 // 0),
+    ("10 % 0", lambda: 10 % 0),
+]:
     try:
         fn()
-        print(f"PASS  {name}")
-        passed += 1
-    except AssertionError as e:
-        print(f"FAIL  {name}: AssertionError: {e}")
-        failed += 1
-    except Exception as e:
-        print(f"ERROR {name}: {type(e).__name__}: {e}")
-        failed += 1
-
-validator = DataValidator(SCHEMA)
-
-def test_valid_row():
-    result = validator.validate({"id": "1", "name": "Alice", "age": "30"})
-    assert result == {"id": 1, "name": "Alice", "age": 30}
-
-def test_type_coercion():
-    result = validator.validate({"id": "42", "name": "Bob", "age": "25"})
-    assert isinstance(result["id"], int)
-    assert isinstance(result["age"], int)
-
-def test_missing_required_field():
-    try:
-        validator.validate({"id": "1", "age": "30"})  # missing name
-        assert False, "Should have raised ValidationError"
-    except ValidationError as e:
-        assert e.field == "name"
-
-def test_unknown_field():
-    try:
-        validator.validate({"id": "1", "name": "Alice", "age": "30", "unknown": "x"})
-        assert False, "Should have raised SchemaError"
-    except SchemaError as e:
-        assert e.field == "unknown"
-
-def test_negative_id():
-    try:
-        validator.validate({"id": "-1", "name": "Alice", "age": "30"})
-        assert False, "Should have raised ValidationError"
-    except ValidationError as e:
-        assert "Below minimum" in str(e.args[0])
-
-def test_age_above_max():
-    try:
-        validator.validate({"id": "1", "name": "Alice", "age": "200"})
-        assert False, "Should have raised ValidationError"
-    except ValidationError as e:
-        assert e.field == "age"
-
-def test_non_numeric_age():
-    try:
-        validator.validate({"id": "1", "name": "Alice", "age": "not-a-number"})
-        assert False, "Should have raised ValidationError"
-    except ValidationError as e:
-        assert e.field == "age"
-        assert e.value == "not-a-number"
-
-def test_row_num_propagated():
-    try:
-        validator.validate({"id": "1", "name": "Alice", "age": "-1"}, row_num=5)
-        assert False
-    except ValidationError as e:
-        assert e.row_num == 5
-
-# Run all tests
-run_test("valid row", test_valid_row)
-run_test("type coercion", test_type_coercion)
-run_test("missing required field", test_missing_required_field)
-run_test("unknown field", test_unknown_field)
-run_test("negative id", test_negative_id)
-run_test("age above max", test_age_above_max)
-run_test("non-numeric age", test_non_numeric_age)
-run_test("row_num propagated", test_row_num_propagated)
+    except ZeroDivisionError as e:
+        print(f"  {expr}: {e}")
 
 print()
-print(f"Results: {passed} passed, {failed} failed")
-`} />
+print("=== OverflowError ===")
+try:
+    math.exp(1000)
+except OverflowError as e:
+    print(f"  math.exp(1000): {e}")
 
-## Key Takeaways
+# Note: Python ints don't overflow, floats do
+big_int = 10 ** 10000
+print(f"  10**10000 is a valid Python int: {type(big_int)}, {len(str(big_int))} digits")
 
-- **Exception hierarchy matters**: catch `Exception` only at system boundaries; prefer specific exceptions that communicate intent
-- **`except Exception` hides bugs**: a broad catch that logs "something went wrong" obscures `AttributeError`, `NameError`, and other programmer mistakes
-- **`else` clarifies intent**: code that runs only on success belongs in `else`, not inside `try` — it won't be caught by your `except` clauses
-- **`raise from` preserves cause**: use `raise NewError("...") from original_error` so callers see the full chain; use `raise ... from None` to suppress implementation details
-- **Custom exceptions carry data**: give exceptions structured fields (`code`, `field`, `row_num`) instead of cramming everything into the message string
-- **Context managers guarantee cleanup**: `__exit__` is called even when exceptions occur — more reliable than `try/finally` for resource management
-- **Logging beats printing**: use named loggers (`logging.getLogger(__name__)`), appropriate levels, and `extra=` for structured context; print is for REPL exploration
-- **pytest is just functions and assert**: test functions start with `test_`, use plain `assert`, and `pytest.raises` for exception testing — parametrize eliminates copy-paste test boilerplate
+print()
+print("=== StopIteration ===")
+gen = (x for x in range(3))
+while True:
+    try:
+        val = next(gen)
+        print(f"  next(): {val}")
+    except StopIteration:
+        print("  StopIteration — generator exhausted")
+        break
+`} height={400} />
+
+---
+
+## Part 3: Custom Exceptions — Professional Patterns
+
+### Why Custom Exceptions
+
+Using Python's built-in exceptions for domain errors is a code smell. When a library raises `ValueError`, callers cannot distinguish between "bad argument to int()" and "business rule violation." Custom exceptions create a precise, testable contract.
+
+<PythonPlayground code={String.raw`# Basic custom exception with extra attributes
+class AppError(Exception):
+    """Base for all application errors. Adds error_code."""
+    def __init__(self, message, error_code=None):
+        super().__init__(message)
+        self.error_code = error_code
+        self.message = message
+
+    def __str__(self):
+        if self.error_code:
+            return f"[{self.error_code}] {self.message}"
+        return self.message
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.message!r}, error_code={self.error_code!r})"
+
+
+class ValidationError(AppError):
+    """Input failed validation. Adds field and invalid_value."""
+    def __init__(self, field, invalid_value, reason):
+        message = f"Field '{field}' is invalid: {reason}"
+        super().__init__(message, error_code="VALIDATION_ERROR")
+        self.field = field
+        self.invalid_value = invalid_value
+        self.reason = reason
+
+
+class DatabaseError(AppError):
+    """Database operation failed."""
+    pass
+
+class RecordNotFoundError(DatabaseError):
+    """A specific record was not found."""
+    def __init__(self, model, record_id):
+        super().__init__(
+            f"{model} with id={record_id} not found",
+            error_code="NOT_FOUND"
+        )
+        self.model = model
+        self.record_id = record_id
+
+class DuplicateRecordError(DatabaseError):
+    """Attempted to create a duplicate record."""
+    pass
+
+
+# Use the hierarchy
+def create_user(name, age):
+    if not name or not isinstance(name, str):
+        raise ValidationError("name", name, "must be a non-empty string")
+    if not isinstance(age, int) or age < 0 or age > 150:
+        raise ValidationError("age", age, "must be integer 0-150")
+    # Simulate duplicate
+    if name == "admin":
+        raise DuplicateRecordError(
+            f"User with name='admin' already exists",
+            error_code="DUPLICATE"
+        )
+    return {"id": 1, "name": name, "age": age}
+
+
+# Callers can catch at any granularity
+for args in [("Alice", 30), ("", 25), ("Bob", -5), ("admin", 20)]:
+    try:
+        user = create_user(*args)
+        print(f"Created: {user}")
+    except ValidationError as e:
+        print(f"Validation failed on '{e.field}': {e.reason}")
+    except DuplicateRecordError as e:
+        print(f"Duplicate: {e}")
+    except DatabaseError as e:
+        print(f"DB error: {e}")
+    except AppError as e:
+        print(f"App error [{e.error_code}]: {e}")
+`} height={600} />
+
+<PythonPlayground code={String.raw`# Exception hierarchy for a real HTTP API client
+class APIClientError(Exception):
+    """Root exception for the API client."""
+    def __init__(self, message, status_code=None, response_body=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_body = response_body
+
+class HTTPError(APIClientError):
+    """HTTP request failed."""
+    pass
+
+class AuthenticationError(HTTPError):
+    """401/403 — credentials invalid."""
+    pass
+
+class RateLimitError(HTTPError):
+    """429 — too many requests. Adds retry_after."""
+    def __init__(self, retry_after=None):
+        super().__init__(
+            f"Rate limit exceeded. Retry after {retry_after}s",
+            status_code=429
+        )
+        self.retry_after = retry_after
+
+class NotFoundError(HTTPError):
+    """404 — resource does not exist."""
+    pass
+
+class ServerError(HTTPError):
+    """5xx — server-side failure."""
+    pass
+
+class NetworkError(APIClientError):
+    """Connection failed before a response was received."""
+    pass
+
+
+def raise_for_status(status_code, body=""):
+    """Simulate raising the right exception for an HTTP status code."""
+    if status_code == 200:
+        return
+    elif status_code == 401:
+        raise AuthenticationError("Invalid API key", status_code, body)
+    elif status_code == 403:
+        raise AuthenticationError("Insufficient permissions", status_code, body)
+    elif status_code == 404:
+        raise NotFoundError("Resource not found", status_code, body)
+    elif status_code == 429:
+        raise RateLimitError(retry_after=60)
+    elif status_code >= 500:
+        raise ServerError(f"Server error {status_code}", status_code, body)
+    else:
+        raise HTTPError(f"HTTP {status_code}", status_code, body)
+
+
+# The hierarchy lets callers catch at the right granularity
+for code in [200, 401, 403, 404, 429, 500, 503]:
+    try:
+        raise_for_status(code)
+        print(f"  {code}: OK")
+    except AuthenticationError as e:
+        print(f"  {code}: Auth error — {e}")
+    except RateLimitError as e:
+        print(f"  {code}: Rate limited — retry in {e.retry_after}s")
+    except HTTPError as e:
+        print(f"  {code}: HTTP error (status={e.status_code}) — {e}")
+`} height={500} />
+
+### Exception Groups (Python 3.11+)
+
+Python 3.11 introduced `ExceptionGroup` for concurrent code where multiple exceptions can occur simultaneously (e.g., `asyncio.gather` with multiple failures).
+
+<PythonPlayground code={String.raw`# ExceptionGroup — Python 3.11+
+import sys
+
+print(f"Python version: {sys.version_info.major}.{sys.version_info.minor}")
+
+if sys.version_info >= (3, 11):
+    # Raise a group of exceptions
+    def process_batch(items):
+        errors = []
+        results = []
+        for item in items:
+            try:
+                if item < 0:
+                    raise ValueError(f"Negative value: {item}")
+                if item == 0:
+                    raise ZeroDivisionError("Cannot process zero")
+                results.append(100 / item)
+            except Exception as e:
+                errors.append(e)
+        if errors:
+            raise ExceptionGroup("Batch processing errors", errors)
+        return results
+
+    try:
+        process_batch([5, -1, 0, 2, -3])
+    except* ValueError as eg:
+        print(f"ValueError group: {len(eg.exceptions)} errors")
+        for e in eg.exceptions:
+            print(f"  - {e}")
+    except* ZeroDivisionError as eg:
+        print(f"ZeroDivisionError group: {len(eg.exceptions)} errors")
+else:
+    print("ExceptionGroup requires Python 3.11+")
+    print("Simulating with a list of exceptions:")
+    errors = [ValueError("Negative: -1"), ZeroDivisionError("Zero")]
+    for e in errors:
+        print(f"  {type(e).__name__}: {e}")
+`} height={400} />
+
+---
+
+## Part 4: Context Managers — Complete Mastery
+
+### The `with` Statement Protocol
+
+A context manager is any object with `__enter__` and `__exit__` methods. The `with` statement calls `__enter__` on entry and `__exit__` on exit — even if an exception is raised.
+
+<PythonPlayground code={String.raw`# Build a context manager from scratch
+import time
+import traceback
+
+class Timer:
+    """Context manager that measures elapsed time."""
+
+    def __init__(self, name="block"):
+        self.name = name
+        self.elapsed = None
+
+    def __enter__(self):
+        # Called on entry to the with block
+        # Return value is bound to the 'as' variable
+        self._start = time.perf_counter()
+        print(f"[Timer] Starting '{self.name}'")
+        return self  # bound to 'as timer'
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Called on exit — always
+        # exc_type, exc_val, exc_tb are None if no exception
+        self.elapsed = time.perf_counter() - self._start
+        print(f"[Timer] '{self.name}' finished in {self.elapsed*1000:.3f}ms")
+
+        if exc_type is not None:
+            print(f"[Timer] Exception occurred: {exc_type.__name__}: {exc_val}")
+            # Return True to SUPPRESS the exception
+            # Return False/None to PROPAGATE it
+            return False  # propagate
+
+        return False
+
+# Normal usage
+with Timer("sum computation") as t:
+    total = sum(range(1_000_000))
+print(f"Sum = {total}, elapsed = {t.elapsed*1000:.3f}ms")
+print()
+
+# Exception inside with block
+try:
+    with Timer("failing operation"):
+        x = 1 / 0
+except ZeroDivisionError:
+    print("ZeroDivisionError propagated (as expected)")
+`} height={400} />
+
+<PythonPlayground code={String.raw`# Suppressing exceptions via __exit__ returning True
+class SuppressErrors:
+    """Context manager that suppresses specific exceptions."""
+
+    def __init__(self, *exception_types):
+        self.exception_types = exception_types
+        self.suppressed = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is not None and issubclass(exc_type, self.exception_types):
+            self.suppressed = exc_val
+            print(f"  Suppressed {exc_type.__name__}: {exc_val}")
+            return True  # suppress
+        return False  # propagate
+
+# Test suppression
+with SuppressErrors(ValueError, KeyError) as ctx:
+    raise ValueError("This will be suppressed")
+print(f"After with block, suppressed={ctx.suppressed}")
+
+print()
+with SuppressErrors(ValueError) as ctx:
+    raise TypeError("TypeError not suppressed")
+`} height={300} />
+
+### contextlib.contextmanager — Generator-Based Context Managers
+
+The `@contextmanager` decorator lets you write context managers as generators, using `yield` to split setup from teardown.
+
+<PythonPlayground code={String.raw`from contextlib import contextmanager
+import io
+
+@contextmanager
+def managed_transaction(db_name):
+    """Simulate a database transaction context manager."""
+    print(f"[DB] BEGIN TRANSACTION on {db_name}")
+    connection = {"db": db_name, "committed": False, "rolled_back": False}
+    try:
+        yield connection          # Everything in the with block runs here
+        # If we reach here, no exception was raised
+        connection["committed"] = True
+        print(f"[DB] COMMIT")
+    except Exception as e:
+        connection["rolled_back"] = True
+        print(f"[DB] ROLLBACK due to {type(e).__name__}: {e}")
+        raise                     # re-raise after rollback
+    finally:
+        print(f"[DB] Connection closed")
+
+# Successful transaction
+print("=== Success case ===")
+with managed_transaction("users_db") as conn:
+    print(f"  Inserting user... (conn={conn['db']})")
+    # Success — no exception
+print(f"Committed: {conn['committed']}")
+
+print()
+print("=== Failure case ===")
+try:
+    with managed_transaction("orders_db") as conn:
+        print("  Processing order...")
+        raise ValueError("Insufficient stock")
+except ValueError:
+    print("Exception propagated to caller")
+print(f"Rolled back: {conn['rolled_back']}")
+`} height={400} />
+
+<PythonPlayground code={String.raw`from contextlib import contextmanager, ExitStack, redirect_stdout
+import io
+
+# redirect_stdout — capture or redirect print output
+captured = io.StringIO()
+with redirect_stdout(captured):
+    print("This goes to StringIO, not the terminal")
+    print("Second line")
+output = captured.getvalue()
+print(f"Captured {len(output.splitlines())} lines:")
+print(repr(output))
+
+print()
+
+# ExitStack — dynamic number of context managers
+# Useful when you don't know how many resources to manage at compile time
+print("=== ExitStack ===")
+
+@contextmanager
+def resource(name):
+    print(f"  Opening {name}")
+    try:
+        yield name
+    finally:
+        print(f"  Closing {name}")
+
+resource_names = ["file_A", "file_B", "file_C"]
+
+with ExitStack() as stack:
+    handles = [stack.enter_context(resource(n)) for n in resource_names]
+    print(f"  All open: {handles}")
+    # All __exit__ methods called in REVERSE order on leaving with block
+
+print("All resources closed")
+
+# ExitStack also lets you conditionally use context managers
+print()
+print("=== Conditional context manager ===")
+use_resource = True
+with ExitStack() as stack:
+    if use_resource:
+        h = stack.enter_context(resource("optional_file"))
+    print(f"  Working with resources")
+`} height={450} />
+
+---
+
+## Part 5: Logging — Production Patterns
+
+### Why logging beats print()
+
+`print()` is for exploratory debugging. `logging` is for production. Here is why:
+
+- **Levels**: DEBUG/INFO/WARNING/ERROR/CRITICAL — filter verbosity without code changes
+- **Destinations**: Console, file, network, syslog — without changing call sites
+- **Format**: Timestamps, module names, line numbers — free with formatters
+- **Off switch**: Set level to WARNING in production — all DEBUG/INFO disappear with no performance hit
+- **Thread-safe**: The logging module is thread-safe; print() is not guaranteed
+
+<PythonPlayground code={String.raw`import logging
+import io
+import sys
+
+# The 5 levels and their numeric values
+for level_name in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+    level = getattr(logging, level_name)
+    print(f"{level_name:10} = {level}")
+
+print()
+
+# basicConfig — simplest setup (only works if no handlers configured yet)
+# Create a fresh logger to avoid affecting the root logger in this demo
+logger = logging.getLogger("demo.basics")
+logger.setLevel(logging.DEBUG)
+
+# Add a stream handler to see output
+stream = io.StringIO()
+handler = logging.StreamHandler(stream)
+handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter(
+    fmt="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d - %(message)s",
+    datefmt="%H:%M:%S"
+)
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+logger.propagate = False  # don't bubble to root logger
+
+# Log at each level
+logger.debug("Entering database query loop")
+logger.info("User 'alice' authenticated successfully")
+logger.warning("Config file missing, using defaults")
+logger.error("Failed to connect to database after 3 retries")
+logger.critical("Disk full — cannot write audit log!")
+
+print(stream.getvalue())
+`} height={400} />
+
+### Logger Architecture: Logger, Handler, Formatter, Filter
+
+<PythonPlayground code={String.raw`import logging
+import io
+import json
+import datetime
+
+# Logger hierarchy: "app" is parent of "app.db", "app.api", etc.
+# Loggers are singletons — getLogger("app.db") always returns the same object
+
+# JSON formatter for structured logging (production standard)
+class JSONFormatter(logging.Formatter):
+    """Format log records as JSON for log aggregation systems."""
+
+    def format(self, record):
+        log_entry = {
+            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "line": record.lineno,
+        }
+        # Include exception info if present
+        if record.exc_info:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        # Include any extra fields
+        for key, val in record.__dict__.items():
+            if key not in logging.LogRecord.__dict__ and not key.startswith("_"):
+                if key not in ("exc_info", "exc_text", "stack_info", "msg", "args"):
+                    log_entry[key] = val
+        return json.dumps(log_entry)
+
+# Set up structured logger
+stream = io.StringIO()
+json_logger = logging.getLogger("myapp.api")
+json_logger.setLevel(logging.DEBUG)
+json_logger.propagate = False
+
+json_handler = logging.StreamHandler(stream)
+json_handler.setFormatter(JSONFormatter())
+json_logger.addHandler(json_handler)
+
+# Regular log
+json_logger.info("Request received", extra={"path": "/api/users", "method": "GET"})
+
+# Log with extra context fields
+json_logger.warning("Slow query detected", extra={"query_ms": 2340, "table": "orders"})
+
+# Log with exception
+try:
+    int("abc")
+except ValueError:
+    json_logger.error("Parse error", exc_info=True, extra={"input": "abc"})
+
+output = stream.getvalue()
+for line in output.strip().split("\n"):
+    parsed = json.loads(line)
+    print(json.dumps(parsed, indent=2))
+    print()
+`} height={500} />
+
+<PythonPlayground code={String.raw`import logging
+import io
+
+# Logger hierarchy and propagation
+# Parent loggers receive log records from children (propagate=True by default)
+# This means you configure handlers once on the root, and all children use them
+
+stream = io.StringIO()
+root = logging.getLogger()
+root.setLevel(logging.DEBUG)
+root.handlers.clear()
+
+handler = logging.StreamHandler(stream)
+handler.setFormatter(logging.Formatter("%(name)-20s %(levelname)-8s %(message)s"))
+root.addHandler(handler)
+
+# Create hierarchy
+parent = logging.getLogger("webapp")
+db = logging.getLogger("webapp.db")
+api = logging.getLogger("webapp.api")
+auth = logging.getLogger("webapp.api.auth")
+
+# Set per-module levels
+db.setLevel(logging.WARNING)    # DB only shows warnings+
+api.setLevel(logging.DEBUG)     # API shows everything
+
+parent.info("Application starting")
+db.debug("This won't show — db level is WARNING")
+db.warning("Slow query: 2.3s")
+api.debug("New connection from 127.0.0.1")
+api.info("GET /users 200 OK")
+auth.info("User alice logged in")   # auth inherits api's DEBUG level
+
+print(stream.getvalue())
+
+# LoggerAdapter — add context to every message automatically
+stream2 = io.StringIO()
+h2 = logging.StreamHandler(stream2)
+h2.setFormatter(logging.Formatter("%(name)s [%(user_id)s] %(message)s"))
+req_logger = logging.getLogger("webapp.request")
+req_logger.addHandler(h2)
+req_logger.propagate = False
+
+# Attach request-scoped context
+adapter = logging.LoggerAdapter(req_logger, extra={"user_id": "usr_42"})
+adapter.info("Processing payment")
+adapter.warning("Retry attempt 2")
+
+print(stream2.getvalue())
+`} height={500} />
+
+<PythonPlayground code={String.raw`import logging
+import logging.config
+import io
+
+# Production configuration using dictConfig
+# This is the right way to configure logging in real applications
+
+LOGGING_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "%(asctime)s %(name)s %(levelname)s %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        },
+        "minimal": {
+            "format": "%(levelname)s %(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "level": "DEBUG",
+            "formatter": "minimal",
+            "stream": "ext://sys.stdout",
+        },
+    },
+    "loggers": {
+        "myapp": {
+            "handlers": ["console"],
+            "level": "DEBUG",
+            "propagate": False,
+        },
+        "myapp.db": {
+            "level": "WARNING",
+            "propagate": True,  # bubble to myapp handler
+        },
+    },
+    "root": {
+        "handlers": [],
+        "level": "WARNING",
+    },
+}
+
+logging.config.dictConfig(LOGGING_CONFIG)
+
+app_log = logging.getLogger("myapp")
+db_log = logging.getLogger("myapp.db")
+
+app_log.debug("Server started on :8080")
+app_log.info("Config loaded: 14 settings")
+db_log.debug("This is filtered by myapp.db level=WARNING")
+db_log.warning("Connection pool at 90% capacity")
+app_log.error("Unhandled exception in request handler")
+
+print("(dictConfig applied — check output above)")
+`} height={400} />
+
+---
+
+## Part 6: Testing with pytest — Complete Guide
+
+### Why Testing?
+
+Tests are executable documentation. They verify your code works, prevent regressions, and — most importantly — force you to design code that can actually be tested (which usually means well-structured code).
+
+<PythonPlayground code={String.raw`# pytest is not available in Pyodide, so we simulate it
+# to demonstrate the concepts fully
+
+# This is the code we will test
+def add(a, b):
+    return a + b
+
+def divide(a, b):
+    if b == 0:
+        raise ZeroDivisionError("Cannot divide by zero")
+    return a / b
+
+def fizzbuzz(n):
+    if n % 15 == 0:
+        return "FizzBuzz"
+    elif n % 3 == 0:
+        return "Fizz"
+    elif n % 5 == 0:
+        return "Buzz"
+    return str(n)
+
+# === What pytest tests look like ===
+# def test_add():
+#     assert add(2, 3) == 5
+#     assert add(-1, 1) == 0
+#     assert add(0, 0) == 0
+#
+# def test_divide_by_zero():
+#     with pytest.raises(ZeroDivisionError, match="Cannot divide"):
+#         divide(10, 0)
+#
+# @pytest.mark.parametrize("n,expected", [
+#     (3,  "Fizz"),
+#     (5,  "Buzz"),
+#     (15, "FizzBuzz"),
+#     (7,  "7"),
+# ])
+# def test_fizzbuzz(n, expected):
+#     assert fizzbuzz(n) == expected
+
+# === Simulate running the tests ===
+import traceback
+
+def run_test(name, fn):
+    try:
+        fn()
+        print(f"  PASS  {name}")
+        return True
+    except AssertionError as e:
+        print(f"  FAIL  {name}: {e}")
+        return False
+    except Exception as e:
+        print(f"  ERROR {name}: {type(e).__name__}: {e}")
+        return False
+
+def raises(exc_type, fn):
+    try:
+        fn()
+        raise AssertionError(f"Expected {exc_type.__name__} but nothing was raised")
+    except exc_type:
+        pass  # expected
+
+tests_run = tests_passed = 0
+def test(name, fn):
+    global tests_run, tests_passed
+    tests_run += 1
+    if run_test(name, fn):
+        tests_passed += 1
+
+# Run the tests
+test("test_add_positive",    lambda: (assert add(2, 3) == 5 if False else None) or True)
+# use explicit assertions
+def t_add():
+    assert add(2, 3) == 5
+    assert add(-1, 1) == 0
+    assert add(0, 0) == 0
+test("test_add", t_add)
+
+def t_divide():
+    assert divide(10, 2) == 5.0
+    assert divide(7, 2) == 3.5
+test("test_divide", t_divide)
+
+def t_divide_zero():
+    raises(ZeroDivisionError, lambda: divide(10, 0))
+test("test_divide_zero", t_divide_zero)
+
+cases = [(3, "Fizz"), (5, "Buzz"), (15, "FizzBuzz"), (7, "7"), (1, "1")]
+for n, expected in cases:
+    test(f"test_fizzbuzz({n})", lambda n=n, e=expected: (lambda: None if fizzbuzz(n) == e else (_ for _ in ()).throw(AssertionError(f"{fizzbuzz(n)!r} != {e!r}")))())
+
+print()
+print(f"Results: {tests_passed}/{tests_run} passed")
+`} height={500} />
+
+<PythonPlayground code={String.raw`# pytest fixtures, mocking, and parametrize concepts
+# Shown as runnable Python (not requiring pytest)
+
+import unittest
+import unittest.mock as mock
+import io
+
+# ── Fixtures ─────────────────────────────────────────────────────────────────
+# In pytest: @pytest.fixture
+# def db_connection():
+#     conn = create_connection()
+#     yield conn
+#     conn.close()
+#
+# Scopes: function (default), class, module, session
+# conftest.py: shared fixtures visible to entire directory
+
+# ── Mocking ──────────────────────────────────────────────────────────────────
+# Mock objects record calls and let you set return values
+
+# The function we want to test
+def fetch_user_name(user_id, http_client):
+    response = http_client.get(f"https://api.example.com/users/{user_id}")
+    if response.status_code == 200:
+        return response.json()["name"]
+    raise ValueError(f"HTTP {response.status_code}")
+
+# Test with a mock
+mock_response = mock.MagicMock()
+mock_response.status_code = 200
+mock_response.json.return_value = {"id": 42, "name": "Alice"}
+
+mock_client = mock.MagicMock()
+mock_client.get.return_value = mock_response
+
+# Call the function under test
+name = fetch_user_name(42, mock_client)
+print(f"Fetched name: {name}")
+
+# Verify the mock was called correctly
+mock_client.get.assert_called_once_with("https://api.example.com/users/42")
+print(f"get() was called with: {mock_client.get.call_args}")
+
+# Test the error path
+mock_response_404 = mock.MagicMock()
+mock_response_404.status_code = 404
+mock_client.get.return_value = mock_response_404
+
+try:
+    fetch_user_name(99, mock_client)
+except ValueError as e:
+    print(f"Correctly raised ValueError: {e}")
+
+# patch — replace a real object with a mock during a test
+print()
+print("=== unittest.mock.patch ===")
+with mock.patch("builtins.open", mock.mock_open(read_data="config_value=42")):
+    with open("config.txt") as f:
+        content = f.read()
+    print(f"Mocked file content: {content!r}")
+`} height={450} />
+
+<PythonPlayground code={String.raw`# TDD workflow demonstration
+# Red -> Green -> Refactor
+
+print("=== TDD: Test-Driven Development Cycle ===")
+print()
+
+# STEP 1: RED — write the test first (it will fail)
+# def test_roman_numerals():
+#     assert to_roman(1) == "I"
+#     assert to_roman(4) == "IV"
+#     assert to_roman(9) == "IX"
+#     assert to_roman(14) == "XIV"
+#     assert to_roman(40) == "XL"
+#     assert to_roman(399) == "CCCXCIX"
+#     assert to_roman(1994) == "MCMXCIV"
+print("Step 1: Write failing test first")
+print("  All assertions fail — function does not exist yet")
+print()
+
+# STEP 2: GREEN — write minimum code to pass
+print("Step 2: Write minimum implementation")
+
+def to_roman(number):
+    # Minimal correct implementation
+    values = [
+        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+        (100,  "C"), (90, "XC"),  (50,  "L"), (40, "XL"),
+        (10,   "X"), (9,  "IX"),  (5,   "V"), (4,  "IV"),
+        (1,    "I"),
+    ]
+    result = ""
+    for value, numeral in values:
+        while number >= value:
+            result += numeral
+            number -= value
+    return result
+
+# Run the tests
+test_cases = [
+    (1, "I"), (4, "IV"), (9, "IX"), (14, "XIV"),
+    (40, "XL"), (399, "CCCXCIX"), (1994, "MCMXCIV"),
+]
+all_pass = True
+for n, expected in test_cases:
+    result = to_roman(n)
+    status = "PASS" if result == expected else "FAIL"
+    if status == "FAIL":
+        all_pass = False
+    print(f"  {status}  to_roman({n}) == {expected!r}  (got {result!r})")
+
+print()
+if all_pass:
+    print("Step 3: REFACTOR — all tests pass, code is clean")
+    print("  Consider: edge cases (0, negative, >3999)?")
+    print("  Consider: input validation?")
+    print("  Consider: performance for large numbers?")
+
+# STEP 3: REFACTOR — improve with confidence
+def to_roman_v2(number):
+    """Convert integer to Roman numeral string."""
+    if not isinstance(number, int):
+        raise TypeError(f"Expected int, got {type(number).__name__}")
+    if number < 1 or number > 3999:
+        raise ValueError(f"Roman numerals range is 1-3999, got {number}")
+    values = [
+        (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+        (100,  "C"), (90,  "XC"), (50,  "L"), (40,  "XL"),
+        (10,   "X"), (9,   "IX"), (5,   "V"), (4,   "IV"),
+        (1,    "I"),
+    ]
+    return "".join(numeral * (number // value) for value, numeral in values
+                   if (number := number % value) is not None or True).replace(
+        "".join(numeral * (number // value) for value, numeral in values), "")
+    # Simpler refactor:
+
+def to_roman_clean(n):
+    if not isinstance(n, int) or not (1 <= n <= 3999):
+        raise ValueError(f"Out of range: {n}")
+    vals = [(1000,"M"),(900,"CM"),(500,"D"),(400,"CD"),(100,"C"),
+            (90,"XC"),(50,"L"),(40,"XL"),(10,"X"),(9,"IX"),(5,"V"),(4,"IV"),(1,"I")]
+    r = ""
+    for v, s in vals:
+        r += s * (n // v)
+        n %= v
+    return r
+
+print()
+print("Refactored version:")
+for n, expected in test_cases:
+    assert to_roman_clean(n) == expected
+print("  All tests still pass after refactor")
+`} height={600} />
+
+<PythonPlayground code={String.raw`# Testing exceptions and edge cases
+import unittest
+
+class BankAccount:
+    def __init__(self, owner, balance=0):
+        if balance < 0:
+            raise ValueError("Initial balance cannot be negative")
+        self.owner = owner
+        self._balance = balance
+        self._history = []
+
+    @property
+    def balance(self):
+        return self._balance
+
+    def deposit(self, amount):
+        if not isinstance(amount, (int, float)):
+            raise TypeError(f"Amount must be numeric, got {type(amount).__name__}")
+        if amount <= 0:
+            raise ValueError(f"Deposit amount must be positive, got {amount}")
+        self._balance += amount
+        self._history.append(("deposit", amount, self._balance))
+        return self._balance
+
+    def withdraw(self, amount):
+        if amount <= 0:
+            raise ValueError("Withdrawal amount must be positive")
+        if amount > self._balance:
+            raise ValueError(
+                f"Insufficient funds: balance={self._balance}, requested={amount}"
+            )
+        self._balance -= amount
+        self._history.append(("withdraw", amount, self._balance))
+        return self._balance
+
+    def history(self):
+        return list(self._history)
+
+
+class TestBankAccount(unittest.TestCase):
+    # setUp runs before each test method
+    def setUp(self):
+        self.account = BankAccount("Alice", balance=100)
+
+    # tearDown runs after each test method
+    def tearDown(self):
+        pass
+
+    def test_initial_balance(self):
+        self.assertEqual(self.account.balance, 100)
+        self.assertEqual(self.account.owner, "Alice")
+
+    def test_deposit_increases_balance(self):
+        new_balance = self.account.deposit(50)
+        self.assertEqual(new_balance, 150)
+        self.assertEqual(self.account.balance, 150)
+
+    def test_deposit_zero_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.account.deposit(0)
+        self.assertIn("positive", str(ctx.exception))
+
+    def test_deposit_negative_raises(self):
+        with self.assertRaises(ValueError):
+            self.account.deposit(-10)
+
+    def test_deposit_wrong_type_raises(self):
+        with self.assertRaises(TypeError) as ctx:
+            self.account.deposit("fifty")
+        self.assertIn("numeric", str(ctx.exception))
+
+    def test_withdraw_success(self):
+        new_balance = self.account.withdraw(30)
+        self.assertEqual(new_balance, 70)
+
+    def test_withdraw_insufficient_funds(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.account.withdraw(200)
+        self.assertIn("Insufficient", str(ctx.exception))
+
+    def test_negative_initial_balance_raises(self):
+        with self.assertRaises(ValueError):
+            BankAccount("Bob", balance=-1)
+
+    def test_transaction_history(self):
+        self.account.deposit(50)
+        self.account.withdraw(20)
+        history = self.account.history()
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[0], ("deposit", 50, 150))
+        self.assertEqual(history[1], ("withdraw", 20, 130))
+
+
+# Run the test suite
+loader = unittest.TestLoader()
+suite = loader.loadTestsFromTestCase(TestBankAccount)
+runner = unittest.TextTestRunner(verbosity=2, stream=__import__("io").StringIO())
+result = runner.run(suite)
+
+print(f"Tests run:    {result.testsRun}")
+print(f"Failures:     {len(result.failures)}")
+print(f"Errors:       {len(result.errors)}")
+print(f"Success:      {result.wasSuccessful()}")
+if result.failures:
+    for test, trace in result.failures:
+        print(f"\nFAIL: {test}")
+        print(trace)
+else:
+    print()
+    print("All tests passed!")
+`} height={600} />
+
+---
+
+## Part 7: Real Project — Robust File Processing Library
+
+<PythonPlayground code={String.raw`# Complete file processing library with custom exceptions, logging, testing
+import io
+import csv
+import json
+import logging
+from contextlib import contextmanager
+
+# ── Custom Exception Hierarchy ────────────────────────────────────────────────
+
+class FileProcessorError(Exception):
+    """Root exception for the file processor."""
+    pass
+
+class FileFormatError(FileProcessorError):
+    """File content does not match expected format."""
+    def __init__(self, path, expected, reason):
+        super().__init__(f"Format error in {path}: expected {expected}, {reason}")
+        self.path = path
+        self.expected = expected
+        self.reason = reason
+
+class RecordValidationError(FileProcessorError):
+    """A record failed validation."""
+    def __init__(self, row_num, field, value, reason):
+        super().__init__(f"Row {row_num}, field '{field}': {reason} (got {value!r})")
+        self.row_num = row_num
+        self.field = field
+        self.value = value
+        self.reason = reason
+
+class ProcessingError(FileProcessorError):
+    """A batch processing operation failed partially."""
+    def __init__(self, errors):
+        super().__init__(f"Processing failed with {len(errors)} error(s)")
+        self.errors = errors
+
+# ── Logging Setup ────────────────────────────────────────────────────────────
+
+stream = io.StringIO()
+logger = logging.getLogger("fileprocessor")
+logger.setLevel(logging.DEBUG)
+logger.propagate = False
+h = logging.StreamHandler(stream)
+h.setFormatter(logging.Formatter("%(levelname)-8s %(name)s | %(message)s"))
+logger.addHandler(h)
+
+# ── Context Managers ─────────────────────────────────────────────────────────
+
+@contextmanager
+def processing_context(name):
+    """Log entry/exit and timing for a processing operation."""
+    import time
+    logger.info(f"Starting: {name}")
+    start = time.perf_counter()
+    errors = []
+    try:
+        yield errors
+        elapsed = (time.perf_counter() - start) * 1000
+        if errors:
+            logger.warning(f"Completed with {len(errors)} errors in {elapsed:.1f}ms: {name}")
+        else:
+            logger.info(f"Completed successfully in {elapsed:.1f}ms: {name}")
+    except Exception as e:
+        elapsed = (time.perf_counter() - start) * 1000
+        logger.error(f"Failed after {elapsed:.1f}ms: {name} — {e}")
+        raise
+
+# ── CSV Processor ─────────────────────────────────────────────────────────────
+
+REQUIRED_COLUMNS = {"name", "age", "email"}
+
+def validate_record(row_num, record):
+    """Validate a single CSV record. Returns cleaned record or raises."""
+    errors = []
+
+    name = record.get("name", "").strip()
+    if not name:
+        errors.append(RecordValidationError(row_num, "name", name, "cannot be empty"))
+
+    age_raw = record.get("age", "")
+    try:
+        age = int(age_raw)
+        if age < 0 or age > 150:
+            errors.append(RecordValidationError(row_num, "age", age, "must be 0-150"))
+    except (ValueError, TypeError):
+        errors.append(RecordValidationError(row_num, "age", age_raw, "must be integer"))
+        age = None
+
+    email = record.get("email", "").strip()
+    if "@" not in email:
+        errors.append(RecordValidationError(row_num, "email", email, "invalid format"))
+
+    if errors:
+        raise errors[0] if len(errors) == 1 else ProcessingError(errors)
+
+    return {"name": name, "age": age, "email": email}
+
+
+def process_csv(csv_content, strict=False):
+    """
+    Process CSV content string.
+    strict=True: raise on first error
+    strict=False: collect errors, return (records, errors)
+    """
+    with processing_context("CSV processing") as error_log:
+        reader = csv.DictReader(io.StringIO(csv_content))
+
+        # Validate header
+        if not reader.fieldnames:
+            raise FileFormatError("input", "CSV", "empty file")
+
+        fields = set(reader.fieldnames)
+        missing = REQUIRED_COLUMNS - fields
+        if missing:
+            raise FileFormatError("input", "CSV",
+                f"missing columns: {', '.join(sorted(missing))}")
+
+        records = []
+        for row_num, row in enumerate(reader, start=2):
+            try:
+                clean = validate_record(row_num, row)
+                records.append(clean)
+                logger.debug(f"Row {row_num}: valid — {clean['name']}")
+            except (RecordValidationError, ProcessingError) as e:
+                logger.warning(f"Row {row_num}: validation error — {e}")
+                error_log.append(e)
+                if strict:
+                    raise
+
+        return records, list(error_log)
+
+# ── Test it ──────────────────────────────────────────────────────────────────
+
+csv_data = """name,age,email
+Alice,30,alice@example.com
+,25,bob@example.com
+Carol,not_a_number,carol@example.com
+Dave,45,dave_invalid_email
+Eve,28,eve@example.com
+"""
+
+print("=== Processing CSV ===")
+records, errors = process_csv(csv_data, strict=False)
+print(f"Valid records: {len(records)}")
+for r in records:
+    print(f"  {r}")
+print(f"Errors:        {len(errors)}")
+for e in errors:
+    print(f"  {e}")
+
+print()
+print("=== Log output ===")
+print(stream.getvalue())
+`} height={600} />
+
+---
+
+## Exercises
+
+**Exercise 1 (Easy):** Write a function `safe_divide(a, b)` that returns `a/b` for valid inputs, raises `ZeroDivisionError` with the message `"Cannot divide {a} by zero"` when `b` is zero, and raises `TypeError` when either argument is not numeric. Write 4 assert statements that test all paths.
+
+**Exercise 2 (Easy):** Create a custom exception `NetworkTimeoutError` that extends `ConnectionError` (itself an `OSError`), with attributes `host`, `port`, and `timeout_seconds`. Raise it and verify `isinstance(e, OSError)` is `True`.
+
+**Exercise 3 (Easy):** Implement a `retry` context manager using `@contextmanager` that runs the body up to `n` times, catching a specific exception type, and raising on the final failure.
+
+**Exercise 4 (Medium):** Implement a full exception hierarchy for a payment processing system: `PaymentError` → `CardError` (with `card_last4`) → `DeclinedError`, `ExpiredCardError`; `PaymentError` → `FraudError` (with `risk_score`). Write a `process_payment` function that raises the appropriate exception for mock scenarios.
+
+**Exercise 5 (Medium):** Build a logging system with two handlers: one `StreamHandler` at DEBUG level with a human-readable format, and one that captures JSON-formatted records into a `list`. Log 10 events at various levels and verify the JSON handler captured only ERROR and above.
+
+**Exercise 6 (Medium):** Write a `ManagedPool` class that implements `__enter__` and `__exit__`, managing a pool of 3 simulated resources. Track checked-out resources, and on `__exit__`, return them to the pool. If an exception occurs, mark the resource as "dirty" instead of returning it.
+
+**Exercise 7 (Hard):** Implement `pytest`-style parametrized testing without `pytest`. Create a `@parametrize(cases)` decorator that runs the decorated test function with each set of arguments and prints a summary table: test name, parameters, PASS/FAIL, and error message.
+
+**Exercise 8 (Hard):** Build a complete `ConfigLoader` class with: custom exceptions (`ConfigNotFoundError`, `ConfigParseError`, `ConfigValidationError`), a `@contextmanager` that handles loading and automatic saving on clean exit, structured logging for every operation, and a full `unittest.TestCase` with at least 8 test methods including mocking `open()` with `unittest.mock.mock_open`.
+
+<PythonPlayground code={String.raw`# Exercise starters — uncomment and complete each one
+
+# --- Exercise 1: safe_divide ---
+def safe_divide(a, b):
+    if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
+        raise TypeError(f"Arguments must be numeric, got {type(a).__name__} and {type(b).__name__}")
+    if b == 0:
+        raise ZeroDivisionError(f"Cannot divide {a} by zero")
+    return a / b
+
+assert safe_divide(10, 2) == 5.0
+assert safe_divide(-6, 3) == -2.0
+try:
+    safe_divide(1, 0)
+    assert False, "Should have raised"
+except ZeroDivisionError as e:
+    assert "Cannot divide 1 by zero" in str(e)
+try:
+    safe_divide("a", 2)
+    assert False, "Should have raised"
+except TypeError:
+    pass
+print("Exercise 1: PASS")
+
+# --- Exercise 2: NetworkTimeoutError ---
+class NetworkTimeoutError(ConnectionError):
+    def __init__(self, host, port, timeout_seconds):
+        super().__init__(f"Connection to {host}:{port} timed out after {timeout_seconds}s")
+        self.host = host
+        self.port = port
+        self.timeout_seconds = timeout_seconds
+
+try:
+    raise NetworkTimeoutError("api.example.com", 443, 30)
+except NetworkTimeoutError as e:
+    assert isinstance(e, OSError)
+    assert isinstance(e, ConnectionError)
+    assert e.host == "api.example.com"
+    assert e.port == 443
+    assert e.timeout_seconds == 30
+print("Exercise 2: PASS")
+
+# --- Exercise 3: retry context manager ---
+from contextlib import contextmanager
+
+@contextmanager
+def retry(max_attempts, exc_type=Exception):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            yield attempt
+            break  # success
+        except exc_type:
+            if attempt == max_attempts:
+                raise
+            # else continue loop
+
+# Test retry
+attempts_made = 0
+try:
+    with retry(3, ValueError) as attempt:
+        attempts_made = attempt
+        if attempt < 3:
+            raise ValueError(f"Attempt {attempt} failed")
+    print(f"Exercise 3: PASS (succeeded on attempt {attempts_made})")
+except Exception as e:
+    print(f"Exercise 3: Unexpected error: {e}")
+`} height={500} />
