@@ -1,3 +1,11 @@
+export type ChartType =
+  | "histogram" | "boxplot" | "bar" | "donut"
+  | "horizontal-bar" | "timeseries" | "cdf" | "violin";
+
+export type DistributionShape =
+  | "normal" | "right-skewed" | "left-skewed"
+  | "heavy-tailed" | "uniform";
+
 export interface ColumnStats {
   name: string;
   type: "numeric" | "categorical" | "datetime" | "boolean" | "mixed";
@@ -13,6 +21,12 @@ export interface ColumnStats {
   p25?: number;
   p50?: number;
   p75?: number;
+  // new numeric enrichments
+  outlierCount?: number;
+  skewness?: number;
+  distributionShape?: DistributionShape;
+  kdePoints?: { x: number; y: number }[];
+  recommendedChart?: ChartType;
   // categorical
   topValues?: { value: string; count: number }[];
   // for charts
@@ -25,6 +39,10 @@ export interface DatasetSummary {
   rowCount: number;
   columnCount: number;
   columns: ColumnStats[];
+  // new top-level enrichments
+  correlationMatrix: { col1: string; col2: string; r: number }[];
+  recommendedPairs: { col1: string; col2: string; r: number }[];
+  missingnessPattern: { rowIndex: number; colsWithNull: string[] }[];
 }
 
 type Row = Record<string, unknown>;
@@ -73,9 +91,79 @@ function buildHistogram(nums: number[], bins = 10): { bucket: string; count: num
   return buckets;
 }
 
+function computeOutlierCount(sorted: number[], q1: number, q3: number): number {
+  const iqr = q3 - q1;
+  const lo = q1 - 1.5 * iqr;
+  const hi = q3 + 1.5 * iqr;
+  return sorted.filter((v) => v < lo || v > hi).length;
+}
+
+function computeSkewness(mean: number, median: number, std: number): number {
+  if (std === 0) return 0;
+  return (3 * (mean - median)) / std;
+}
+
+function classifyShape(skewness: number, std: number, range: number): DistributionShape {
+  if (range > 0 && std / range < 0.15) return "uniform";
+  if (Math.abs(skewness) < 0.2) return "normal";
+  if (skewness > 0.5) return "right-skewed";
+  if (skewness < -0.5) return "left-skewed";
+  return "heavy-tailed";
+}
+
+function computeKDE(nums: number[], points = 50): { x: number; y: number }[] {
+  if (nums.length === 0) return [];
+  const min = nums[0];
+  const max = nums[nums.length - 1];
+  if (min === max) return [];
+  const h = 1.06 * (nums.reduce((a, b) => a + (b - nums[Math.floor(nums.length / 2)]) ** 2, 0) / nums.length) ** 0.5 * nums.length ** -0.2 || 1;
+  const step = (max - min) / (points - 1);
+  return Array.from({ length: points }, (_, i) => {
+    const x = min + i * step;
+    const y = nums.reduce((sum, xi) => {
+      const u = (x - xi) / h;
+      return sum + Math.exp(-0.5 * u * u);
+    }, 0) / (nums.length * h * Math.sqrt(2 * Math.PI));
+    return { x: Math.round(x * 1000) / 1000, y: Math.round(y * 10000) / 10000 };
+  });
+}
+
+function selectChartType(col: ColumnStats): ChartType {
+  if (col.type === "datetime") return "timeseries";
+  if (col.type === "boolean") return "donut";
+  if (col.type === "categorical") {
+    if (col.unique <= 6) return "donut";
+    if (col.unique <= 20) return "horizontal-bar";
+    return "horizontal-bar"; // truncated top-10
+  }
+  if (col.type === "numeric") {
+    if (col.unique !== undefined && col.unique <= 20) return "bar";
+    const outlierPct = col.outlierCount !== undefined && col.count > 0
+      ? col.outlierCount / col.count
+      : 0;
+    if (outlierPct > 0.05) return "boxplot";
+    return "histogram";
+  }
+  return "bar";
+}
+
+function pearsonR(xs: number[], ys: number[]): number {
+  const n = xs.length;
+  if (n < 3) return 0;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx = 0, dy = 0;
+  for (let i = 0; i < n; i++) {
+    const a = xs[i] - mx, b = ys[i] - my;
+    num += a * b; dx += a * a; dy += b * b;
+  }
+  const denom = Math.sqrt(dx * dy);
+  return denom === 0 ? 0 : Math.round((num / denom) * 1000) / 1000;
+}
+
 export function computeStats(rows: Row[], fileName: string, fileSizeKB: number): DatasetSummary {
   if (rows.length === 0) {
-    return { fileName, fileSizeKB, rowCount: 0, columnCount: 0, columns: [] };
+    return { fileName, fileSizeKB, rowCount: 0, columnCount: 0, columns: [], correlationMatrix: [], recommendedPairs: [], missingnessPattern: [] };
   }
 
   const sample = rows.slice(0, 100_000); // cap at 100k rows for perf
@@ -111,6 +199,16 @@ export function computeStats(rows: Row[], fileName: string, fileSizeKB: number):
         base.p50 = Math.round(percentile(nums, 50) * 1000) / 1000;
         base.p75 = Math.round(percentile(nums, 75) * 1000) / 1000;
         base.histogram = buildHistogram(nums);
+        const q1 = base.p25 ?? 0;
+        const q3 = base.p75 ?? 0;
+        const outlierCount = computeOutlierCount(nums, q1, q3);
+        const skewness = base.mean !== undefined && base.p50 !== undefined && base.std !== undefined
+          ? computeSkewness(base.mean, base.p50, base.std)
+          : 0;
+        base.outlierCount = outlierCount;
+        base.skewness = Math.round(skewness * 1000) / 1000;
+        base.distributionShape = classifyShape(skewness, base.std ?? 0, (base.max ?? 0) - (base.min ?? 0));
+        base.kdePoints = computeKDE(nums);
       }
     }
 
@@ -133,7 +231,49 @@ export function computeStats(rows: Row[], fileName: string, fileSizeKB: number):
     return base;
   });
 
-  return { fileName, fileSizeKB, rowCount: rows.length, columnCount: keys.length, columns };
+  // Assign recommended chart per column
+  for (const col of columns) {
+    col.recommendedChart = selectChartType(col);
+  }
+
+  // Correlation matrix for all numeric column pairs
+  const numericCols = columns.filter((c) => c.type === "numeric");
+  const correlationMatrix: DatasetSummary["correlationMatrix"] = [];
+  for (let i = 0; i < numericCols.length; i++) {
+    for (let j = i + 1; j < numericCols.length; j++) {
+      const colA = numericCols[i];
+      const colB = numericCols[j];
+      const xs = sample.map((r) => parseFloat(String(r[colA.name]))).filter(isFinite);
+      const ys = sample.map((r) => parseFloat(String(r[colB.name]))).filter(isFinite);
+      const paired = xs.map((x, k) => [x, ys[k]] as [number, number]).filter(([, y]) => isFinite(y));
+      if (paired.length < 3) continue;
+      const r = pearsonR(paired.map(([x]) => x), paired.map(([, y]) => y));
+      correlationMatrix.push({ col1: colA.name, col2: colB.name, r });
+    }
+  }
+
+  const recommendedPairs = correlationMatrix
+    .filter((p) => Math.abs(p.r) > 0.3)
+    .sort((a, b) => Math.abs(b.r) - Math.abs(a.r))
+    .slice(0, 6);
+
+  // Missingness pattern — sample up to 200 rows
+  const missSample = sample.slice(0, 200);
+  const missingnessPattern = missSample
+    .map((row, rowIndex) => ({
+      rowIndex,
+      colsWithNull: keys.filter((k) => row[k] === null || row[k] === undefined || row[k] === ""),
+    }))
+    .filter((r) => r.colsWithNull.length > 0);
+
+  return {
+    fileName, fileSizeKB,
+    rowCount: rows.length, columnCount: keys.length,
+    columns,
+    correlationMatrix,
+    recommendedPairs,
+    missingnessPattern,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -214,11 +354,22 @@ export function summaryToPrompt(summary: DatasetSummary): string {
     let line = `- ${col.name} [${col.type}] nulls=${col.nullPct}% unique=${col.unique}`;
     if (col.type === "numeric") {
       line += ` mean=${col.mean} std=${col.std} min=${col.min} max=${col.max} p50=${col.p50}`;
+      if (col.outlierCount !== undefined) line += ` outliers=${col.outlierCount}`;
+      if (col.distributionShape) line += ` shape=${col.distributionShape}`;
+      if (col.skewness !== undefined) line += ` skew=${col.skewness}`;
     } else if (col.topValues) {
       const top3 = col.topValues.slice(0, 3).map((t) => `"${t.value}"(${t.count})`).join(", ");
       line += ` top=[${top3}]`;
     }
     lines.push(line);
+  }
+
+  if (summary.recommendedPairs.length > 0) {
+    lines.push("");
+    lines.push("Strong correlations:");
+    for (const p of summary.recommendedPairs) {
+      lines.push(`- ${p.col1} × ${p.col2}: r=${p.r}`);
+    }
   }
 
   return lines.join("\n");
