@@ -21,7 +21,7 @@ export function MissingTab({ summary }: Props) {
   for (const row of missingnessPattern) {
     for (let i = 0; i < row.colsWithNull.length; i++) {
       for (let j = i + 1; j < row.colsWithNull.length; j++) {
-        const key = `${row.colsWithNull[i]}|${row.colsWithNull[j]}`;
+        const key = [row.colsWithNull[i], row.colsWithNull[j]].sort().join("|");
         coOccurrence.set(key, (coOccurrence.get(key) ?? 0) + 1);
       }
     }
@@ -116,8 +116,9 @@ export function MissingTab({ summary }: Props) {
           </p>
           {topCoOccurrence.map(([key, count]) => {
             const [a, b] = key.split("|");
-            const pct = missingnessPattern.length > 0
-              ? Math.round((count / missingnessPattern.length) * 100)
+            const sampleSize = Math.min(summary.rowCount, 200);
+            const pct = sampleSize > 0
+              ? Math.round((count / sampleSize) * 100)
               : 0;
             return (
               <p key={key} style={{ fontSize: 12, color: TX2, margin: "4px 0" }}>
