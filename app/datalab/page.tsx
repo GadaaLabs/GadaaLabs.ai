@@ -84,7 +84,7 @@ export default async function DataLabPage() {
             className="rounded-2xl p-6"
             style={{ background: "var(--color-bg-surface)", border: "1px solid var(--color-border-default)" }}
           >
-            <AccessTabSwitcher />
+            <AccessTabSwitcher isSignedIn={!!session?.user} />
           </div>
         </div>
       </div>

@@ -49,8 +49,12 @@ export function EmailRequestForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, email, reason, agentScope: scope }),
       });
-      const data = (await res.json()) as { ok?: boolean; error?: string };
+      const data = (await res.json()) as { ok?: boolean; error?: string; mailtoUrl?: string };
       if (data.ok) {
+        // Open admin notification email in the user's mail client
+        if (data.mailtoUrl) {
+          window.location.href = data.mailtoUrl;
+        }
         setState("success");
       } else {
         setState("error");
@@ -73,10 +77,12 @@ export function EmailRequestForm() {
           </div>
         </div>
         <p style={{ fontSize: 15, fontWeight: 700, color: "#e8edf5", marginBottom: 6 }}>
-          Request received
+          Request submitted!
         </p>
         <p style={{ fontSize: 13, color: "#9ba8bc" }}>
-          You&apos;ll receive an access link at <strong style={{ color: "#e8edf5" }}>{email}</strong> within 24 hours.
+          Your email client should have opened with a pre-filled notification to the admin.
+          <strong style={{ color: "#e8edf5" }}> Hit Send</strong> to complete your request —
+          you&apos;ll hear back at <strong style={{ color: "#e8edf5" }}>{email}</strong> within 24 hours.
         </p>
       </div>
     );

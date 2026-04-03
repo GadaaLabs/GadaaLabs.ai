@@ -46,12 +46,34 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const trimmedName = name.trim();
+  const trimmedEmail = email.toLowerCase().trim();
+  const trimmedReason = reason?.trim();
+
   addEmailPendingRequest({
-    name: name.trim(),
-    email: email.toLowerCase().trim(),
-    reason: reason?.trim(),
+    name: trimmedName,
+    email: trimmedEmail,
+    reason: trimmedReason,
     agentScope: scope,
   });
 
-  return NextResponse.json({ ok: true });
+  // Build a mailto URL so the admin is notified via email
+  const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL ?? "support@gadaalabs.com";
+  const origin = process.env.NEXT_PUBLIC_URL ?? process.env.NEXTAUTH_URL ?? "https://gadaalabs.com";
+  const adminUrl = `${origin}/dashboard/admin`;
+
+  const subject = encodeURIComponent(`DataLab Access Request — ${trimmedName}`);
+  const bodyLines = [
+    `New DataLab access request:`,
+    ``,
+    `Name:   ${trimmedName}`,
+    `Email:  ${trimmedEmail}`,
+    `Scope:  ${scope.join(", ")}`,
+    trimmedReason ? `Reason: ${trimmedReason}` : "",
+    ``,
+    `Review and approve at: ${adminUrl}`,
+  ].filter((l) => l !== null);
+  const mailtoUrl = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${encodeURIComponent(bodyLines.join("\n"))}`;
+
+  return NextResponse.json({ ok: true, mailtoUrl });
 }
