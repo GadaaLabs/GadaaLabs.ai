@@ -1118,7 +1118,6 @@ export function DataLabShell() {
         <ReportTab
           summary={summary}
           qualityScore={0}
-          analysisComplete={pipelineDone}
         />
       )}
     </div>

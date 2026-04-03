@@ -2,6 +2,7 @@
 
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
+  ComposedChart, Area, ReferenceLine, ScatterChart, Scatter, ZAxis,
 } from "recharts";
 import type { DatasetSummary, ColumnStats, ChartType } from "@/lib/datalab";
 
@@ -130,12 +131,44 @@ function ChartCard({ col, insight, children }: CardProps) {
 
 // ── Chart renderers ──────────────────────────────────────────────────────────
 
+// Find the bucket label whose range contains a given value
+function bucketFor(buckets: { bucket: string }[], value: number): string | undefined {
+  for (const b of buckets) {
+    const parts = b.bucket.split("–").concat(b.bucket.split("-"));
+    const nums = parts.map(Number).filter(isFinite);
+    if (nums.length >= 2 && value >= nums[0] && value <= nums[nums.length - 1]) return b.bucket;
+  }
+  return undefined;
+}
+
 function HistogramChart({ col, color }: { col: ColumnStats; color: string }) {
-  const data = col.histogram ?? [];
+  const histData = col.histogram ?? [];
+  const mean = col.mean;
+  const median = col.p50;
+  const kdeRaw = col.kdePoints ?? [];
+
+  // Attach a scaled KDE value to each histogram bucket by interpolating from kdePoints
+  const maxCount = histData.reduce((m, d) => Math.max(m, d.count), 1);
+  const maxKde = kdeRaw.reduce((m, d) => Math.max(m, d.y), 0.0001);
+
+  const data = histData.map((b) => {
+    const parts = b.bucket.split("–").concat(b.bucket.split("-")).map(Number).filter(isFinite);
+    const mid = parts.length >= 2 ? (parts[0] + parts[parts.length - 1]) / 2 : NaN;
+    let kde: number | undefined;
+    if (kdeRaw.length > 0 && isFinite(mid)) {
+      const closest = kdeRaw.reduce((p, c) => Math.abs(c.x - mid) < Math.abs(p.x - mid) ? c : p);
+      kde = (closest.y / maxKde) * maxCount * 0.82;
+    }
+    return { ...b, kde };
+  });
+
+  const meanBucket = mean !== undefined ? bucketFor(histData, mean) : undefined;
+  const medianBucket = median !== undefined ? bucketFor(histData, median) : undefined;
+
   return (
-    <div style={{ height: 180 }}>
+    <div style={{ height: 200 }}>
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 4, right: 8, bottom: 24, left: 0 }}>
+        <ComposedChart data={data} margin={{ top: 16, right: 12, bottom: 28, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
           <XAxis dataKey="bucket" tick={{ fontSize: 9, fill: TX3 }}
             interval="preserveStartEnd" angle={-30} textAnchor="end" />
@@ -144,44 +177,93 @@ function HistogramChart({ col, color }: { col: ColumnStats; color: string }) {
             contentStyle={{ background: "#10101e", border: `1px solid ${BORDER}`, borderRadius: 8, fontSize: 11 }}
             labelStyle={{ color: TX1 }} itemStyle={{ color: TX2 }}
           />
-          <Bar dataKey="count" fill={color} radius={[3, 3, 0, 0]} />
-        </BarChart>
+          <Bar dataKey="count" fill={color} fillOpacity={0.72} radius={[2, 2, 0, 0]} />
+          {kdeRaw.length > 0 && (
+            <Area dataKey="kde" type="monotone"
+              stroke={CYAN} strokeWidth={2} fill={`${CYAN}14`} dot={false} />
+          )}
+          {meanBucket && (
+            <ReferenceLine x={meanBucket} stroke={CYAN} strokeDasharray="4 3" strokeWidth={1.5}
+              label={{ value: `μ=${mean}`, position: "top", fill: CYAN, fontSize: 9 }} />
+          )}
+          {medianBucket && medianBucket !== meanBucket && (
+            <ReferenceLine x={medianBucket} stroke={VIOLET} strokeDasharray="4 3" strokeWidth={1.5}
+              label={{ value: `M=${median}`, position: "insideTop", fill: VIOLET, fontSize: 9 }} />
+          )}
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );
 }
 
 function BoxPlotChart({ col, color }: { col: ColumnStats; color: string }) {
-  const data = [
-    { label: "Min", value: col.min ?? 0 },
-    { label: "Q1", value: col.p25 ?? 0 },
-    { label: "Median", value: col.p50 ?? 0 },
-    { label: "Mean", value: col.mean ?? 0 },
-    { label: "Q3", value: col.p75 ?? 0 },
-    { label: "Max", value: col.max ?? 0 },
-  ];
+  const min = col.min ?? 0, max = col.max ?? 0;
+  const q1 = col.p25 ?? 0, median = col.p50 ?? 0, q3 = col.p75 ?? 0;
+  const mean = col.mean ?? 0;
+  const iqr = q3 - q1;
+  const lowerFence = Math.max(min, q1 - 1.5 * iqr);
+  const upperFence = Math.min(max, q3 + 1.5 * iqr);
+  const range = max - min || 1;
+
+  // Map value to x% position (0–100)
+  const pct = (v: number) => Math.max(0, Math.min(100, ((v - min) / range) * 100));
+
+  const H = 80; // SVG height
+  const boxY = 22, boxH = 36;
+  const midY = boxY + boxH / 2;
+
   return (
-    <div style={{ height: 180 }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 4, right: 8, bottom: 24, left: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-          <XAxis dataKey="label" tick={{ fontSize: 9, fill: TX3 }} />
-          <YAxis tick={{ fontSize: 9, fill: TX3 }} width={40} />
-          <Tooltip
-            contentStyle={{ background: "#10101e", border: `1px solid ${BORDER}`, borderRadius: 8, fontSize: 11 }}
-            labelStyle={{ color: TX1 }} itemStyle={{ color: TX2 }}
-          />
-          <Bar dataKey="value" radius={[3, 3, 0, 0]}>
-            {data.map((d, i) => (
-              <Cell key={i} fill={
-                d.label === "Median" ? CYAN :
-                d.label === "Mean" ? VIOLET :
-                d.label === "Min" || d.label === "Max" ? ROSE : color
-              } />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
+    <div style={{ padding: "8px 0" }}>
+      <svg width="100%" height={H} style={{ overflow: "visible" }}>
+        {/* Whisker lines */}
+        <line x1={`${pct(lowerFence)}%`} y1={midY} x2={`${pct(q1)}%`} y2={midY}
+          stroke={TX3} strokeWidth={1.5} strokeDasharray="3 2" />
+        <line x1={`${pct(q3)}%`} y1={midY} x2={`${pct(upperFence)}%`} y2={midY}
+          stroke={TX3} strokeWidth={1.5} strokeDasharray="3 2" />
+        {/* Whisker end caps */}
+        <line x1={`${pct(lowerFence)}%`} y1={boxY + 8} x2={`${pct(lowerFence)}%`} y2={boxY + boxH - 8}
+          stroke={TX3} strokeWidth={1.5} />
+        <line x1={`${pct(upperFence)}%`} y1={boxY + 8} x2={`${pct(upperFence)}%`} y2={boxY + boxH - 8}
+          stroke={TX3} strokeWidth={1.5} />
+        {/* IQR box */}
+        <rect x={`${pct(q1)}%`} y={boxY} width={`${pct(q3) - pct(q1)}%`} height={boxH}
+          fill={`${color}30`} stroke={color} strokeWidth={1.5} rx={3} />
+        {/* Median line */}
+        <line x1={`${pct(median)}%`} y1={boxY} x2={`${pct(median)}%`} y2={boxY + boxH}
+          stroke={CYAN} strokeWidth={2.5} />
+        {/* Mean diamond */}
+        {(() => {
+          const mx = `${pct(mean)}%`;
+          const s = 5;
+          return <polygon
+            points={`${pct(mean)}%,${midY - s} calc(${pct(mean)}% + ${s}px),${midY} ${pct(mean)}%,${midY + s} calc(${pct(mean)}% - ${s}px),${midY}`}
+            fill={VIOLET} opacity={0.9}
+          />;
+        })()}
+        {/* Min/Max outlier dots */}
+        {min < lowerFence && <circle cx={`${pct(min)}%`} cy={midY} r={3.5} fill={ROSE} opacity={0.8} />}
+        {max > upperFence && <circle cx={`${pct(max)}%`} cy={midY} r={3.5} fill={ROSE} opacity={0.8} />}
+        {/* Labels */}
+        <text x={`${pct(lowerFence)}%`} y={boxY - 5} textAnchor="middle" fontSize={8} fill={TX3}>
+          {lowerFence.toFixed(1)}
+        </text>
+        <text x={`${pct(q1)}%`} y={boxY - 5} textAnchor="middle" fontSize={8} fill={TX2}>Q1</text>
+        <text x={`${pct(median)}%`} y={boxY + boxH + 13} textAnchor="middle" fontSize={8} fill={CYAN}
+          fontWeight="bold">M</text>
+        <text x={`${pct(q3)}%`} y={boxY - 5} textAnchor="middle" fontSize={8} fill={TX2}>Q3</text>
+        <text x={`${pct(upperFence)}%`} y={boxY - 5} textAnchor="middle" fontSize={8} fill={TX3}>
+          {upperFence.toFixed(1)}
+        </text>
+      </svg>
+      {/* Legend row */}
+      <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 4 }}>
+        <span style={{ fontSize: 10, color: CYAN }}>── Median</span>
+        <span style={{ fontSize: 10, color: VIOLET }}>◆ Mean</span>
+        <span style={{ fontSize: 10, color: color }}>□ IQR box</span>
+        {(min < lowerFence || max > upperFence) && (
+          <span style={{ fontSize: 10, color: ROSE }}>● Outlier</span>
+        )}
+      </div>
     </div>
   );
 }

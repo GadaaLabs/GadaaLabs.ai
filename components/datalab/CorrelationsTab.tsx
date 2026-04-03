@@ -1,4 +1,5 @@
 "use client";
+import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import type { DatasetSummary } from "@/lib/datalab";
 
 const TX1 = "#e8edf5", TX2 = "#9ba8bc", TX3 = "#5c6a80";
@@ -19,7 +20,7 @@ function rColor(r: number): string {
 }
 
 export function CorrelationsTab({ summary, chartInsights = {} }: Props) {
-  const { correlationMatrix, recommendedPairs, columns } = summary;
+  const { correlationMatrix, recommendedPairs, columns, scatterSamples = [] } = summary;
   const numericCols = columns.filter((c) => c.type === "numeric");
   const colNames = numericCols.map((c) => c.name);
 
@@ -87,36 +88,72 @@ export function CorrelationsTab({ summary, chartInsights = {} }: Props) {
         </table>
       </div>
 
-      {/* Top correlated pairs */}
+      {/* Top correlated pairs with scatter plots */}
       {recommendedPairs.length > 0 && (
         <div>
           <h3 style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase",
             letterSpacing: "0.1em", color: TX3, marginBottom: 12 }}>
-            Top Correlated Pairs
+            Top Correlated Pairs — Scatter Plots
           </h3>
           {recommendedPairs.map((pair) => {
             const insight = chartInsights[`${pair.col1}_${pair.col2}`]
               ?? chartInsights[`${pair.col2}_${pair.col1}`];
             const rc = rColor(pair.r);
+            const sample = scatterSamples.find(
+              (s) => (s.col1 === pair.col1 && s.col2 === pair.col2) ||
+                     (s.col1 === pair.col2 && s.col2 === pair.col1)
+            );
+            const points = sample?.points ?? [];
+            const direction = pair.r > 0 ? "positive" : "negative";
+            const strength = Math.abs(pair.r) > 0.7 ? "strong" : Math.abs(pair.r) > 0.4 ? "moderate" : "weak";
+
             return (
               <div key={`${pair.col1}_${pair.col2}`}
                 style={{ background: "#0c0c18", border: `1px solid ${BORDER}`,
-                  borderRadius: 14, padding: 16, marginBottom: 12 }}>
+                  borderRadius: 14, padding: 16, marginBottom: 16 }}>
+                {/* Header */}
                 <div style={{ display: "flex", justifyContent: "space-between",
-                  alignItems: "center", marginBottom: 8 }}>
+                  alignItems: "center", marginBottom: 4 }}>
                   <span style={{ fontSize: 12, fontWeight: 700, color: TX1, fontFamily: "monospace" }}>
                     {pair.col1} × {pair.col2}
                   </span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: rc,
-                    background: `${rc}18`, border: `1px solid ${rc}40`,
-                    borderRadius: 20, padding: "2px 10px" }}>
-                    r = {pair.r}
-                  </span>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <span style={{ fontSize: 10, color: TX3 }}>{strength} {direction}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: rc,
+                      background: `${rc}18`, border: `1px solid ${rc}40`,
+                      borderRadius: 20, padding: "2px 10px" }}>
+                      r = {pair.r}
+                    </span>
+                  </div>
                 </div>
+                {/* Scatter plot */}
+                {points.length > 0 ? (
+                  <div style={{ height: 180, marginTop: 8 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ScatterChart margin={{ top: 4, right: 12, bottom: 20, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                        <XAxis dataKey="x" type="number" name={pair.col1}
+                          tick={{ fontSize: 8, fill: TX3 }} label={{ value: pair.col1, position: "insideBottom", fill: TX3, fontSize: 9, offset: -8 }} />
+                        <YAxis dataKey="y" type="number" name={pair.col2}
+                          tick={{ fontSize: 8, fill: TX3 }} width={36} />
+                        <Tooltip cursor={{ strokeDasharray: "3 3" }}
+                          contentStyle={{ background: "#10101e", border: `1px solid ${BORDER}`, borderRadius: 8, fontSize: 10 }}
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          formatter={(v: any, name: any) => [typeof v === "number" ? v.toFixed(2) : v, name] as any} />
+                        <Scatter data={points} fill={rc} fillOpacity={0.55} />
+                      </ScatterChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <div style={{ height: 40, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <span style={{ fontSize: 11, color: TX3 }}>No sample data available for scatter plot</span>
+                  </div>
+                )}
+                {/* AI insight */}
                 {insight && (
                   <p style={{ fontSize: 12, color: TX2, lineHeight: 1.6,
                     background: "rgba(139,92,246,0.05)", border: "1px solid rgba(139,92,246,0.15)",
-                    borderRadius: 8, padding: "8px 10px", margin: 0 }}>{insight}</p>
+                    borderRadius: 8, padding: "8px 10px", margin: "10px 0 0" }}>{insight}</p>
                 )}
               </div>
             );

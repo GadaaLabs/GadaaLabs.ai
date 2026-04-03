@@ -43,6 +43,7 @@ export interface DatasetSummary {
   correlationMatrix: { col1: string; col2: string; r: number }[];
   recommendedPairs: { col1: string; col2: string; r: number }[];
   missingnessPattern: { rowIndex: number; colsWithNull: string[] }[];
+  scatterSamples: { col1: string; col2: string; points: { x: number; y: number }[] }[];
 }
 
 type Row = Record<string, unknown>;
@@ -164,7 +165,7 @@ function pearsonR(xs: number[], ys: number[]): number {
 
 export function computeStats(rows: Row[], fileName: string, fileSizeKB: number): DatasetSummary {
   if (rows.length === 0) {
-    return { fileName, fileSizeKB, rowCount: 0, columnCount: 0, columns: [], correlationMatrix: [], recommendedPairs: [], missingnessPattern: [] };
+    return { fileName, fileSizeKB, rowCount: 0, columnCount: 0, columns: [], correlationMatrix: [], recommendedPairs: [], missingnessPattern: [], scatterSamples: [] };
   }
 
   const sample = rows.slice(0, 100_000); // cap at 100k rows for perf
@@ -258,6 +259,20 @@ export function computeStats(rows: Row[], fileName: string, fileSizeKB: number):
     .sort((a, b) => Math.abs(b.r) - Math.abs(a.r))
     .slice(0, 6);
 
+  // Scatter samples — up to 200 points per recommended pair for scatter plots
+  const scatterSamples: DatasetSummary["scatterSamples"] = recommendedPairs.map((pair) => {
+    const stride = Math.max(1, Math.floor(sample.length / 200));
+    const points = sample
+      .filter((_, i) => i % stride === 0)
+      .map((r) => ({
+        x: parseFloat(String(r[pair.col1])),
+        y: parseFloat(String(r[pair.col2])),
+      }))
+      .filter((p) => isFinite(p.x) && isFinite(p.y))
+      .slice(0, 200);
+    return { col1: pair.col1, col2: pair.col2, points };
+  });
+
   // Missingness pattern — sample up to 200 rows
   const missSample = sample.slice(0, 200);
   const missingnessPattern = missSample
@@ -274,6 +289,7 @@ export function computeStats(rows: Row[], fileName: string, fileSizeKB: number):
     correlationMatrix,
     recommendedPairs,
     missingnessPattern,
+    scatterSamples,
   };
 }
 
