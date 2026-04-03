@@ -8,6 +8,7 @@ import {
   getAccessCount,
   getPendingRequests,
   removePendingRequest,
+  removeEmailPendingRequest,
   getEmailPendingRequests,
 } from "@/lib/datalab-access";
 
@@ -43,7 +44,7 @@ export async function GET() {
 // ---------------------------------------------------------------------------
 
 interface PostBody {
-  action: "grant" | "revoke" | "deny";
+  action: "grant" | "revoke" | "deny" | "deny-email";
   userId: string;
   userName?: string;
   email?: string;
@@ -98,6 +99,11 @@ export async function POST(req: NextRequest) {
   if (action === "deny") {
     removePendingRequest(userId);
     return NextResponse.json({ success: true, message: `Request from ${userId} dismissed.` });
+  }
+
+  if (action === "deny-email") {
+    removeEmailPendingRequest(userId); // userId here is used as the request id
+    return NextResponse.json({ success: true });
   }
 
   return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });

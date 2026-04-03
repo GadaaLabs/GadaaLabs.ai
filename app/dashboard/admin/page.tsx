@@ -152,12 +152,14 @@ function StatCard({
 // CopyMagicLinkButton
 // ---------------------------------------------------------------------------
 
-function CopyMagicLinkButton({ req }: { req: EmailPendingRequest }) {
+function CopyMagicLinkButton({ req, onDismiss }: { req: EmailPendingRequest; onDismiss: () => void }) {
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   async function handleCopy() {
     setLoading(true);
+    setFailed(false);
     try {
       const agents = req.agentScope.join(",");
       const url = `/api/admin/datalab-access/magic-link?name=${encodeURIComponent(req.name)}&email=${encodeURIComponent(req.email)}&agents=${encodeURIComponent(agents)}&days=7`;
@@ -167,26 +169,39 @@ function CopyMagicLinkButton({ req }: { req: EmailPendingRequest }) {
         await navigator.clipboard.writeText(data.magicUrl);
         setCopied(true);
         setTimeout(() => setCopied(false), 3000);
+      } else {
+        setFailed(true);
       }
+    } catch {
+      setFailed(true);
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <button
-      onClick={() => void handleCopy()}
-      disabled={loading}
-      className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity hover:opacity-80 disabled:opacity-50"
-      style={{
-        background: "rgba(52,211,153,0.12)",
-        border: "1px solid rgba(52,211,153,0.3)",
-        color: "#34d399",
-      }}
-    >
-      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      {loading ? "…" : copied ? "Copied!" : "Copy 7-day link"}
-    </button>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+      <button
+        onClick={() => void handleCopy()}
+        disabled={loading}
+        className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-opacity hover:opacity-80 disabled:opacity-50"
+        style={{
+          background: failed ? "rgba(251,113,133,0.12)" : "rgba(52,211,153,0.12)",
+          border: `1px solid ${failed ? "rgba(251,113,133,0.3)" : "rgba(52,211,153,0.3)"}`,
+          color: failed ? "#fb7185" : "#34d399",
+        }}
+      >
+        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        {loading ? "…" : copied ? "Copied!" : failed ? "Failed" : "Copy 7-day link"}
+      </button>
+      <button
+        onClick={() => void onDismiss()}
+        className="text-xs rounded-md px-2 py-1 transition-opacity hover:opacity-80"
+        style={{ background: "transparent", border: "none", color: "var(--color-text-disabled)", cursor: "pointer" }}
+      >
+        Dismiss
+      </button>
+    </div>
   );
 }
 
@@ -292,6 +307,21 @@ export default function AdminDataLabPage() {
       await fetchUsers();
     } finally {
       setDenying(null);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Dismiss email request
+  // ---------------------------------------------------------------------------
+
+  async function dismissEmailRequest(id: string) {
+    const res = await fetch("/api/admin/datalab-access", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "deny-email", userId: id }),
+    });
+    if (res.ok) {
+      setEmailPending((prev) => prev.filter((r) => r.id !== id));
     }
   }
 
@@ -609,7 +639,7 @@ export default function AdminDataLabPage() {
                       border: "1px solid rgba(52,211,153,0.25)" }}>
                     Email
                   </span>
-                  <CopyMagicLinkButton req={req} />
+                  <CopyMagicLinkButton req={req} onDismiss={() => void dismissEmailRequest(req.id)} />
                 </div>
               </div>
             ))}
