@@ -104,26 +104,27 @@ function computeSkewness(mean: number, median: number, std: number): number {
 }
 
 function classifyShape(skewness: number, std: number, range: number): DistributionShape {
-  if (range > 0 && std / range < 0.15) return "uniform";
-  if (Math.abs(skewness) < 0.2) return "normal";
+  if (range > 0 && std / range > 0.25) return "uniform";
   if (skewness > 0.5) return "right-skewed";
   if (skewness < -0.5) return "left-skewed";
+  if (Math.abs(skewness) < 0.2) return "normal";
   return "heavy-tailed";
 }
 
-function computeKDE(nums: number[], points = 50): { x: number; y: number }[] {
-  if (nums.length === 0) return [];
+function computeKDE(nums: number[], std: number, points = 50): { x: number; y: number }[] {
+  if (nums.length === 0 || std <= 0) return [];
   const min = nums[0];
   const max = nums[nums.length - 1];
   if (min === max) return [];
-  const h = 1.06 * (nums.reduce((a, b) => a + (b - nums[Math.floor(nums.length / 2)]) ** 2, 0) / nums.length) ** 0.5 * nums.length ** -0.2 || 1;
+  const sample = nums.length > 5000 ? nums.filter((_, i) => i % Math.ceil(nums.length / 5000) === 0) : nums;
+  const h = 1.06 * std * sample.length ** -0.2;
   const step = (max - min) / (points - 1);
   return Array.from({ length: points }, (_, i) => {
     const x = min + i * step;
-    const y = nums.reduce((sum, xi) => {
+    const y = sample.reduce((sum, xi) => {
       const u = (x - xi) / h;
       return sum + Math.exp(-0.5 * u * u);
-    }, 0) / (nums.length * h * Math.sqrt(2 * Math.PI));
+    }, 0) / (sample.length * h * Math.sqrt(2 * Math.PI));
     return { x: Math.round(x * 1000) / 1000, y: Math.round(y * 10000) / 10000 };
   });
 }
@@ -208,7 +209,7 @@ export function computeStats(rows: Row[], fileName: string, fileSizeKB: number):
         base.outlierCount = outlierCount;
         base.skewness = Math.round(skewness * 1000) / 1000;
         base.distributionShape = classifyShape(skewness, base.std ?? 0, (base.max ?? 0) - (base.min ?? 0));
-        base.kdePoints = computeKDE(nums);
+        base.kdePoints = computeKDE(nums, base.std ?? 0);
       }
     }
 
@@ -243,9 +244,9 @@ export function computeStats(rows: Row[], fileName: string, fileSizeKB: number):
     for (let j = i + 1; j < numericCols.length; j++) {
       const colA = numericCols[i];
       const colB = numericCols[j];
-      const xs = sample.map((r) => parseFloat(String(r[colA.name]))).filter(isFinite);
-      const ys = sample.map((r) => parseFloat(String(r[colB.name]))).filter(isFinite);
-      const paired = xs.map((x, k) => [x, ys[k]] as [number, number]).filter(([, y]) => isFinite(y));
+      const paired = sample
+        .map((r) => [parseFloat(String(r[colA.name])), parseFloat(String(r[colB.name]))] as [number, number])
+        .filter(([x, y]) => isFinite(x) && isFinite(y));
       if (paired.length < 3) continue;
       const r = pearsonR(paired.map(([x]) => x), paired.map(([, y]) => y));
       correlationMatrix.push({ col1: colA.name, col2: colB.name, r });
