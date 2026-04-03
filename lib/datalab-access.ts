@@ -151,3 +151,63 @@ export function getPendingRequests(): PendingRequest[] {
 export function getPendingCount(): number {
   return pendingRequests.size;
 }
+
+// ---------------------------------------------------------------------------
+// Agent scope
+// ---------------------------------------------------------------------------
+
+export type AgentScope =
+  | "data-analyst" | "visualization" | "ml-expert"
+  | "feature-engineer" | "nlp-expert" | "time-series" | "full";
+
+// ---------------------------------------------------------------------------
+// Email pending requests (separate store — keyed by random id, not userId)
+// ---------------------------------------------------------------------------
+
+export interface EmailPendingRequest {
+  type: "email";
+  id: string;
+  name: string;
+  email: string;
+  reason?: string;
+  agentScope: AgentScope[];
+  requestedAt: number;
+}
+
+const emailPendingRequests = new Map<string, EmailPendingRequest>();
+
+// Rate limit: max 3 requests per email per hour (in-memory)
+const emailRequestTimestamps = new Map<string, number[]>();
+
+export function checkEmailRateLimit(email: string): boolean {
+  const now = Date.now();
+  const hourAgo = now - 3_600_000;
+  const prev = (emailRequestTimestamps.get(email) ?? []).filter((t) => t > hourAgo);
+  if (prev.length >= 3) return false;
+  prev.push(now);
+  emailRequestTimestamps.set(email, prev);
+  return true;
+}
+
+export function addEmailPendingRequest(
+  req: Omit<EmailPendingRequest, "id" | "type" | "requestedAt">
+): string {
+  const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const full: EmailPendingRequest = { ...req, type: "email", id, requestedAt: Date.now() };
+  emailPendingRequests.set(id, full);
+  return id;
+}
+
+export function getEmailPendingRequests(): EmailPendingRequest[] {
+  return Array.from(emailPendingRequests.values()).sort(
+    (a, b) => b.requestedAt - a.requestedAt
+  );
+}
+
+export function removeEmailPendingRequest(id: string): void {
+  emailPendingRequests.delete(id);
+}
+
+export function getEmailPendingCount(): number {
+  return emailPendingRequests.size;
+}

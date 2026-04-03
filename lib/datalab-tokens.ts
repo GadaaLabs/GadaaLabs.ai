@@ -93,3 +93,63 @@ export function verifyApprovalToken(token: string): VerifyResult {
     return { ok: false, reason: "invalid" };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Magic-link tokens (for email-based access without GitHub OAuth)
+// ---------------------------------------------------------------------------
+
+export interface MagicPayload {
+  type: "magic";
+  name: string;
+  email: string;
+  agentScope: string[];
+  exp: number;
+}
+
+/** Create a signed magic-link token valid for `durationDays` days. */
+export function createMagicAccessToken(
+  name: string,
+  email: string,
+  agentScope: string[],
+  durationDays = 7
+): string {
+  const payload: MagicPayload = {
+    type: "magic",
+    name,
+    email,
+    agentScope,
+    exp: Date.now() + durationDays * 86_400_000,
+  };
+  const data = encode(payload);
+  const sig = sign(data, getSecret());
+  return `${data}.${sig}`;
+}
+
+export type MagicVerifyResult =
+  | { ok: true; payload: MagicPayload }
+  | { ok: false; reason: "invalid" | "expired" | "wrong-type" };
+
+/**
+ * Verify a magic-link token.
+ * Does NOT mark as used — the httpOnly cookie's Max-Age handles expiry.
+ */
+export function verifyMagicToken(token: string): MagicVerifyResult {
+  try {
+    const dotIdx = token.lastIndexOf(".");
+    if (dotIdx === -1) return { ok: false, reason: "invalid" };
+    const data = token.slice(0, dotIdx);
+    const receivedSig = token.slice(dotIdx + 1);
+    const expectedSig = sign(data, getSecret());
+    const a = Buffer.from(receivedSig);
+    const b = Buffer.from(expectedSig);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      return { ok: false, reason: "invalid" };
+    }
+    const payload = decode<MagicPayload>(data);
+    if (payload.type !== "magic") return { ok: false, reason: "wrong-type" };
+    if (Date.now() > payload.exp) return { ok: false, reason: "expired" };
+    return { ok: true, payload };
+  } catch {
+    return { ok: false, reason: "invalid" };
+  }
+}
