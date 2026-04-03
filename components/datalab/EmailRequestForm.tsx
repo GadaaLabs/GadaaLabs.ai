@@ -158,7 +158,7 @@ export function EmailRequestForm() {
           background: "linear-gradient(135deg, var(--color-purple-700), var(--color-purple-600))",
           color: "#fff", border: "none", opacity: state === "loading" ? 0.7 : 1 }}>
         {state === "loading" ? (
-          <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Sending…</>
+          <><Loader2 size={14} className="animate-spin" /> Sending…</>
         ) : (
           <><Mail size={14} /> Request Access</>
         )}
