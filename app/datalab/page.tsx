@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { auth } from "@/auth";
 import { hasDataLabAccess } from "@/lib/datalab-access";
@@ -19,11 +18,6 @@ export default async function DataLabPage() {
   const magicCookie = cookieStore.get("datalab_magic");
   const magicResult = magicCookie ? verifyMagicToken(magicCookie.value) : null;
   const magicValid = magicResult?.ok === true;
-
-  // Not signed in and no magic cookie — redirect to sign-in
-  if (!session?.user?.id && !magicValid) {
-    redirect("/api/auth/signin?callbackUrl=/datalab");
-  }
 
   const userId = session?.user?.id;
   const hasGitHubAccess = userId ? hasDataLabAccess(userId) : false;
