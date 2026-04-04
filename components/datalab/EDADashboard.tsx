@@ -120,22 +120,44 @@ function InsightBox({ color, text, isAI }: { color: string; text: string; isAI?:
   );
 }
 
-function BoxPlot({ min, p25, p50, p75, max, color }: {
+function BoxPlot({ min, p25, p50, p75, max, color, outlierValues = [] }: {
   min: number; p25: number; p50: number; p75: number; max: number; color: string;
+  outlierValues?: number[];
 }) {
   if (min === max) return <p className="text-[10px] text-center py-2" style={{ color: "var(--color-text-muted)" }}>No variance</p>;
-  const range = max - min;
-  const s = (v: number) => (((v - min) / range) * 100).toFixed(2);
+  // Use fence-extended range so outlier dots fit in viewBox
+  const iqr = p75 - p25;
+  const loFence = p25 - 1.5 * iqr;
+  const hiFence = p75 + 1.5 * iqr;
+  const viewMin = Math.min(min, loFence);
+  const viewMax = Math.max(max, hiFence);
+  const range = viewMax - viewMin || 1;
+  const s = (v: number) => (((v - viewMin) / range) * 96 + 2).toFixed(2); // 2–98 range
+
   return (
     <div>
-      <svg width="100%" height="34" viewBox="0 0 100 34" preserveAspectRatio="none" style={{ display: "block" }}>
-        <line x1={s(min)} y1="17" x2={s(p25)} y2="17" stroke={color} strokeWidth="1.5" opacity="0.45" />
-        <line x1={s(p75)} y1="17" x2={s(max)} y2="17" stroke={color} strokeWidth="1.5" opacity="0.45" />
-        <line x1={s(min)} y1="10" x2={s(min)} y2="24" stroke={color} strokeWidth="1.5" opacity="0.45" />
-        <line x1={s(max)} y1="10" x2={s(max)} y2="24" stroke={color} strokeWidth="1.5" opacity="0.45" />
-        <rect x={s(p25)} y="8" width={Math.max(parseFloat(s(p75)) - parseFloat(s(p25)), 0.5)} height="18"
-          fill={color} fillOpacity="0.13" stroke={color} strokeWidth="1.5" rx="2" />
-        <line x1={s(p50)} y1="8" x2={s(p50)} y2="26" stroke={color} strokeWidth="3" strokeLinecap="round" />
+      <svg width="100%" height="44" viewBox="0 0 100 44" preserveAspectRatio="none" style={{ display: "block" }}>
+        {/* Fence markers (dashed) */}
+        {iqr > 0 && <>
+          <line x1={s(Math.max(min, loFence))} y1="20" x2={s(Math.min(max, hiFence))} y2="20"
+            stroke={color} strokeWidth="1" strokeDasharray="2 2" opacity="0.3" />
+        </>}
+        {/* Whiskers */}
+        <line x1={s(Math.max(min, loFence))} y1="20" x2={s(p25)} y2="20" stroke={color} strokeWidth="1.5" opacity="0.5" />
+        <line x1={s(p75)} y1="20" x2={s(Math.min(max, hiFence))} y2="20" stroke={color} strokeWidth="1.5" opacity="0.5" />
+        <line x1={s(Math.max(min, loFence))} y1="14" x2={s(Math.max(min, loFence))} y2="26" stroke={color} strokeWidth="1.5" opacity="0.5" />
+        <line x1={s(Math.min(max, hiFence))} y1="14" x2={s(Math.min(max, hiFence))} y2="26" stroke={color} strokeWidth="1.5" opacity="0.5" />
+        {/* IQR box */}
+        <rect x={s(p25)} y="11"
+          width={Math.max(parseFloat(s(p75)) - parseFloat(s(p25)), 0.5)} height="18"
+          fill={color} fillOpacity="0.15" stroke={color} strokeWidth="1.5" rx="2" />
+        {/* Median line */}
+        <line x1={s(p50)} y1="11" x2={s(p50)} y2="29" stroke={color} strokeWidth="3" strokeLinecap="round" />
+        {/* Outlier dots */}
+        {outlierValues.map((v, i) => (
+          <circle key={i} cx={s(v)} cy="20" r="2.2"
+            fill="#ef4444" fillOpacity="0.8" stroke="#ef4444" strokeWidth="0.5" />
+        ))}
       </svg>
       <div className="flex justify-between text-[9px] font-mono mt-0.5 px-0.5" style={{ color: "rgba(160,160,200,0.5)" }}>
         <span>{fmt(min)}</span>
@@ -144,15 +166,28 @@ function BoxPlot({ min, p25, p50, p75, max, color }: {
         <span style={{ color }}>Q3 {fmt(p75)}</span>
         <span>{fmt(max)}</span>
       </div>
+      {outlierValues.length > 0 && (
+        <p className="text-[9px] mt-1" style={{ color: "#ef4444" }}>
+          ● {outlierValues.length} outlier{outlierValues.length > 1 ? "s" : ""} beyond 1.5×IQR
+        </p>
+      )}
     </div>
   );
 }
 
 // Numeric column card with histogram + KDE + box plot
-function NumericCard({ col, color, insight, isAI }: {
-  col: ColumnStats; color: string; insight: string; isAI: boolean;
+function NumericCard({ col, color, insight, isAI, sampleValues = [] }: {
+  col: ColumnStats; color: string; insight: string; isAI: boolean; sampleValues?: number[];
 }) {
   const hasBox = col.min !== undefined && col.p25 !== undefined && col.p50 !== undefined && col.p75 !== undefined && col.max !== undefined;
+
+  // Compute outlier dots from sample values using 1.5×IQR rule
+  const outlierValues: number[] = hasBox ? (() => {
+    const iqr = col.p75! - col.p25!;
+    const lo = col.p25! - 1.5 * iqr;
+    const hi = col.p75! + 1.5 * iqr;
+    return sampleValues.filter(v => v < lo || v > hi).slice(0, 40);
+  })() : [];
 
   // Merge histogram and KDE into ComposedChart data
   const chartData = (col.histogram ?? []).map((bin, i) => {
@@ -225,7 +260,7 @@ function NumericCard({ col, color, insight, isAI }: {
           <p className="text-[10px] font-semibold uppercase tracking-widest mb-3" style={{ color: "var(--color-text-muted)" }}>
             Box Plot — IQR &amp; Outlier Detection
           </p>
-          <BoxPlot min={col.min!} p25={col.p25!} p50={col.p50!} p75={col.p75!} max={col.max!} color={color} />
+          <BoxPlot min={col.min!} p25={col.p25!} p50={col.p50!} p75={col.p75!} max={col.max!} color={color} outlierValues={outlierValues} />
         </div>
       )}
 
@@ -311,6 +346,202 @@ function CatCard({ col, color, insight, isAI }: {
 
       <InsightBox color={color} text={insight} isAI={isAI} />
     </div>
+  );
+}
+
+// ─── Scatter Matrix ────────────────────────────────────────────────────────────
+// Shows up to 6 scatter plots for the top correlated pairs
+function ScatterMatrix({ summary }: { summary: DatasetSummary }) {
+  const pairs = summary.correlations.slice(0, 6);
+  if (pairs.length === 0 || summary.sampleRows.length === 0) return null;
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h3 className="text-base font-bold" style={{ color: "var(--color-text-primary)" }}>Scatter Matrix</h3>
+          <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
+            Top {pairs.length} correlated pairs — each plot sampled from up to 300 rows
+          </p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {pairs.map(({ colA, colB, r }, idx) => {
+          const scatterData = summary.sampleRows
+            .filter(row => row[colA] !== undefined && row[colB] !== undefined)
+            .slice(0, 250)
+            .map(row => ({ x: row[colA], y: row[colB] }));
+          if (scatterData.length < 3) return null;
+          const dotColor = PALETTE[idx % PALETTE.length];
+          const strength = Math.abs(r) > 0.7 ? "Strong" : Math.abs(r) > 0.4 ? "Moderate" : "Weak";
+          const direction = r > 0 ? "positive" : "negative";
+          return (
+            <div key={`${colA}_${colB}`} className="rounded-xl p-4"
+              style={{ background: "var(--color-bg-elevated)", border: "1px solid var(--color-border-default)" }}>
+              {/* Header */}
+              <div className="flex items-start justify-between gap-2 mb-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold font-mono truncate" style={{ color: "var(--color-text-primary)" }}>
+                    {colA} <span style={{ color: "var(--color-text-muted)" }}>×</span> {colB}
+                  </p>
+                  <p className="text-[10px] mt-0.5" style={{ color: "var(--color-text-muted)" }}>
+                    {strength} {direction}
+                  </p>
+                </div>
+                <span className="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full font-mono"
+                  style={{
+                    background: r > 0 ? "rgba(239,68,68,0.12)" : "rgba(59,130,246,0.12)",
+                    color: r > 0 ? "#ef4444" : "#3b82f6",
+                    border: `1px solid ${r > 0 ? "rgba(239,68,68,0.25)" : "rgba(59,130,246,0.25)"}`,
+                  }}>
+                  r = {r.toFixed(3)}
+                </span>
+              </div>
+              {/* Scatter plot */}
+              <div style={{ height: 160, minWidth: 0 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ScatterChart margin={{ top: 4, right: 8, bottom: 22, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                    <XAxis dataKey="x" type="number" name={colA}
+                      tick={{ fontSize: 8, fill: "#6b6b88" }} tickLine={false}
+                      axisLine={{ stroke: "rgba(255,255,255,0.08)" }}
+                      domain={["auto", "auto"]}
+                      label={{ value: colA, position: "insideBottom", offset: -14, fontSize: 8, fill: "#6b6b88" }} />
+                    <YAxis dataKey="y" type="number" name={colB}
+                      tick={{ fontSize: 8, fill: "#6b6b88" }} width={30} tickLine={false} axisLine={false}
+                      label={{ value: colB, angle: -90, position: "insideLeft", offset: 10, fontSize: 8, fill: "#6b6b88" }} />
+                    <Tooltip {...TOOLTIP_STYLE} cursor={{ strokeDasharray: "3 3" }}
+                      formatter={(v: unknown, name: unknown) => [Number(v).toFixed(3), String(name)]} />
+                    <Scatter data={scatterData} fill={dotColor} fillOpacity={0.45} />
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="text-[9px] text-center mt-1" style={{ color: "#6b6b88" }}>
+                {scatterData.length} sample points
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+// ─── Feature Importance Chart ──────────────────────────────────────────────────
+// Parses Phase 4 (ML Battle Plan) agent output to extract feature importance rankings
+
+function parseFeatureImportance(
+  strategyText: string,
+  columns: DatasetSummary["columns"]
+): { name: string; score: number; source: "explicit" | "inferred" }[] {
+  const colNames = columns.map(c => c.name);
+  const results: Map<string, { score: number; source: "explicit" | "inferred" }> = new Map();
+
+  // 1. Try to find explicit numeric importance scores: "colname: 0.34" or "colname (0.34)"
+  const explicitRe = /\b([a-zA-Z_][a-zA-Z0-9_]*)\b[\s:()]+([0-9]\.[0-9]{1,4})/g;
+  let m: RegExpExecArray | null;
+  while ((m = explicitRe.exec(strategyText)) !== null) {
+    const name = m[1];
+    const score = parseFloat(m[2]);
+    if (colNames.includes(name) && score >= 0 && score <= 1) {
+      if (!results.has(name) || results.get(name)!.score < score) {
+        results.set(name, { score, source: "explicit" });
+      }
+    }
+  }
+
+  // 2. If too few explicit matches, fall back to mention count as proxy
+  if (results.size < 3) {
+    const textLower = strategyText.toLowerCase();
+    for (const col of colNames) {
+      if (results.has(col)) continue;
+      const re = new RegExp(`\\b${col.toLowerCase()}\\b`, "g");
+      const count = (textLower.match(re) ?? []).length;
+      if (count >= 2) {
+        results.set(col, { score: Math.min(0.1 * count, 0.95), source: "inferred" });
+      }
+    }
+  }
+
+  return Array.from(results.entries())
+    .map(([name, { score, source }]) => ({ name, score, source }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 15);
+}
+
+function FeatureImportanceChart({ summary, strategyOutput }: {
+  summary: DatasetSummary;
+  strategyOutput: string;
+}) {
+  const features = parseFeatureImportance(strategyOutput, summary.columns);
+  if (features.length === 0) return null;
+
+  const hasExplicit = features.some(f => f.source === "explicit");
+  const maxScore = features[0]?.score ?? 1;
+  const barData = features.map(f => ({ name: f.name, score: f.score, pct: ((f.score / maxScore) * 100).toFixed(1) }));
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h3 className="text-base font-bold" style={{ color: "var(--color-text-primary)" }}>Feature Importance</h3>
+          <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
+            {hasExplicit ? "Extracted from ML Battle Plan — explicit importance scores" : "Inferred from ML Battle Plan — based on feature mention frequency"}
+          </p>
+        </div>
+        <span className="text-[10px] px-2 py-1 rounded-lg font-semibold"
+          style={{ background: "rgba(124,58,237,0.1)", color: "#a78bfa", border: "1px solid rgba(124,58,237,0.2)" }}>
+          Phase 4 · {features.length} features
+        </span>
+      </div>
+
+      <div className="rounded-xl p-5"
+        style={{ background: "var(--color-bg-elevated)", border: "1px solid var(--color-border-default)" }}>
+        <div style={{ height: Math.min(features.length * 34 + 30, 480), minWidth: 0 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={barData} layout="vertical" margin={{ top: 4, right: 60, bottom: 4, left: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" horizontal={false} />
+              <XAxis type="number" tick={{ fontSize: 8, fill: "#6b6b88" }} tickLine={false}
+                axisLine={{ stroke: "rgba(255,255,255,0.08)" }}
+                tickFormatter={(v: number) => hasExplicit ? v.toFixed(2) : `${(v * 100).toFixed(0)}%`}
+                domain={[0, hasExplicit ? maxScore * 1.1 : 1]} />
+              <YAxis type="category" dataKey="name" tick={{ fontSize: 9, fill: "#a8a8c0" }}
+                width={110} tickLine={false} axisLine={false} />
+              <Tooltip {...TOOLTIP_STYLE}
+                formatter={(v: unknown) => [
+                  hasExplicit ? Number(v).toFixed(4) : `${(Number(v) * 100).toFixed(0)}% relative`,
+                  "Importance"
+                ]} />
+              <Bar dataKey="score" radius={[0, 3, 3, 0]}>
+                {barData.map((_, i) => (
+                  <Cell key={i}
+                    fill={PALETTE[i % PALETTE.length]}
+                    fillOpacity={Math.max(0.4, 1 - i * 0.04)} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <p className="text-[9px] text-center mt-2" style={{ color: "#6b6b88" }}>
+          X: Importance score · Y: Feature name · {hasExplicit ? "Values from agent analysis" : "Relative rank estimated from agent discussion"}
+        </p>
+        {/* Top 3 callout */}
+        {features.length >= 3 && (
+          <div className="mt-4 rounded-lg px-3 py-2.5"
+            style={{ background: "rgba(124,58,237,0.06)", border: "1px solid rgba(124,58,237,0.2)" }}>
+            <p className="text-[11px] leading-relaxed" style={{ color: "var(--color-text-secondary)" }}>
+              <span className="font-semibold" style={{ color: "#a78bfa" }}>Top features: </span>
+              <span className="font-mono" style={{ color: "var(--color-text-primary)" }}>{features[0].name}</span>
+              {", "}
+              <span className="font-mono" style={{ color: "var(--color-text-primary)" }}>{features[1].name}</span>
+              {", "}
+              <span className="font-mono" style={{ color: "var(--color-text-primary)" }}>{features[2].name}</span>
+              {" — prioritise these in feature selection and model explainability."}
+            </p>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -621,7 +852,10 @@ function TimeSeriesSection({ summary }: { summary: DatasetSummary }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function EDADashboard({ summary }: { summary: DatasetSummary }) {
+export function EDADashboard({ summary, agentOutputs }: {
+  summary: DatasetSummary;
+  agentOutputs?: Record<string, string> | null;
+}) {
   const [showAllNum, setShowAllNum] = useState(false);
   const [showAllCat, setShowAllCat] = useState(false);
   const [aiInsights, setAiInsights]     = useState<Record<string, string> | null>(null);
@@ -723,6 +957,14 @@ export function EDADashboard({ summary }: { summary: DatasetSummary }) {
         ))}
       </div>
 
+      {/* Feature importance — only when agent has completed Phase 4 */}
+      {agentOutputs?.strategy && (
+        <FeatureImportanceChart summary={summary} strategyOutput={agentOutputs.strategy} />
+      )}
+
+      {/* Scatter matrix — top 6 correlated pairs */}
+      <ScatterMatrix summary={summary} />
+
       {/* Correlation heatmap */}
       <CorrelationHeatmap summary={summary} />
 
@@ -748,7 +990,10 @@ export function EDADashboard({ summary }: { summary: DatasetSummary }) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             {visNum.map((col, i) => {
               const { text, isAI } = getInsight(col, numericInsight(col));
-              return <NumericCard key={col.name} col={col} color={PALETTE[i % PALETTE.length]} insight={text} isAI={isAI} />;
+              const sampleValues = summary.sampleRows
+                .map(r => r[col.name])
+                .filter((v): v is number => typeof v === "number" && isFinite(v));
+              return <NumericCard key={col.name} col={col} color={PALETTE[i % PALETTE.length]} insight={text} isAI={isAI} sampleValues={sampleValues} />;
             })}
           </div>
           {numericCols.length > 6 && (

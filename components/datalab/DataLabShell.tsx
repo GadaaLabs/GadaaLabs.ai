@@ -273,7 +273,7 @@ export function DataLabShell() {
 
       {tab === "overview" && <StatsTable summary={summary} />}
 
-      {tab === "charts" && <EDADashboard summary={summary} />}
+      {tab === "charts" && <EDADashboard summary={summary} agentOutputs={agentOutputs} />}
 
       {tab === "analysis" && (
         <DataScienceAgent
