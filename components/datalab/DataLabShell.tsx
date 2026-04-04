@@ -16,19 +16,40 @@ import { CompareTab } from "./CompareTab";
 import { DataExplorerTab } from "./DataExplorerTab";
 import { ClusterAnalysisTab } from "./ClusterAnalysisTab";
 import { PivotTab } from "./PivotTab";
+import { AnomalyDetectionTab } from "./AnomalyDetectionTab";
+import { DataQualityTab } from "./DataQualityTab";
 import { computeStats, summaryToPrompt, type DatasetSummary } from "@/lib/datalab";
 import {
   BarChart2, Brain, MessageSquare, AlertCircle, Loader2, Send,
   RotateCcw, CheckCircle2, Zap, TrendingUp, Cpu,
   Sparkles, StickyNote, FlaskConical, Cpu as CpuIcon, Microscope,
   FileText, Users, Wand2, Activity, GitCompare, Table2, Network, LayoutGrid, History,
+  AlertTriangle, ShieldCheck,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────
 
-type Tab = "overview" | "charts" | "explorer" | "pivot" | "cluster" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes" | "transform" | "train" | "compare";
+type Tab = "overview" | "charts" | "explorer" | "pivot" | "cluster" | "anomaly" | "quality" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes" | "transform" | "train" | "compare";
+
+type CategoryId = "explore" | "analyze" | "prepare" | "model" | "reports" | "tools";
+
+interface CategoryConfig {
+  id: CategoryId;
+  label: string;
+  color: string;
+  tabs: Tab[];
+}
+
+const CATEGORIES: CategoryConfig[] = [
+  { id: "explore",  label: "Explore",  color: "#06b6d4", tabs: ["overview", "charts", "explorer", "pivot"] },
+  { id: "analyze",  label: "Analyze",  color: "#f59e0b", tabs: ["cluster", "anomaly", "quality"] },
+  { id: "prepare",  label: "Prepare",  color: "#a78bfa", tabs: ["transform", "compare"] },
+  { id: "model",    label: "Model",    color: "#10b981", tabs: ["train", "analysis", "code"] },
+  { id: "reports",  label: "Reports",  color: "#f472b6", tabs: ["tech-report", "stakeholder-report"] },
+  { id: "tools",    label: "Tools",    color: "#6b7280", tabs: ["chat", "notes"] },
+];
 
 interface Message { role: "user" | "assistant"; content: string; }
 
@@ -47,7 +68,13 @@ export function DataLabShell() {
   const [parsing, setParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
+  const [activeCategory, setActiveCategory] = useState<CategoryId>("explore");
 
+  const handleCategoryChange = (catId: CategoryId) => {
+    setActiveCategory(catId);
+    const cat = CATEGORIES.find(c => c.id === catId);
+    if (cat) setTab(cat.tabs[0]);
+  };
 
   // Chat
   const [messages, setMessages] = useState<Message[]>([]);
@@ -97,6 +124,7 @@ export function DataLabShell() {
       setRawRows([]);      // raw rows not stored (too large)
       setActiveRows([]);
       setTab("overview");
+      setActiveCategory("explore");
       setSavedSession(null);
     } catch { /* corrupt session — ignore */ }
   }, []);
@@ -120,6 +148,7 @@ export function DataLabShell() {
       setMessages([]);
       setAgentOutputs(null);
       setTab("overview");
+      setActiveCategory("explore");
       setParsing(false);
     }, 0);
   }, []);
@@ -177,26 +206,29 @@ export function DataLabShell() {
     setError(null);
     setAgentOutputs(null);
     setTab("overview");
+    setActiveCategory("explore");
   };
 
   // ── Tabs config ───────────────────────────────
 
-  const tabs: { id: Tab; label: string; icon: React.ElementType }[] = [
-    { id: "overview",           label: "Overview",             icon: BarChart2 },
-    { id: "charts",             label: "EDA Dashboard",        icon: TrendingUp },
-    { id: "explorer",           label: "Data Explorer",        icon: Table2 },
-    { id: "pivot",              label: "Pivot Table",          icon: LayoutGrid },
-    { id: "cluster",            label: "Clusters",             icon: Network },
-    { id: "transform",          label: "Transform",            icon: Wand2 },
-    { id: "train",              label: "Train Model",          icon: Activity },
-    { id: "compare",            label: "Compare",              icon: GitCompare },
-    { id: "analysis",           label: "Data Science Agent",   icon: Microscope },
-    { id: "tech-report",        label: "Tech Report",          icon: FileText },
-    { id: "stakeholder-report", label: "Stakeholder Report",   icon: Users },
-    { id: "code",               label: "ML Code",              icon: Cpu },
-    { id: "chat",               label: "Ask Agent",            icon: MessageSquare },
-    { id: "notes",              label: "Notes",                icon: StickyNote },
-  ];
+  const TAB_META: Record<Tab, { label: string; icon: React.ElementType }> = {
+    "overview":           { label: "Overview",           icon: BarChart2 },
+    "charts":             { label: "EDA Dashboard",      icon: TrendingUp },
+    "explorer":           { label: "Data Explorer",      icon: Table2 },
+    "pivot":              { label: "Pivot Table",        icon: LayoutGrid },
+    "cluster":            { label: "Clusters",           icon: Network },
+    "anomaly":            { label: "Anomaly Detection",  icon: AlertTriangle },
+    "quality":            { label: "Quality Scorecard",  icon: ShieldCheck },
+    "transform":          { label: "Transform",          icon: Wand2 },
+    "compare":            { label: "Compare",            icon: GitCompare },
+    "train":              { label: "Train Model",        icon: Activity },
+    "analysis":           { label: "DS Agent",           icon: Microscope },
+    "code":               { label: "ML Code",            icon: Cpu },
+    "tech-report":        { label: "Tech Report",        icon: FileText },
+    "stakeholder-report": { label: "Exec Report",        icon: Users },
+    "chat":               { label: "Ask Agent",          icon: MessageSquare },
+    "notes":              { label: "Notes",              icon: StickyNote },
+  };
 
   // ─────────────────────────────────────────────
   // Empty state (no file loaded)
@@ -351,22 +383,51 @@ export function DataLabShell() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 mb-6 p-1 rounded-xl overflow-x-auto"
-        style={{ background: "var(--color-bg-elevated)", width: "fit-content" }}>
-        {tabs.map(({ id, label, icon: Icon }) => (
-          <button key={id} onClick={() => setTab(id)}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap"
-            style={{
-              background: tab === id ? "rgba(124,58,237,0.2)" : "transparent",
-              color: tab === id ? "var(--color-purple-300)" : "var(--color-text-muted)",
-              border: tab === id ? "1px solid rgba(124,58,237,0.3)" : "1px solid transparent",
-            }}>
-            <Icon className="h-4 w-4" />
-            {label}
-          </button>
-        ))}
+      {/* Two-level navigation */}
+      {/* Category pills */}
+      <div className="flex gap-2 mb-2 flex-wrap">
+        {CATEGORIES.map(cat => {
+          const active = activeCategory === cat.id;
+          return (
+            <button key={cat.id} onClick={() => handleCategoryChange(cat.id)}
+              className="px-4 py-1.5 rounded-full text-xs font-bold transition-all"
+              style={{
+                background: active ? `${cat.color}22` : "var(--color-bg-elevated)",
+                border: `1px solid ${active ? cat.color + "66" : "var(--color-border-default)"}`,
+                color: active ? cat.color : "var(--color-text-muted)",
+              }}>
+              {cat.label}
+            </button>
+          );
+        })}
       </div>
+
+      {/* Inner tab bar for active category */}
+      {(() => {
+        const cat = CATEGORIES.find(c => c.id === activeCategory)!;
+        return (
+          <div className="flex gap-1 mb-6 p-1 rounded-xl overflow-x-auto"
+            style={{ background: "var(--color-bg-elevated)", width: "fit-content" }}>
+            {cat.tabs.map(tabId => {
+              const meta = TAB_META[tabId];
+              const Icon = meta.icon;
+              const active = tab === tabId;
+              return (
+                <button key={tabId} onClick={() => setTab(tabId)}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap"
+                  style={{
+                    background: active ? `${cat.color}22` : "transparent",
+                    color: active ? cat.color : "var(--color-text-muted)",
+                    border: active ? `1px solid ${cat.color}44` : "1px solid transparent",
+                  }}>
+                  <Icon className="h-4 w-4" />
+                  {meta.label}
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* ── Tab content ── */}
 
@@ -400,6 +461,14 @@ export function DataLabShell() {
 
       {tab === "pivot" && (
         <PivotTab activeRows={activeRows} summary={summary} />
+      )}
+
+      {tab === "anomaly" && (
+        <AnomalyDetectionTab activeRows={activeRows} summary={summary} />
+      )}
+
+      {tab === "quality" && (
+        <DataQualityTab summary={summary} />
       )}
 
       {tab === "analysis" && (
