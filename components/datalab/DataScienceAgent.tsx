@@ -505,9 +505,11 @@ export interface DataScienceAgentProps {
   summaryText: string;
   /** Called when all 7 phases complete successfully */
   onComplete?: () => void;
+  /** Called with all phase outputs when all 7 phases complete */
+  onPhasesComplete?: (outputs: Record<string, string>) => void;
 }
 
-export function DataScienceAgent({ summary, summaryText, onComplete }: DataScienceAgentProps) {
+export function DataScienceAgent({ summary, summaryText, onComplete, onPhasesComplete }: DataScienceAgentProps) {
   const [phaseStates, setPhaseStates] = useState<Record<PhaseId, PhaseState>>(initialPhaseStates);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
@@ -523,7 +525,13 @@ export function DataScienceAgent({ summary, summaryText, onComplete }: DataScien
     if (done && onComplete) {
       onComplete();
     }
-  }, [done, onComplete]);
+    if (done && onPhasesComplete) {
+      const outputs = Object.fromEntries(
+        PHASE_IDS.map(id => [id, statesRef.current[id].output])
+      ) as Record<string, string>;
+      onPhasesComplete(outputs);
+    }
+  }, [done, onComplete, onPhasesComplete]);
 
   // ── State helper ───────────────────────────────────────────────────────────
   const setPhase = useCallback((id: PhaseId, patch: Partial<PhaseState>) => {

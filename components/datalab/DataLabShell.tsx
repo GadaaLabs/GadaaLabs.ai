@@ -3,7 +3,9 @@
 import { useState, useCallback, useRef } from "react";
 import { DropZone } from "./DropZone";
 import { StatsTable } from "./StatsTable";
-import { ChartPanel } from "./ChartPanel";
+import { EDADashboard } from "./EDADashboard";
+import { TechReport } from "./TechReport";
+import { StakeholderReport } from "./StakeholderReport";
 import { NotesPanel } from "./NotesPanel";
 import { PromptBuilderTab } from "./PromptBuilderTab";
 import { ExpertHub } from "./ExpertHub";
@@ -13,13 +15,14 @@ import {
   BarChart2, Brain, MessageSquare, AlertCircle, Loader2, Send,
   RotateCcw, CheckCircle2, Zap, TrendingUp, Cpu,
   Sparkles, StickyNote, FlaskConical, Cpu as CpuIcon, Microscope,
+  FileText, Users,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────
 
-type Tab = "overview" | "charts" | "analysis" | "code" | "chat" | "notes";
+type Tab = "overview" | "charts" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes";
 
 interface Message { role: "user" | "assistant"; content: string; }
 
@@ -43,6 +46,9 @@ export function DataLabShell() {
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
 
+  // Agent phase outputs — populated when 7-phase analysis completes
+  const [agentOutputs, setAgentOutputs] = useState<Record<string, string> | null>(null);
+
   const summaryRef = useRef<DatasetSummary | null>(null);
 
   // ── Data load ────────────────────────────────
@@ -55,6 +61,7 @@ export function DataLabShell() {
       setSummary(s);
       summaryRef.current = s;
       setMessages([]);
+      setAgentOutputs(null);
       setTab("overview");
       setParsing(false);
     }, 0);
@@ -102,18 +109,21 @@ export function DataLabShell() {
     summaryRef.current = null;
     setMessages([]);
     setError(null);
+    setAgentOutputs(null);
     setTab("overview");
   };
 
   // ── Tabs config ───────────────────────────────
 
   const tabs: { id: Tab; label: string; icon: React.ElementType }[] = [
-    { id: "overview",  label: "Overview",             icon: BarChart2 },
-    { id: "charts",    label: "Charts",               icon: TrendingUp },
-    { id: "analysis",  label: "Data Science Agent",   icon: Microscope },
-    { id: "code",      label: "ML Code",              icon: Cpu },
-    { id: "chat",      label: "Ask Agent",            icon: MessageSquare },
-    { id: "notes",     label: "Notes",                icon: StickyNote },
+    { id: "overview",           label: "Overview",             icon: BarChart2 },
+    { id: "charts",             label: "EDA Dashboard",        icon: TrendingUp },
+    { id: "analysis",           label: "Data Science Agent",   icon: Microscope },
+    { id: "tech-report",        label: "Tech Report",          icon: FileText },
+    { id: "stakeholder-report", label: "Stakeholder Report",   icon: Users },
+    { id: "code",               label: "ML Code",              icon: Cpu },
+    { id: "chat",               label: "Ask Agent",            icon: MessageSquare },
+    { id: "notes",              label: "Notes",                icon: StickyNote },
   ];
 
   // ─────────────────────────────────────────────
@@ -263,13 +273,22 @@ export function DataLabShell() {
 
       {tab === "overview" && <StatsTable summary={summary} />}
 
-      {tab === "charts" && <ChartPanel summary={summary} />}
+      {tab === "charts" && <EDADashboard summary={summary} />}
 
       {tab === "analysis" && (
         <DataScienceAgent
           summary={summary}
           summaryText={summaryToPrompt(summary)}
+          onPhasesComplete={setAgentOutputs}
         />
+      )}
+
+      {tab === "tech-report" && (
+        <TechReport outputs={agentOutputs} summary={summary} />
+      )}
+
+      {tab === "stakeholder-report" && (
+        <StakeholderReport outputs={agentOutputs} summary={summary} />
       )}
 
       {tab === "code" && (

@@ -3,33 +3,28 @@ import { streamText } from "ai";
 
 const groq = createGroq({ apiKey: process.env.GROQ_API_KEY });
 
-// Models tried in order when the primary hits a rate limit
+// Ordered by quality → speed. All confirmed available on Groq as of 2025-04.
 export const FALLBACK_MODELS = [
   "llama-3.3-70b-versatile",
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "qwen/qwen3-32b",
   "llama-3.1-8b-instant",
-  "gemma2-9b-it",
 ];
 
-// ─── Server-side rate-limit registry ─────────────────────────────────────────
-// Tracks which models are known to be rate-limited and when they reset.
-// Persists across requests for the lifetime of the server process.
-// ─────────────────────────────────────────────────────────────────────────────
-const rateLimitRegistry = new Map<string, number>(); // model → UTC epoch ms reset time
+// ─── Rate-limit registry ──────────────────────────────────────────────────────
+// Server-side map: model → UTC epoch ms when the limit resets.
+const rateLimitRegistry = new Map<string, number>();
 
 function isKnownRateLimited(model: string): boolean {
   const until = rateLimitRegistry.get(model);
   if (!until) return false;
-  if (Date.now() >= until) {
-    rateLimitRegistry.delete(model);
-    return false;
-  }
+  if (Date.now() >= until) { rateLimitRegistry.delete(model); return false; }
   return true;
 }
 
 function recordRateLimit(model: string, err: unknown) {
-  // Try to read retry-after from Groq response headers (seconds)
   const retryAfterRaw =
-    (err as Record<string, any>)?.responseHeaders?.["retry-after"];
+    (err as Record<string, Record<string, string>>)?.responseHeaders?.["retry-after"];
   const retryAfterSecs = retryAfterRaw ? parseInt(String(retryAfterRaw), 10) : 3600;
   rateLimitRegistry.set(model, Date.now() + retryAfterSecs * 1_000);
 }
@@ -39,105 +34,92 @@ function isRateLimitError(e: unknown): boolean {
   const err = e as Record<string, unknown>;
   if (err.statusCode === 429) return true;
   const msg = String(err.message ?? "");
-  return msg.includes("rate_limit_exceeded") || msg.includes("Rate limit");
-}
-
-// ─── Pick the best available model ───────────────────────────────────────────
-function pickModel(orderedModels: string[]): string {
-  for (const m of orderedModels) {
-    if (!isKnownRateLimited(m)) return m;
-  }
-  // All known rate-limited — return the one whose limit resets soonest
-  return orderedModels.reduce((best, m) =>
-    (rateLimitRegistry.get(m) ?? 0) < (rateLimitRegistry.get(best) ?? 0) ? m : best
+  return (
+    msg.includes("rate_limit_exceeded") ||
+    msg.includes("Rate limit") ||
+    msg.includes("429")
   );
 }
 
+// Any error that means "this model can't serve this request" — skip it permanently
+// in this request cycle (rate limits, decommissioned, not found, etc.)
+function isSkippableError(e: unknown): boolean {
+  if (isRateLimitError(e)) return true;
+  const msg = String((e as Record<string, unknown>)?.message ?? "");
+  return (
+    msg.includes("decommissioned") ||
+    msg.includes("no longer supported") ||
+    msg.includes("deprecated") ||
+    msg.includes("not found") ||
+    msg.includes("does not exist") ||
+    msg.includes("404")
+  );
+}
+
+// ─── Stream one model — returns true on success, false on skippable error ─────
+async function tryStream(
+  model: string,
+  params: Omit<Parameters<typeof streamText>[0], "model">,
+  enqueue: (t: string) => void
+): Promise<boolean> {
+  try {
+    const result = streamText({
+      ...params,
+      model: groq(model),
+      maxRetries: 0,
+    } as Parameters<typeof streamText>[0]);
+
+    for await (const chunk of result.fullStream) {
+      if (chunk.type === "text-delta") enqueue(chunk.text);
+      else if (chunk.type === "error") throw chunk.error;
+    }
+    return true;
+  } catch (e) {
+    if (isRateLimitError(e)) recordRateLimit(model, e);
+    if (isSkippableError(e)) return false;
+    throw e; // real unexpected error — propagate
+  }
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
-/**
- * Stream text with automatic model fallback on 429 rate-limit errors.
- *
- * Strategy:
- *  1. Use the server-side registry to skip models we already know are rate-limited.
- *  2. Stream with the chosen model using the AI SDK's native toTextStreamResponse().
- *  3. If the chosen model STILL returns a rate-limit error (race condition),
- *     record it in the registry and send the user a friendly retry message so
- *     the next request will automatically use the next available model.
- */
 export async function streamWithFallback(
   params: Omit<Parameters<typeof streamText>[0], "model">,
   preferredModel = FALLBACK_MODELS[0]
 ): Promise<Response> {
+  // Build ordered model list: preferred first, then others
   const orderedModels =
     preferredModel === FALLBACK_MODELS[0]
       ? [...FALLBACK_MODELS]
-      : [preferredModel, ...FALLBACK_MODELS.filter((m) => m !== preferredModel)];
+      : [preferredModel, ...FALLBACK_MODELS.filter(m => m !== preferredModel)];
 
-  const model = pickModel(orderedModels);
-
-  // Build a plain-text streaming response using the AI SDK natively.
-  // If we hit a rate limit during the stream, record it so future requests
-  // skip this model, and surface a friendly message to the user.
   const encoder = new TextEncoder();
 
   const readable = new ReadableStream({
     async start(controller) {
-      const enqueue = (text: string) =>
-        controller.enqueue(encoder.encode(text));
+      const enqueue = (text: string) => controller.enqueue(encoder.encode(text));
 
-      try {
-        const result = streamText({
-          ...params,
-          model: groq(model),
-          maxRetries: 0, // Fail fast — we handle retries ourselves via the registry
-        } as Parameters<typeof streamText>[0]);
+      for (const model of orderedModels) {
+        if (isKnownRateLimited(model)) continue;
 
-        for await (const chunk of result.fullStream) {
-          if (chunk.type === "text-delta") {
-            enqueue(chunk.text);
-          } else if (chunk.type === "error") {
-            throw chunk.error;
-          }
-        }
-        controller.close();
-      } catch (e) {
-        if (isRateLimitError(e)) {
-          recordRateLimit(model, e);
-          // Try the next model immediately in the same request
-          const nextModel = orderedModels.find(
-            (m) => m !== model && !isKnownRateLimited(m)
-          );
-          if (nextModel) {
-            try {
-              const fallback = streamText({
-                ...params,
-                model: groq(nextModel),
-                maxRetries: 0,
-              } as Parameters<typeof streamText>[0]);
-
-              for await (const chunk of fallback.fullStream) {
-                if (chunk.type === "text-delta") {
-                  enqueue(chunk.text);
-                } else if (chunk.type === "error") {
-                  throw chunk.error;
-                }
-              }
-              controller.close();
-              return;
-            } catch (e2) {
-              if (isRateLimitError(e2)) recordRateLimit(nextModel, e2);
-            }
-          }
-          // All models exhausted — tell the user to retry (next request will use cached fallback)
-          enqueue(
-            "⚠️ AI models are currently at capacity. Please resend your message — " +
-              "the next request will automatically use a backup model."
-          );
+        try {
+          const ok = await tryStream(model, params, enqueue);
+          if (ok) { controller.close(); return; }
+          // Skippable error — try next model silently
+        } catch (e) {
+          // Unexpected error — surface it and stop
+          const msg = (e as Error)?.message ?? "Unknown error";
+          enqueue(`\n\n⚠️ Analysis error: ${msg}. Please try again.`);
           controller.close();
-        } else {
-          controller.error(e);
+          return;
         }
       }
+
+      // All models exhausted
+      enqueue(
+        "⚠️ All AI models are currently at capacity (free-tier token limits). " +
+        "Please wait 1–2 minutes and try again — limits reset every minute/day."
+      );
+      controller.close();
     },
   });
 
