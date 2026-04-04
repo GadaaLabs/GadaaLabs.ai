@@ -10,19 +10,21 @@ import { NotesPanel } from "./NotesPanel";
 import { PromptBuilderTab } from "./PromptBuilderTab";
 import { ExpertHub } from "./ExpertHub";
 import { DataScienceAgent } from "./DataScienceAgent";
+import { TransformTab } from "./TransformTab";
+import { ModelTrainerTab } from "./ModelTrainerTab";
 import { computeStats, summaryToPrompt, type DatasetSummary } from "@/lib/datalab";
 import {
   BarChart2, Brain, MessageSquare, AlertCircle, Loader2, Send,
   RotateCcw, CheckCircle2, Zap, TrendingUp, Cpu,
   Sparkles, StickyNote, FlaskConical, Cpu as CpuIcon, Microscope,
-  FileText, Users,
+  FileText, Users, Wand2, Activity,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────
 
-type Tab = "overview" | "charts" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes";
+type Tab = "overview" | "charts" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes" | "transform" | "train";
 
 interface Message { role: "user" | "assistant"; content: string; }
 
@@ -36,6 +38,8 @@ export function DataLabShell() {
 
   // Core dataset state
   const [summary, setSummary] = useState<DatasetSummary | null>(null);
+  const [rawRows, setRawRows] = useState<Record<string, unknown>[]>([]);
+  const [activeRows, setActiveRows] = useState<Record<string, unknown>[]>([]);
   const [parsing, setParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
@@ -60,11 +64,20 @@ export function DataLabShell() {
       const s = computeStats(newRows, fileName, sizeKB);
       setSummary(s);
       summaryRef.current = s;
+      setRawRows(newRows);
+      setActiveRows(newRows);
       setMessages([]);
       setAgentOutputs(null);
       setTab("overview");
       setParsing(false);
     }, 0);
+  }, []);
+
+  const handleReanalyze = useCallback((newSummary: DatasetSummary, newRows: Record<string, unknown>[]) => {
+    setSummary(newSummary);
+    summaryRef.current = newSummary;
+    setActiveRows(newRows);
+    setAgentOutputs(null); // agent outputs are now stale
   }, []);
 
   // ── Chat ──────────────────────────────────────
@@ -107,6 +120,8 @@ export function DataLabShell() {
   const reset = () => {
     setSummary(null);
     summaryRef.current = null;
+    setRawRows([]);
+    setActiveRows([]);
     setMessages([]);
     setError(null);
     setAgentOutputs(null);
@@ -118,6 +133,8 @@ export function DataLabShell() {
   const tabs: { id: Tab; label: string; icon: React.ElementType }[] = [
     { id: "overview",           label: "Overview",             icon: BarChart2 },
     { id: "charts",             label: "EDA Dashboard",        icon: TrendingUp },
+    { id: "transform",          label: "Transform",            icon: Wand2 },
+    { id: "train",              label: "Train Model",          icon: Activity },
     { id: "analysis",           label: "Data Science Agent",   icon: Microscope },
     { id: "tech-report",        label: "Tech Report",          icon: FileText },
     { id: "stakeholder-report", label: "Stakeholder Report",   icon: Users },
@@ -274,6 +291,18 @@ export function DataLabShell() {
       {tab === "overview" && <StatsTable summary={summary} />}
 
       {tab === "charts" && <EDADashboard summary={summary} agentOutputs={agentOutputs} />}
+
+      {tab === "transform" && rawRows.length > 0 && (
+        <TransformTab
+          rawRows={rawRows}
+          summary={summary}
+          onReanalyze={handleReanalyze}
+        />
+      )}
+
+      {tab === "train" && (
+        <ModelTrainerTab activeRows={activeRows} summary={summary} />
+      )}
 
       {tab === "analysis" && (
         <DataScienceAgent
