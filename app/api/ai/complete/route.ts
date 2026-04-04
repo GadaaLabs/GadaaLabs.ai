@@ -1,9 +1,6 @@
-import { createGroq } from "@ai-sdk/groq";
-import { streamText } from "ai";
 import { headers } from "next/headers";
 import { checkRateLimit } from "@/lib/rate-limit";
-
-const groq = createGroq({ apiKey: process.env.GROQ_API_KEY });
+import { streamWithFallback } from "@/lib/ai-with-fallback";
 
 export async function POST(req: Request) {
   const headersList = await headers();
@@ -20,15 +17,12 @@ export async function POST(req: Request) {
     });
   }
 
-  const { prompt, system, model, maxTokens, temperature } = await req.json();
+  const { prompt, system, maxTokens, temperature } = await req.json();
 
-  const result = streamText({
-    model: groq(model ?? "llama-3.3-70b-versatile"),
+  return streamWithFallback({
     system: system ?? "You are a helpful AI engineering assistant.",
     prompt,
     maxOutputTokens: maxTokens ?? 1024,
     temperature: temperature ?? 0.7,
   });
-
-  return result.toTextStreamResponse();
 }

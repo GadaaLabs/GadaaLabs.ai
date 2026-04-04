@@ -4,215 +4,32 @@ import { useState, useCallback, useRef } from "react";
 import { DropZone } from "./DropZone";
 import { StatsTable } from "./StatsTable";
 import { ChartPanel } from "./ChartPanel";
-import { AgentCard, type AgentStatus } from "./AgentCard";
 import { NotesPanel } from "./NotesPanel";
 import { PromptBuilderTab } from "./PromptBuilderTab";
 import { ExpertHub } from "./ExpertHub";
-import { DistributionsTab } from "./DistributionsTab";
-import { CorrelationsTab } from "./CorrelationsTab";
-import { OutliersTab } from "./OutliersTab";
-import { MissingTab } from "./MissingTab";
-import { DSWorkflowTab } from "./DSWorkflowTab";
-import { ReportTab } from "./ReportTab";
+import { DataScienceAgent } from "./DataScienceAgent";
 import { computeStats, summaryToPrompt, type DatasetSummary } from "@/lib/datalab";
-import { downloadNotebook } from "@/lib/notebook";
 import {
   BarChart2, Brain, MessageSquare, AlertCircle, Loader2, Send,
-  RotateCcw, CheckCircle2, Download, FileDown, Zap,
-  Database, TrendingUp, Cpu, FileText, BookOpen,
-  Users, Sparkles, StickyNote, FlaskConical, Cpu as CpuIcon,
+  RotateCcw, CheckCircle2, Zap, TrendingUp, Cpu,
+  Sparkles, StickyNote, FlaskConical, Cpu as CpuIcon, Microscope,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────
 
-type Tab = "overview" | "charts" | "analysis" | "code" | "chat" | "agents" | "prompt-builder" | "notes"
-         | "distributions" | "correlations" | "outliers" | "missing" | "ds-workflow" | "report";
+type Tab = "overview" | "charts" | "analysis" | "code" | "chat" | "notes";
 
 interface Message { role: "user" | "assistant"; content: string; }
-
-interface PipelineStage {
-  id: string;
-  label: string;
-  icon: React.ElementType;
-  status: "pending" | "running" | "done" | "error";
-}
-
-interface AgentState {
-  status: AgentStatus;
-  output: string;
-  task: string;
-  expanded: boolean;
-}
-
-interface OrchestratorPlan {
-  plan: string;
-  agents: { id: string; task: string }[];
-}
-
-// ─────────────────────────────────────────────
-// Agent catalog
-// ─────────────────────────────────────────────
-
-interface AgentMeta {
-  id: string;
-  name: string;
-  iconName: string;
-  color: string;
-  bgColor: string;
-  description: string;
-}
-
-const AGENT_CATALOG: AgentMeta[] = [
-  {
-    id: "orchestrator",
-    name: "Orchestrator",
-    iconName: "Brain",
-    color: "var(--color-purple-400)",
-    bgColor: "rgba(124,58,237,0.08)",
-    description: "Plans the analysis and coordinates the team of specialized AI agents.",
-  },
-  {
-    id: "data-analyst",
-    name: "Data Analyst",
-    iconName: "TrendingUp",
-    color: "var(--color-cyan-400)",
-    bgColor: "rgba(6,182,212,0.07)",
-    description: "Performs exploratory data analysis and identifies key patterns.",
-  },
-  {
-    id: "visualization",
-    name: "Visualization",
-    iconName: "BarChart2",
-    color: "#f97316",
-    bgColor: "rgba(249,115,22,0.07)",
-    description: "Recommends charts, dashboards, and visual encoding strategies.",
-  },
-  {
-    id: "feature-engineer",
-    name: "Feature Engineer",
-    iconName: "Wrench",
-    color: "#eab308",
-    bgColor: "rgba(234,179,8,0.07)",
-    description: "Designs and transforms features for ML models.",
-  },
-  {
-    id: "ml-expert",
-    name: "ML Expert",
-    iconName: "Cpu",
-    color: "var(--color-purple-400)",
-    bgColor: "rgba(124,58,237,0.07)",
-    description: "Selects algorithms and tunes model strategies.",
-  },
-  {
-    id: "math-expert",
-    name: "Math Expert",
-    iconName: "Calculator",
-    color: "#a78bfa",
-    bgColor: "rgba(167,139,250,0.07)",
-    description: "Applies statistical methods and mathematical reasoning.",
-  },
-  {
-    id: "code-generator",
-    name: "Code Generator",
-    iconName: "Code2",
-    color: "var(--color-cyan-400)",
-    bgColor: "rgba(6,182,212,0.07)",
-    description: "Writes complete, runnable Python code for the analysis.",
-  },
-  {
-    id: "data-quality",
-    name: "Data Quality",
-    iconName: "ShieldCheck",
-    color: "#10b981",
-    bgColor: "rgba(16,185,129,0.07)",
-    description: "Audits data quality, detects anomalies and missing value patterns.",
-  },
-  {
-    id: "report-writer",
-    name: "Report Writer",
-    iconName: "FileText",
-    color: "#f472b6",
-    bgColor: "rgba(244,114,182,0.07)",
-    description: "Compiles findings into an executive-ready narrative report.",
-  },
-  {
-    id: "nlp-expert",
-    name: "NLP Expert",
-    iconName: "MessageSquare",
-    color: "#38bdf8",
-    bgColor: "rgba(56,189,248,0.07)",
-    description: "Handles text columns — sentiment, topics, entity extraction.",
-  },
-  {
-    id: "time-series-expert",
-    name: "Time Series",
-    iconName: "Clock",
-    color: "#fb923c",
-    bgColor: "rgba(251,146,60,0.07)",
-    description: "Detects trends, seasonality, and forecasting opportunities.",
-  },
-];
-
-const DEFAULT_FALLBACK_AGENTS = [
-  "data-analyst", "data-quality", "visualization",
-  "feature-engineer", "ml-expert", "code-generator", "report-writer",
-];
-
-const INITIAL_STAGES: PipelineStage[] = [
-  { id: "profile",   label: "Profiling Dataset",         icon: Database,     status: "pending" },
-  { id: "quality",   label: "Quality Assessment",        icon: CheckCircle2, status: "pending" },
-  { id: "eda",       label: "Exploratory Analysis",      icon: TrendingUp,   status: "pending" },
-  { id: "patterns",  label: "Pattern Detection",         icon: Brain,        status: "pending" },
-  { id: "ml",        label: "ML Readiness Check",        icon: Cpu,          status: "pending" },
-  { id: "notebook",  label: "Generating Notebook Code",  icon: BookOpen,     status: "pending" },
-  { id: "report",    label: "Compiling Final Report",    icon: FileText,     status: "pending" },
-  { id: "agents",    label: "Agent Team",                icon: Users,        status: "pending" },
-];
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-
-function downloadMarkdown(report: string, fileName: string) {
-  const blob = new Blob([report], { type: "text/markdown" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${fileName.replace(/\.[^.]+$/, "")}_report.md`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function downloadAgentReport(agentStates: Record<string, AgentState>, fileName: string) {
-  const sections = AGENT_CATALOG.filter(
-    (a) => a.id !== "orchestrator" && agentStates[a.id]?.status === "done"
-  );
-  const md = sections
-    .map((a) => `## ${a.name}\n\n${agentStates[a.id]?.output ?? ""}`)
-    .join("\n\n---\n\n");
-
-  const blob = new Blob([`# Multi-Agent Analysis Report\n\n${md}`], { type: "text/markdown" });
-  const url = URL.createObjectURL(blob);
-  const el = document.createElement("a");
-  el.href = url;
-  el.download = `${fileName.replace(/\.[^.]+$/, "")}_agent_report.md`;
-  el.click();
-  URL.revokeObjectURL(url);
-}
-
-function metaFor(id: string): AgentMeta {
-  return AGENT_CATALOG.find((a) => a.id === id) ?? AGENT_CATALOG[0];
-}
 
 // ─────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────
 
 export function DataLabShell() {
-  // Mode: "datalab" for dataset analysis, "expert-hub" for standalone expert agents
-  const [mode, setMode] = useState<"datalab" | "expert-hub">("datalab");
+  // Mode: "datalab" for dataset analysis, "expert-hub" for standalone expert agents, "prompt-builder" for prompt crafting
+  const [mode, setMode] = useState<"datalab" | "expert-hub" | "prompt-builder">("datalab");
 
   // Core dataset state
   const [summary, setSummary] = useState<DatasetSummary | null>(null);
@@ -220,44 +37,13 @@ export function DataLabShell() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
 
-  // Pipeline
-  const [stages, setStages] = useState<PipelineStage[]>(INITIAL_STAGES);
-  const [pipelineRunning, setPipelineRunning] = useState(false);
-  const [pipelineDone, setPipelineDone] = useState(false);
-  const [report, setReport] = useState("");
-  const [notebookCode, setNotebookCode] = useState("");
 
   // Chat
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
 
-  // Agents
-  const [agentStates, setAgentStates] = useState<Record<string, AgentState>>({});
-  const [orchestratorPlan, setOrchestratorPlan] = useState<OrchestratorPlan | null>(null);
-  const [agentsRunning, setAgentsRunning] = useState(false);
-  const [agentsDone, setAgentsDone] = useState(false);
-
   const summaryRef = useRef<DatasetSummary | null>(null);
-
-  // ── Helpers ──────────────────────────────────
-
-  const setStageStatus = (id: string, status: PipelineStage["status"]) => {
-    setStages((prev) => prev.map((s) => s.id === id ? { ...s, status } : s));
-  };
-
-  const updateAgentState = (
-    id: string,
-    patch: Partial<AgentState>,
-    functional?: (prev: AgentState) => Partial<AgentState>
-  ) => {
-    setAgentStates((prev) => ({
-      ...prev,
-      [id]: functional
-        ? { ...prev[id], ...functional(prev[id] ?? { status: "idle", output: "", task: "", expanded: false }) }
-        : { ...prev[id], ...patch },
-    }));
-  };
 
   // ── Data load ────────────────────────────────
 
@@ -268,271 +54,11 @@ export function DataLabShell() {
       const s = computeStats(newRows, fileName, sizeKB);
       setSummary(s);
       summaryRef.current = s;
-      setReport("");
-      setNotebookCode("");
       setMessages([]);
-      setStages(INITIAL_STAGES);
-      setPipelineDone(false);
-      setAgentStates({});
-      setOrchestratorPlan(null);
-      setAgentsRunning(false);
-      setAgentsDone(false);
       setTab("overview");
       setParsing(false);
     }, 0);
   }, []);
-
-  // ── Main pipeline ─────────────────────────────
-
-  const runPipeline = async () => {
-    const s = summaryRef.current ?? summary;
-    if (!s || pipelineRunning) return;
-
-    setPipelineRunning(true);
-    setPipelineDone(false);
-    setReport("");
-    setNotebookCode("");
-    setTab("analysis");
-
-    const summaryText = summaryToPrompt(s);
-
-    setStageStatus("profile", "running");
-    await new Promise((r) => setTimeout(r, 400));
-    setStageStatus("profile", "done");
-
-    setStageStatus("quality", "running");
-
-    try {
-      const res = await fetch("/api/ai/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ summaryText }),
-      });
-
-      if (!res.ok || !res.body) throw new Error("API error");
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let accumulated = "";
-      let charsRead = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value);
-        accumulated += chunk;
-        charsRead += chunk.length;
-        setReport(accumulated);
-
-        if (charsRead > 400)  { setStageStatus("quality", "done"); setStageStatus("eda", "running"); }
-        if (charsRead > 1200) { setStageStatus("eda", "done"); setStageStatus("patterns", "running"); }
-        if (charsRead > 2400) { setStageStatus("patterns", "done"); setStageStatus("ml", "running"); }
-      }
-
-      setStageStatus("ml", "done");
-
-      // Stage 6 — Notebook
-      setStageStatus("notebook", "running");
-
-      const nbRes = await fetch("/api/ai/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ summaryText, stage: "notebook" }),
-      });
-
-      if (nbRes.ok && nbRes.body) {
-        const nbReader = nbRes.body.getReader();
-        const nbDecoder = new TextDecoder();
-        let nbCode = "";
-        while (true) {
-          const { done, value } = await nbReader.read();
-          if (done) break;
-          nbCode += nbDecoder.decode(value);
-          setNotebookCode(nbCode);
-        }
-      }
-
-      setStageStatus("notebook", "done");
-
-      // Stage 7 — Report
-      setStageStatus("report", "running");
-      await new Promise((r) => setTimeout(r, 300));
-      setStageStatus("report", "done");
-
-      // Stage 8 — Agents (pending unless explicitly launched)
-      // Leave agents stage as "pending" — user can launch separately
-
-      setPipelineDone(true);
-    } catch (e) {
-      console.error(e);
-      setStages((prev) => prev.map((s) =>
-        s.status === "running" ? { ...s, status: "error" } : s
-      ));
-      setReport((r) => r + "\n\n**Error: pipeline failed. Check your API key.**");
-    } finally {
-      setPipelineRunning(false);
-    }
-  };
-
-  // ── Agent runner ──────────────────────────────
-
-  const runAgents = async () => {
-    const s = summaryRef.current ?? summary;
-    if (!s || agentsRunning) return;
-
-    setAgentsRunning(true);
-    setAgentsDone(false);
-    setOrchestratorPlan(null);
-
-    const summaryText = summaryToPrompt(s);
-
-    // Initialize orchestrator
-    setAgentStates({
-      orchestrator: { status: "thinking", output: "", task: "Planning the analysis strategy…", expanded: false },
-    });
-
-    setStageStatus("agents", "running");
-
-    // Phase 1 — Orchestrator
-    let planText = "";
-    try {
-      const res = await fetch("/api/ai/agents", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          agentId: "orchestrator",
-          summaryText,
-          agentTask: "Analyze the dataset summary and produce a JSON plan listing which specialized agents to run and their tasks.",
-        }),
-      });
-
-      if (!res.ok || !res.body) throw new Error("Orchestrator API error");
-
-      updateAgentState("orchestrator", { status: "streaming" });
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        planText += decoder.decode(value);
-        updateAgentState("orchestrator", { output: planText });
-      }
-
-      updateAgentState("orchestrator", { status: "done" });
-    } catch {
-      updateAgentState("orchestrator", {
-        status: "error",
-        output: "Orchestrator failed. Using default agent set.",
-      });
-    }
-
-    // Parse orchestrator JSON
-    let selectedAgents: { id: string; task: string }[] = [];
-    try {
-      // Try to extract JSON from the text (model might include surrounding prose)
-      const jsonMatch = planText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        if (parsed.agents && Array.isArray(parsed.agents)) {
-          selectedAgents = parsed.agents;
-          setOrchestratorPlan({
-            plan: parsed.plan ?? "",
-            agents: parsed.agents,
-          });
-        }
-      }
-    } catch {
-      // Fallback
-    }
-
-    if (selectedAgents.length === 0) {
-      selectedAgents = DEFAULT_FALLBACK_AGENTS.map((id) => ({
-        id,
-        task: `Perform ${metaFor(id).name.toLowerCase()} analysis on the dataset.`,
-      }));
-      setOrchestratorPlan({
-        plan: "Using default agent configuration.",
-        agents: selectedAgents,
-      });
-    }
-
-    // Initialize all agent states
-    const selectedIds = new Set(selectedAgents.map((a) => a.id));
-    const initialStates: Record<string, AgentState> = {
-      orchestrator: agentStates.orchestrator ?? {
-        status: "done", output: planText, task: "", expanded: false,
-      },
-    };
-
-    for (const agent of AGENT_CATALOG) {
-      if (agent.id === "orchestrator") continue;
-      if (selectedIds.has(agent.id)) {
-        const task = selectedAgents.find((a) => a.id === agent.id)?.task ?? "";
-        initialStates[agent.id] = { status: "thinking", output: "", task, expanded: false };
-      } else {
-        initialStates[agent.id] = { status: "skipped", output: "", task: "", expanded: false };
-      }
-    }
-
-    setAgentStates(initialStates);
-
-    // Phase 2 — Run selected agents in parallel
-    const previousOutputs: Record<string, string> = { orchestrator: planText };
-
-    const agentPromises = selectedAgents.map(async ({ id, task }) => {
-      if (id === "orchestrator") return;
-      try {
-        const res = await fetch("/api/ai/agents", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agentId: id, summaryText, agentTask: task, previousOutputs }),
-        });
-
-        if (!res.ok || !res.body) throw new Error(`Agent ${id} API error`);
-
-        setAgentStates((prev) => ({
-          ...prev,
-          [id]: { ...prev[id], status: "streaming" },
-        }));
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let acc = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          acc += decoder.decode(value);
-          setAgentStates((prev) => ({
-            ...prev,
-            [id]: { ...prev[id], output: acc },
-          }));
-        }
-
-        setAgentStates((prev) => ({
-          ...prev,
-          [id]: { ...prev[id], status: "done" },
-        }));
-      } catch {
-        setAgentStates((prev) => ({
-          ...prev,
-          [id]: {
-            ...prev[id],
-            status: "error",
-            output: "Agent encountered an error. Please retry.",
-          },
-        }));
-      }
-    });
-
-    await Promise.all(agentPromises);
-
-    setAgentsDone(true);
-    setAgentsRunning(false);
-    setStageStatus("agents", "done");
-  };
 
   // ── Chat ──────────────────────────────────────
 
@@ -574,37 +100,20 @@ export function DataLabShell() {
   const reset = () => {
     setSummary(null);
     summaryRef.current = null;
-    setReport("");
-    setNotebookCode("");
     setMessages([]);
     setError(null);
-    setStages(INITIAL_STAGES);
-    setPipelineDone(false);
-    setPipelineRunning(false);
-    setAgentStates({});
-    setOrchestratorPlan(null);
-    setAgentsRunning(false);
-    setAgentsDone(false);
     setTab("overview");
   };
 
   // ── Tabs config ───────────────────────────────
 
   const tabs: { id: Tab; label: string; icon: React.ElementType }[] = [
-    { id: "overview",        label: "Overview",       icon: BarChart2 },
-    { id: "charts",          label: "Charts",         icon: TrendingUp },
-    { id: "analysis",        label: "AI Analysis",    icon: Brain },
-    { id: "code",            label: "ML Code",        icon: Cpu },
-    { id: "chat",            label: "Ask Agent",      icon: MessageSquare },
-    { id: "agents",          label: "Agent Team",     icon: Users },
-    { id: "prompt-builder",  label: "Prompt Builder", icon: Sparkles },
-    { id: "notes",           label: "Notes",          icon: StickyNote },
-    { id: "distributions",  label: "Distributions",  icon: BarChart2 },
-    { id: "correlations",   label: "Correlations",   icon: Brain },
-    { id: "outliers",       label: "Outliers",       icon: AlertCircle },
-    { id: "missing",        label: "Missing Data",   icon: Database },
-    { id: "ds-workflow",    label: "DS Workflow",    icon: Zap },
-    { id: "report",         label: "Report",         icon: FileText },
+    { id: "overview",  label: "Overview",             icon: BarChart2 },
+    { id: "charts",    label: "Charts",               icon: TrendingUp },
+    { id: "analysis",  label: "Data Science Agent",   icon: Microscope },
+    { id: "code",      label: "ML Code",              icon: Cpu },
+    { id: "chat",      label: "Ask Agent",            icon: MessageSquare },
+    { id: "notes",     label: "Notes",                icon: StickyNote },
   ];
 
   // ─────────────────────────────────────────────
@@ -612,25 +121,29 @@ export function DataLabShell() {
   // ─────────────────────────────────────────────
 
   // ── Mode switcher (always visible) ──────────────────────────
+  const MODES = [
+    { id: "datalab"        as const, label: "Data Science", Icon: FlaskConical },
+    { id: "expert-hub"     as const, label: "Expert Agents", Icon: CpuIcon },
+    { id: "prompt-builder" as const, label: "Prompt Builder", Icon: Sparkles },
+  ];
+
   const modeSwitcher = (
     <div className="flex gap-2 mb-6">
-      {(["datalab", "expert-hub"] as const).map((m) => (
+      {MODES.map(({ id, label, Icon }) => (
         <button
-          key={m}
-          onClick={() => setMode(m)}
+          key={id}
+          onClick={() => setMode(id)}
           className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all"
           style={{
-            background: mode === m
+            background: mode === id
               ? "linear-gradient(135deg, var(--color-purple-700), var(--color-purple-600))"
               : "var(--color-bg-surface)",
-            color: mode === m ? "#fff" : "var(--color-text-muted)",
-            border: `1px solid ${mode === m ? "transparent" : "var(--color-border-default)"}`,
-            boxShadow: mode === m ? "var(--glow-purple-sm)" : "none",
+            color: mode === id ? "#fff" : "var(--color-text-muted)",
+            border: `1px solid ${mode === id ? "transparent" : "var(--color-border-default)"}`,
+            boxShadow: mode === id ? "var(--glow-purple-sm)" : "none",
           }}
         >
-          {m === "datalab"
-            ? <><FlaskConical className="h-4 w-4" /> Data Analysis</>
-            : <><CpuIcon className="h-4 w-4" /> Expert Agents</>}
+          <Icon className="h-4 w-4" /> {label}
         </button>
       ))}
     </div>
@@ -641,6 +154,15 @@ export function DataLabShell() {
       <div>
         {modeSwitcher}
         <ExpertHub />
+      </div>
+    );
+  }
+
+  if (mode === "prompt-builder") {
+    return (
+      <div>
+        {modeSwitcher}
+        <PromptBuilderTab />
       </div>
     );
   }
@@ -665,7 +187,7 @@ export function DataLabShell() {
               <Zap className="h-4 w-4 text-white" />
             </div>
             <p className="font-bold" style={{ color: "var(--color-text-primary)" }}>
-              DataLab Autonomous Agent
+              Data Science Agent — Principal Level
             </p>
           </div>
           <ul className="space-y-2" style={{ color: "var(--color-text-secondary)" }}>
@@ -678,7 +200,7 @@ export function DataLabShell() {
               "Download a Markdown report — executive summary to action plan",
               "Ask the agent anything about your data in the chat tab",
               "Multi-agent team: 10 specialized AI experts collaborate on your data",
-              "Expert Prompt Builder: transform any idea into a production-ready LLM prompt",
+              "Prompt Builder: craft production-ready LLM prompts — available as its own top-level tab",
               "Note taking: save observations and insights directly in DataLab",
               "500 MB dataset support — real-world scale datasets",
               "All processing in your browser — your data never leaves your machine",
@@ -712,79 +234,12 @@ export function DataLabShell() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          {!pipelineRunning && !pipelineDone && (
-            <button onClick={runPipeline}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all hover:-translate-y-0.5"
-              style={{
-                background: "linear-gradient(135deg, var(--color-purple-600), var(--color-purple-500))",
-                color: "#fff", boxShadow: "var(--glow-purple-sm)",
-              }}>
-              <Zap className="h-4 w-4" /> Run Full Analysis
-            </button>
-          )}
-          {pipelineRunning && (
-            <span className="flex items-center gap-2 text-sm" style={{ color: "var(--color-purple-400)" }}>
-              <Loader2 className="h-4 w-4 animate-spin" /> Agent running…
-            </span>
-          )}
-          {pipelineDone && (
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => downloadMarkdown(report, summary.fileName)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all"
-                style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.25)", color: "var(--color-success)" }}>
-                <FileDown className="h-4 w-4" /> .md Report
-              </button>
-              <button
-                onClick={() => downloadNotebook(summary, notebookCode, report)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all"
-                style={{ background: "rgba(124,58,237,0.1)", border: "1px solid rgba(124,58,237,0.3)", color: "var(--color-purple-400)" }}>
-                <Download className="h-4 w-4" /> .ipynb Notebook
-              </button>
-            </div>
-          )}
           <button onClick={reset} className="p-2 rounded-lg transition-colors"
             style={{ color: "var(--color-text-muted)", border: "1px solid var(--color-border-default)" }}
             title="Upload new file">
             <RotateCcw className="h-4 w-4" />
           </button>
         </div>
-      </div>
-
-      {/* Pipeline tracker */}
-      <div className="rounded-xl p-4 mb-6 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2"
-        style={{ background: "var(--color-bg-surface)", border: "1px solid var(--color-border-default)" }}>
-        {stages.map((stage) => {
-          const Icon = stage.icon;
-          return (
-            <div key={stage.id} className="flex flex-col items-center gap-1.5 text-center p-2 rounded-lg"
-              style={{
-                background: stage.status === "done" ? "rgba(16,185,129,0.06)"
-                  : stage.status === "running" ? "rgba(124,58,237,0.1)"
-                  : stage.status === "error" ? "rgba(239,68,68,0.06)"
-                  : "transparent",
-              }}>
-              {stage.status === "running" ? (
-                <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--color-purple-400)" }} />
-              ) : stage.status === "done" ? (
-                <CheckCircle2 className="h-4 w-4" style={{ color: "var(--color-success)" }} />
-              ) : stage.status === "error" ? (
-                <AlertCircle className="h-4 w-4" style={{ color: "var(--color-error)" }} />
-              ) : (
-                <Icon className="h-4 w-4" style={{ color: "var(--color-text-disabled)" }} />
-              )}
-              <span className="text-xs leading-tight"
-                style={{
-                  color: stage.status === "done" ? "var(--color-success)"
-                    : stage.status === "running" ? "var(--color-purple-300)"
-                    : stage.status === "error" ? "var(--color-error)"
-                    : "var(--color-text-disabled)",
-                }}>
-                {stage.label}
-              </span>
-            </div>
-          );
-        })}
       </div>
 
       {/* Tabs */}
@@ -811,59 +266,37 @@ export function DataLabShell() {
       {tab === "charts" && <ChartPanel summary={summary} />}
 
       {tab === "analysis" && (
-        <div className="rounded-xl p-6 min-h-64"
-          style={{ background: "var(--color-bg-surface)", border: "1px solid var(--color-border-default)" }}>
-          {!report && !pipelineRunning && (
-            <div className="text-center py-12">
-              <Brain className="h-12 w-12 mx-auto mb-4" style={{ color: "var(--color-text-disabled)" }} />
-              <p className="text-sm mb-5" style={{ color: "var(--color-text-muted)" }}>
-                Run the full analysis pipeline to get expert AI insights
-              </p>
-              <button onClick={runPipeline}
-                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-semibold"
-                style={{ background: "linear-gradient(135deg, var(--color-purple-600), var(--color-purple-500))", color: "#fff", boxShadow: "var(--glow-purple-sm)" }}>
-                <Zap className="h-4 w-4" /> Run Full Analysis
-              </button>
-            </div>
-          )}
-          {(report || pipelineRunning) && (
-            <div className="text-sm leading-relaxed"
-              style={{ color: "var(--color-text-secondary)", whiteSpace: "pre-wrap", fontFamily: "var(--font-inter, sans-serif)" }}>
-              {report}
-              {pipelineRunning && <span className="cursor-blink" style={{ color: "var(--color-purple-400)" }}>▊</span>}
-            </div>
-          )}
-        </div>
+        <DataScienceAgent
+          summary={summary}
+          summaryText={summaryToPrompt(summary)}
+        />
       )}
 
       {tab === "code" && (
         <div className="rounded-xl overflow-hidden"
           style={{ border: "1px solid var(--color-border-default)" }}>
-          <div className="flex items-center justify-between px-4 py-3"
+          <div className="flex items-center px-4 py-3"
             style={{ background: "var(--color-bg-elevated)", borderBottom: "1px solid var(--color-border-subtle)" }}>
             <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: "var(--color-text-muted)" }}>
-              Generated ML Pipeline — Python
+              ML Pipeline — Python
             </span>
-            {notebookCode && (
-              <button
-                onClick={() => { navigator.clipboard.writeText(notebookCode); }}
-                className="text-xs px-3 py-1 rounded-lg"
-                style={{ background: "rgba(124,58,237,0.1)", color: "var(--color-purple-400)", border: "1px solid rgba(124,58,237,0.2)" }}>
-                Copy
-              </button>
-            )}
           </div>
-          <div className="p-5 overflow-auto text-sm leading-relaxed"
-            style={{ background: "var(--color-bg-base)", color: "var(--color-text-secondary)", fontFamily: "var(--font-jetbrains, monospace)", whiteSpace: "pre-wrap", minHeight: 300, maxHeight: 600 }}>
-            {!notebookCode && !pipelineRunning && (
-              <span style={{ color: "var(--color-text-disabled)" }}>
-                Run the pipeline to generate the ML code…
-              </span>
-            )}
-            {notebookCode}
-            {pipelineRunning && stages.find((s) => s.id === "notebook")?.status === "running" && (
-              <span className="cursor-blink" style={{ color: "var(--color-cyan-400)" }}>▊</span>
-            )}
+          <div className="p-8 flex flex-col items-center justify-center text-center"
+            style={{ background: "var(--color-bg-base)", minHeight: 240 }}>
+            <Cpu className="h-10 w-10 mb-4" style={{ color: "var(--color-text-disabled)" }} />
+            <p className="text-sm font-medium mb-2" style={{ color: "var(--color-text-secondary)" }}>
+              Production code is in Phase 5
+            </p>
+            <p className="text-xs max-w-sm" style={{ color: "var(--color-text-muted)" }}>
+              Run the 7-phase analysis in the <strong style={{ color: "var(--color-purple-300)" }}>Data Science Agent</strong> tab.
+              Phase 5 generates a complete, runnable Python pipeline with your actual column names — expand it to copy or download.
+            </p>
+            <button
+              onClick={() => setTab("analysis")}
+              className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold"
+              style={{ background: "rgba(124,58,237,0.1)", border: "1px solid rgba(124,58,237,0.3)", color: "var(--color-purple-400)" }}>
+              <Zap className="h-4 w-4" /> Go to Data Science Agent
+            </button>
           </div>
         </div>
       )}
@@ -925,200 +358,10 @@ export function DataLabShell() {
         </div>
       )}
 
-      {/* ── Agents tab ── */}
-      {tab === "agents" && (
-        <div className="space-y-4">
-          {/* Launch button (Phase 1 entry) */}
-          {!agentsRunning && !agentsDone && Object.keys(agentStates).length === 0 && (
-            <div
-              className="rounded-xl p-8 flex flex-col items-center gap-5 text-center"
-              style={{ background: "var(--color-bg-surface)", border: "1px solid var(--color-border-default)" }}
-            >
-              <div
-                className="flex h-16 w-16 items-center justify-center rounded-2xl"
-                style={{
-                  background: "linear-gradient(135deg, rgba(124,58,237,0.2), rgba(6,182,212,0.12))",
-                  border: "1px solid rgba(124,58,237,0.3)",
-                }}
-              >
-                <Users className="h-8 w-8" style={{ color: "var(--color-purple-400)" }} />
-              </div>
-
-              <div>
-                <h3 className="text-lg font-bold mb-2" style={{ color: "var(--color-text-primary)" }}>
-                  Multi-Agent Command Center
-                </h3>
-                <p className="text-sm max-w-md" style={{ color: "var(--color-text-muted)" }}>
-                  Launch a team of 10 specialized AI agents that collaborate in parallel to analyze your dataset from every angle — data quality, ML readiness, visualization strategy, feature engineering, and more.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap justify-center gap-2">
-                {AGENT_CATALOG.filter((a) => a.id !== "orchestrator").map((a) => (
-                  <span
-                    key={a.id}
-                    className="text-xs px-2.5 py-1 rounded-full"
-                    style={{
-                      background: a.bgColor,
-                      color: a.color,
-                      border: `1px solid ${a.color}33`,
-                    }}
-                  >
-                    {a.name}
-                  </span>
-                ))}
-              </div>
-
-              <button
-                onClick={runAgents}
-                className="inline-flex items-center gap-2 px-8 py-3 rounded-xl text-sm font-semibold transition-all hover:-translate-y-0.5"
-                style={{
-                  background: "linear-gradient(135deg, var(--color-purple-600), var(--color-cyan-600))",
-                  color: "#fff",
-                  boxShadow: "var(--glow-purple-sm)",
-                }}
-              >
-                <Zap className="h-4 w-4" />
-                Launch Agent Team
-              </button>
-            </div>
-          )}
-
-          {/* Running / done state */}
-          {(agentsRunning || agentsDone || Object.keys(agentStates).length > 0) && (
-            <>
-              {/* Status bar */}
-              <div
-                className="flex items-center justify-between px-4 py-3 rounded-xl"
-                style={{ background: "var(--color-bg-surface)", border: "1px solid var(--color-border-default)" }}
-              >
-                <div className="flex items-center gap-3">
-                  {agentsRunning ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--color-purple-400)" }} />
-                      <span className="text-sm font-medium" style={{ color: "var(--color-purple-300)" }}>
-                        Agent team is working…
-                      </span>
-                    </>
-                  ) : agentsDone ? (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" style={{ color: "var(--color-success)" }} />
-                      <span className="text-sm font-medium" style={{ color: "var(--color-success)" }}>
-                        Synthesis complete — all agents finished
-                      </span>
-                    </>
-                  ) : null}
-                </div>
-                <div className="flex items-center gap-2">
-                  {agentsDone && (
-                    <button
-                      onClick={() => downloadAgentReport(agentStates, summary.fileName)}
-                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold"
-                      style={{
-                        background: "rgba(16,185,129,0.08)",
-                        border: "1px solid rgba(16,185,129,0.25)",
-                        color: "var(--color-success)",
-                      }}
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      Download Full Report
-                    </button>
-                  )}
-                  {!agentsRunning && (
-                    <button
-                      onClick={runAgents}
-                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold"
-                      style={{
-                        background: "rgba(124,58,237,0.1)",
-                        border: "1px solid rgba(124,58,237,0.3)",
-                        color: "var(--color-purple-400)",
-                      }}
-                    >
-                      <RotateCcw className="h-3.5 w-3.5" />
-                      Re-run
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Orchestrator card — full width */}
-              {agentStates.orchestrator && (
-                <AgentCard
-                  {...metaFor("orchestrator")}
-                  status={agentStates.orchestrator.status}
-                  output={agentStates.orchestrator.output}
-                  task={agentStates.orchestrator.task}
-                  expanded={agentStates.orchestrator.expanded}
-                  onToggle={() =>
-                    setAgentStates((prev) => ({
-                      ...prev,
-                      orchestrator: { ...prev.orchestrator, expanded: !prev.orchestrator.expanded },
-                    }))
-                  }
-                />
-              )}
-
-              {/* Agent grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {AGENT_CATALOG.filter((a) => a.id !== "orchestrator").map((agent) => {
-                  const state = agentStates[agent.id];
-                  if (!state) return null;
-                  return (
-                    <AgentCard
-                      key={agent.id}
-                      {...agent}
-                      status={state.status}
-                      output={state.output}
-                      task={state.task}
-                      expanded={state.expanded}
-                      onToggle={() =>
-                        setAgentStates((prev) => ({
-                          ...prev,
-                          [agent.id]: { ...prev[agent.id], expanded: !prev[agent.id].expanded },
-                        }))
-                      }
-                    />
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {tab === "prompt-builder" && <PromptBuilderTab />}
-
       {tab === "notes" && (
         <div style={{ position: "relative" }}>
           <NotesPanel datasetName={summary.fileName} userId="anon" />
         </div>
-      )}
-
-      {tab === "distributions" && (
-        <DistributionsTab summary={summary} />
-      )}
-
-      {tab === "correlations" && (
-        <CorrelationsTab summary={summary} />
-      )}
-
-      {tab === "outliers" && (
-        <OutliersTab summary={summary} />
-      )}
-
-      {tab === "missing" && (
-        <MissingTab summary={summary} />
-      )}
-
-      {tab === "ds-workflow" && (
-        <DSWorkflowTab summary={summary} analysisComplete={pipelineDone} />
-      )}
-
-      {tab === "report" && (
-        <ReportTab
-          summary={summary}
-          qualityScore={0}
-        />
       )}
     </div>
   );

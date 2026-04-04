@@ -1,0 +1,11 @@
+{"type":"server-started","port":55575,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:55575","screen_dir":"/Users/seif-git/Desktop/GravityClaude/.superpowers/brainstorm/56783-1775203713/content","state_dir":"/Users/seif-git/Desktop/GravityClaude/.superpowers/brainstorm/56783-1775203713/state"}
+{"type":"screen-added","file":"/Users/seif-git/Desktop/GravityClaude/.superpowers/brainstorm/56783-1775203713/content/charts-direction.html"}
+{"type":"screen-added","file":"/Users/seif-git/Desktop/GravityClaude/.superpowers/brainstorm/56783-1775203713/content/waiting.html"}
+{"type":"screen-added","file":"/Users/seif-git/Desktop/GravityClaude/.superpowers/brainstorm/56783-1775203713/content/design-overview.html"}
+{"type":"screen-added","file":"/Users/seif-git/Desktop/GravityClaude/.superpowers/brainstorm/56783-1775203713/content/eda-expanded.html"}
+{"type":"screen-added","file":"/Users/seif-git/Desktop/GravityClaude/.superpowers/brainstorm/56783-1775203713/content/waiting-2.html"}
+{"type":"screen-added","file":"/Users/seif-git/Desktop/GravityClaude/.superpowers/brainstorm/56783-1775203713/content/full-mockup-v3.html"}
+{"type":"screen-added","file":"/Users/seif-git/Desktop/GravityClaude/.superpowers/brainstorm/56783-1775203713/content/world-class-v4.html"}
+{"type":"screen-added","file":"/Users/seif-git/Desktop/GravityClaude/.superpowers/brainstorm/56783-1775203713/content/v5-world-class.html"}
+{"type":"screen-added","file":"/Users/seif-git/Desktop/GravityClaude/.superpowers/brainstorm/56783-1775203713/content/v6-final.html"}
+{"type":"server-stopped","reason":"idle timeout"}

@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DataLab Design</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #08080f; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; padding: 32px 24px; overflow-y: auto; min-height: 100vh; }
+
+h1 { font-size: 24px; font-weight: 800; color: #f1f5f9; margin-bottom: 4px; }
+.meta { font-size: 13px; color: #64748b; margin-bottom: 36px; }
+
+.section { margin-bottom: 40px; }
+.section-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  color: #7c3aed; margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
+}
+.section-label::after { content: ''; flex: 1; height: 1px; background: #1e1e2e; }
+
+/* ---- CHART MOCKUP ---- */
+.chart-card {
+  background: #0d0d1a; border: 1px solid #1a1a2e; border-radius: 14px;
+  padding: 20px; margin-bottom: 16px;
+}
+.chart-card-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  margin-bottom: 16px;
+}
+.chart-title { font-size: 15px; font-weight: 700; color: #f1f5f9; }
+.chart-subtitle { font-size: 11px; color: #475569; margin-top: 3px; }
+.badge {
+  font-size: 10px; font-weight: 600; padding: 4px 10px; border-radius: 20px;
+  white-space: nowrap;
+}
+.badge-orange { background: #431407; color: #fb923c; border: 1px solid #7c2d12; }
+.badge-green  { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+.badge-blue   { background: #082f49; color: #38bdf8; border: 1px solid #0c4a6e; }
+.badge-purple { background: #2e1065; color: #c084fc; border: 1px solid #4c1d95; }
+
+/* histogram bars */
+.histo { position: relative; height: 90px; display: flex; align-items: flex-end; gap: 4px; margin-bottom: 4px; }
+.hbar {
+  flex: 1; border-radius: 4px 4px 0 0; position: relative;
+  background: linear-gradient(180deg, #7c3aed, #4c1d95);
+  min-height: 2px;
+}
+.hbar.peak { background: linear-gradient(180deg, #a78bfa, #7c3aed); }
+.mean-overlay {
+  position: absolute; left: 0; right: 0; border-top: 2px dashed #22d3ee;
+}
+.mean-tag {
+  position: absolute; right: 4px; font-size: 8px; color: #22d3ee;
+  font-weight: 700; top: -14px; white-space: nowrap;
+}
+.median-overlay {
+  position: absolute; left: 0; right: 0; border-top: 2px dashed #f472b6;
+}
+.median-tag {
+  position: absolute; left: 4px; font-size: 8px; color: #f472b6;
+  font-weight: 700; top: -14px; white-space: nowrap;
+}
+.histo-axis {
+  display: flex; justify-content: space-between;
+  font-size: 9px; color: #334155; border-top: 1px solid #1e1e2e;
+  padding-top: 5px; margin-bottom: 14px;
+}
+
+/* stats chips */
+.chips { display: flex; gap: 8px; margin-bottom: 14px; }
+.chip {
+  flex: 1; background: #0a0a1a; border: 1px solid #1e1e35;
+  border-radius: 10px; padding: 8px; text-align: center;
+}
+.chip-label { font-size: 9px; color: #475569; text-transform: uppercase; letter-spacing: 0.06em; }
+.chip-val { font-size: 14px; font-weight: 800; margin-top: 2px; }
+.v-purple { color: #a78bfa; }
+.v-cyan   { color: #22d3ee; }
+.v-pink   { color: #f472b6; }
+.v-green  { color: #4ade80; }
+
+/* insight callout */
+.insight {
+  background: #0a0a12; border-left: 3px solid #7c3aed; border-radius: 0 10px 10px 0;
+  padding: 10px 14px; font-size: 12px; color: #94a3b8; line-height: 1.6;
+}
+.insight strong { color: #c4b5fd; }
+
+/* correlation heatmap */
+.heatmap-section { margin-top: 16px; }
+.heatmap-title { font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
+.heatmap { display: inline-grid; grid-template-columns: 60px repeat(4, 52px); grid-template-rows: 24px repeat(4, 52px); gap: 3px; }
+.hm-col-label { font-size: 9px; color: #475569; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 3px; text-align: center; }
+.hm-row-label { font-size: 9px; color: #475569; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px; text-align: right; }
+.hm-cell {
+  border-radius: 6px; display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; cursor: default;
+}
+
+/* categorical horizontal bars */
+.cat-bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.cat-label { font-size: 10px; color: #94a3b8; width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; flex-shrink: 0; }
+.cat-track { flex: 1; height: 18px; background: #0f0f1a; border-radius: 4px; overflow: hidden; }
+.cat-fill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 8px; font-size: 10px; color: #fff; font-weight: 600; }
+.cat-count { font-size: 10px; color: #475569; width: 36px; text-align: right; flex-shrink: 0; }
+
+/* access section mockup */
+.access-card {
+  background: #0d0d1a; border: 1px solid #1a1a2e; border-radius: 14px; overflow: hidden;
+  max-width: 520px;
+}
+.access-header { padding: 20px 24px; border-bottom: 1px solid #1a1a2e; }
+.access-tabs { display: flex; background: #0a0a12; border-radius: 10px; padding: 4px; gap: 4px; margin-top: 12px; }
+.tab {
+  flex: 1; text-align: center; padding: 8px; border-radius: 8px;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.tab.active { background: #1e1b4b; color: #a78bfa; }
+.tab.inactive { color: #475569; }
+.access-body { padding: 20px 24px; }
+.form-field { margin-bottom: 14px; }
+.form-label { font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 5px; }
+.form-input {
+  width: 100%; background: #0a0a12; border: 1px solid #1e1e2e; border-radius: 8px;
+  padding: 10px 14px; font-size: 13px; color: #e2e8f0; outline: none;
+}
+.form-btn {
+  width: 100%; background: linear-gradient(135deg, #7c3aed, #06b6d4);
+  border: none; border-radius: 10px; padding: 12px;
+  font-size: 13px; font-weight: 700; color: #fff; cursor: pointer;
+  margin-top: 4px;
+}
+
+/* admin magic link */
+.admin-row {
+  display: flex; align-items: center; gap: 12px;
+  background: #0a0a12; border: 1px solid #1e1e2e; border-radius: 10px;
+  padding: 12px 16px; margin-bottom: 10px;
+}
+.admin-avatar { width: 36px; height: 36px; border-radius: 50%; background: #1e1b4b; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: #a78bfa; flex-shrink: 0; }
+.admin-info { flex: 1; }
+.admin-name { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+.admin-email { font-size: 11px; color: #475569; }
+.admin-type-badge { font-size: 9px; padding: 2px 7px; border-radius: 20px; background: #0c2d4a; color: #38bdf8; border: 1px solid #0c4a6e; margin-left: 6px; }
+.admin-btn {
+  font-size: 11px; font-weight: 600; padding: 6px 12px; border-radius: 8px;
+  border: 1px solid #7c3aed; color: #a78bfa; background: #1e1b4b; cursor: pointer;
+  white-space: nowrap; flex-shrink: 0;
+}
+.admin-btn.green { border-color: #166534; color: #4ade80; background: #052e16; }
+
+/* magic link flow */
+.flow { display: flex; align-items: center; gap: 0; flex-wrap: wrap; margin: 16px 0; }
+.flow-step {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  flex: 1; min-width: 80px;
+}
+.flow-icon { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+.flow-text { font-size: 10px; color: #64748b; text-align: center; line-height: 1.4; }
+.flow-arrow { color: #334155; font-size: 18px; padding: 0 4px; margin-bottom: 20px; }
+</style>
+</head>
+<body>
+
+<h1>DataLab Design Spec</h1>
+<p class="meta">Selected: B (World-Class Charts) + E (GitHub + Email Access) — Review before we build</p>
+
+<!-- =================== SECTION 1: CHARTS =================== -->
+<div class="section">
+  <div class="section-label">1 · World-Class Chart Panel</div>
+
+  <!-- Chart example: numeric distribution -->
+  <div class="chart-card">
+    <div class="chart-card-header">
+      <div>
+        <div class="chart-title">Annual Income Distribution</div>
+        <div class="chart-subtitle">Numeric · 1,340 records · 2 nulls (0.1%) · USD estimated</div>
+      </div>
+      <span class="badge badge-orange">Right-skewed</span>
+    </div>
+
+    <div class="histo">
+      <div class="mean-overlay" style="bottom:42%"><span class="mean-tag">μ = $62,400</span></div>
+      <div class="median-overlay" style="bottom:55%"><span class="median-tag">M = $54,000</span></div>
+      <div class="hbar" style="height:18%"></div>
+      <div class="hbar" style="height:35%"></div>
+      <div class="hbar" style="height:62%"></div>
+      <div class="hbar peak" style="height:100%"></div>
+      <div class="hbar peak" style="height:88%"></div>
+      <div class="hbar" style="height:58%"></div>
+      <div class="hbar" style="height:36%"></div>
+      <div class="hbar" style="height:20%"></div>
+      <div class="hbar" style="height:10%"></div>
+      <div class="hbar" style="height:5%"></div>
+    </div>
+    <div class="histo-axis">
+      <span>$12K</span><span>$28K</span><span>$45K</span><span>$62K</span><span>$79K</span><span>$200K</span>
+    </div>
+
+    <div class="chips">
+      <div class="chip"><div class="chip-label">Mean</div><div class="chip-val v-purple">$62,400</div></div>
+      <div class="chip"><div class="chip-label">Median</div><div class="chip-val v-cyan">$54,000</div></div>
+      <div class="chip"><div class="chip-label">Std Dev</div><div class="chip-val v-pink">$31,200</div></div>
+      <div class="chip"><div class="chip-label">Outliers</div><div class="chip-val v-green">24</div></div>
+      <div class="chip"><div class="chip-label">p75</div><div class="chip-val v-purple">$78,500</div></div>
+    </div>
+
+    <div class="insight">
+      <strong>AI Insight:</strong> Income skews significantly right — the mean ($62.4K) is 15% above the median ($54K), driven by a high-earner tail. The top 5% of earners account for <strong>~28% of total income mass</strong>. Consider log-transforming this column before feeding into regression models, or binning into income brackets for classification tasks.
+    </div>
+  </div>
+
+  <!-- Chart example: categorical -->
+  <div class="chart-card">
+    <div class="chart-card-header">
+      <div>
+        <div class="chart-title">Education Level</div>
+        <div class="chart-subtitle">Categorical · 8 unique values · 0 nulls</div>
+      </div>
+      <span class="badge badge-blue">Top 8 shown</span>
+    </div>
+    <div class="cat-bar-row"><span class="cat-label">Bachelor's</span><div class="cat-track"><div class="cat-fill" style="width:72%; background:linear-gradient(90deg,#7c3aed,#6d28d9)">34%</div></div><span class="cat-count">456</span></div>
+    <div class="cat-bar-row"><span class="cat-label">Some College</span><div class="cat-track"><div class="cat-fill" style="width:50%; background:linear-gradient(90deg,#0284c7,#0369a1)">24%</div></div><span class="cat-count">322</span></div>
+    <div class="cat-bar-row"><span class="cat-label">HS Grad</span><div class="cat-track"><div class="cat-fill" style="width:36%; background:linear-gradient(90deg,#0d9488,#0f766e)">17%</div></div><span class="cat-count">228</span></div>
+    <div class="cat-bar-row"><span class="cat-label">Master's</span><div class="cat-track"><div class="cat-fill" style="width:24%; background:linear-gradient(90deg,#b45309,#92400e)">11%</div></div><span class="cat-count">147</span></div>
+    <div class="cat-bar-row"><span class="cat-label">Associate's</span><div class="cat-track"><div class="cat-fill" style="width:14%; background:linear-gradient(90deg,#7e22ce,#6b21a8)">7%</div></div><span class="cat-count">94</span></div>
+    <div class="insight" style="margin-top:12px">
+      <strong>AI Insight:</strong> Bachelor's degree holders dominate at 34%. The Bachelor's + Some College cohort alone represents <strong>58%</strong> of the dataset. Doctorate-level education is rare enough (&lt;2%) that it may need to be merged with "Master's" to avoid sparse-class issues in modeling.
+    </div>
+  </div>
+
+  <!-- Correlation heatmap -->
+  <div class="chart-card">
+    <div class="chart-card-header">
+      <div>
+        <div class="chart-title">Correlation Matrix</div>
+        <div class="chart-subtitle">Pearson r — numeric columns only · hover for details</div>
+      </div>
+      <span class="badge badge-purple">4 columns</span>
+    </div>
+    <div class="heatmap-section">
+      <div class="heatmap">
+        <!-- header row -->
+        <div></div>
+        <div class="hm-col-label">age</div>
+        <div class="hm-col-label">income</div>
+        <div class="hm-col-label">hrs/wk</div>
+        <div class="hm-col-label">cap-gain</div>
+        <!-- row 1 -->
+        <div class="hm-row-label">age</div>
+        <div class="hm-cell" style="background:#4c1d95;color:#c4b5fd">1.00</div>
+        <div class="hm-cell" style="background:#1e3a5f;color:#7dd3fc">0.68</div>
+        <div class="hm-cell" style="background:#0f2d1a;color:#4ade80">0.31</div>
+        <div class="hm-cell" style="background:#2d1b4a;color:#c084fc">0.42</div>
+        <!-- row 2 -->
+        <div class="hm-row-label">income</div>
+        <div class="hm-cell" style="background:#1e3a5f;color:#7dd3fc">0.68</div>
+        <div class="hm-cell" style="background:#4c1d95;color:#c4b5fd">1.00</div>
+        <div class="hm-cell" style="background:#451a03;color:#fb923c">−0.12</div>
+        <div class="hm-cell" style="background:#1a3a1a;color:#86efac">0.51</div>
+        <!-- row 3 -->
+        <div class="hm-row-label">hrs/wk</div>
+        <div class="hm-cell" style="background:#0f2d1a;color:#4ade80">0.31</div>
+        <div class="hm-cell" style="background:#451a03;color:#fb923c">−0.12</div>
+        <div class="hm-cell" style="background:#4c1d95;color:#c4b5fd">1.00</div>
+        <div class="hm-cell" style="background:#4a0b0b;color:#f87171">−0.48</div>
+        <!-- row 4 -->
+        <div class="hm-row-label">cap-gain</div>
+        <div class="hm-cell" style="background:#2d1b4a;color:#c084fc">0.42</div>
+        <div class="hm-cell" style="background:#1a3a1a;color:#86efac">0.51</div>
+        <div class="hm-cell" style="background:#4a0b0b;color:#f87171">−0.48</div>
+        <div class="hm-cell" style="background:#4c1d95;color:#c4b5fd">1.00</div>
+      </div>
+      <div style="margin-top:10px; display:flex; gap:16px; font-size:10px;">
+        <span style="color:#c4b5fd">■ Strong +</span>
+        <span style="color:#7dd3fc">■ Moderate +</span>
+        <span style="color:#4ade80">■ Weak +</span>
+        <span style="color:#fb923c">■ Weak −</span>
+        <span style="color:#f87171">■ Moderate −</span>
+      </div>
+    </div>
+    <div class="insight" style="margin-top:14px">
+      <strong>AI Insight:</strong> Age and income show a strong positive correlation (r=0.68) — expected, as earnings typically peak mid-career. Notable: hours-per-week is <strong>negatively correlated with capital gains</strong> (r=−0.48), suggesting high earners work fewer hours (investment income vs. labor income). This multicollinearity may affect linear model coefficients — consider VIF analysis before feature selection.
+    </div>
+  </div>
+</div>
+
+<!-- =================== SECTION 2: EMAIL ACCESS =================== -->
+<div class="section">
+  <div class="section-label">2 · Email Access Request (Option E)</div>
+
+  <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start;">
+
+    <!-- Left: user-facing form -->
+    <div>
+      <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:10px;">User sees (on denied page)</div>
+      <div class="access-card">
+        <div class="access-header">
+          <div style="font-size:16px; font-weight:700; color:#f1f5f9;">Request DataLab Access</div>
+          <div style="font-size:12px; color:#64748b; margin-top:4px;">Get access in under 24 hours</div>
+          <div class="access-tabs">
+            <div class="tab inactive">GitHub Account</div>
+            <div class="tab active">Email Request</div>
+          </div>
+        </div>
+        <div class="access-body">
+          <div class="form-field">
+            <div class="form-label">Full Name</div>
+            <div class="form-input" style="color:#475569">e.g. Jane Smith</div>
+          </div>
+          <div class="form-field">
+            <div class="form-label">Email Address</div>
+            <div class="form-input" style="color:#475569">you@company.com</div>
+          </div>
+          <div class="form-field">
+            <div class="form-label">Why do you need access? (optional)</div>
+            <div class="form-input" style="color:#475569; min-height:56px">e.g. data analysis for Q2 report...</div>
+          </div>
+          <button class="form-btn">Request Access →</button>
+          <div style="font-size:10px; color:#334155; text-align:center; margin-top:10px;">No account required · Access granted within 24h</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: admin dashboard -->
+    <div>
+      <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:10px;">Admin sees (dashboard)</div>
+      <div style="background:#0d0d1a; border:1px solid #1a1a2e; border-radius:14px; padding:16px;">
+        <div style="font-size:13px; font-weight:700; color:#f1f5f9; margin-bottom:12px;">Pending Requests</div>
+
+        <!-- GitHub request -->
+        <div class="admin-row">
+          <div class="admin-avatar">S</div>
+          <div class="admin-info">
+            <div class="admin-name">seif_dev <span class="admin-type-badge">GitHub</span></div>
+            <div class="admin-email">ID: 8842901 · 2h ago</div>
+          </div>
+          <button class="admin-btn green">Approve</button>
+        </div>
+
+        <!-- Email request -->
+        <div class="admin-row">
+          <div class="admin-avatar" style="background:#0c3d1a; color:#4ade80">J</div>
+          <div class="admin-info">
+            <div class="admin-name">Jane Smith <span class="admin-type-badge" style="background:#0c3d1a; color:#4ade80; border-color:#166534">Email</span></div>
+            <div class="admin-email">jane@company.com · 5h ago</div>
+          </div>
+          <button class="admin-btn" style="border-color:#06b6d4; color:#22d3ee; background:#082f49;">Copy Link</button>
+        </div>
+
+        <div style="font-size:10px; color:#334155; margin-top:10px; padding:8px; background:#0a0a12; border-radius:8px; line-height:1.6;">
+          <strong style="color:#475569">Copy Link</strong> → generates a signed 7-day magic link → you paste it into an email to the user → they click it → instant access
+        </div>
+      </div>
+
+      <!-- Magic link flow -->
+      <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; margin-top:20px; margin-bottom:10px;">Magic Link Flow</div>
+      <div class="flow">
+        <div class="flow-step"><div class="flow-icon" style="background:#1e1b4b">📝</div><div class="flow-text">User fills email form</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step"><div class="flow-icon" style="background:#0c2d4a">🔔</div><div class="flow-text">Appears in admin dashboard</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step"><div class="flow-icon" style="background:#0c3d1a">🔗</div><div class="flow-text">Admin copies magic link</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step"><div class="flow-icon" style="background:#1a0c3d">📧</div><div class="flow-text">Admin emails it to user</div></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step"><div class="flow-icon" style="background:#0c3d1a">✅</div><div class="flow-text">User clicks → 7-day access</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="background:#0d0d1a; border:1px solid #7c3aed40; border-radius:12px; padding:16px; margin-top:8px;">
+  <div style="font-size:13px; color:#a78bfa; font-weight:700; margin-bottom:4px;">Ready to build?</div>
+  <div style="font-size:12px; color:#64748b;">Reply in the terminal to confirm this design, or tell me what to change.</div>
+</div>
+
+</body>
+</html>

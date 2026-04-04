@@ -1,9 +1,6 @@
-import { createGroq } from "@ai-sdk/groq";
-import { streamText } from "ai";
 import { headers } from "next/headers";
 import { checkRateLimit } from "@/lib/rate-limit";
-
-const groq = createGroq({ apiKey: process.env.GROQ_API_KEY });
+import { streamWithFallback } from "@/lib/ai-with-fallback";
 
 const PROMPT_ENGINEER_SYSTEM = `You are an expert Prompt Engineer with deep knowledge of how large language models think and respond.
 Your job is to transform a user's raw, unstructured idea into a world-class expert prompt that will get the best possible output from any LLM.
@@ -64,13 +61,10 @@ export async function POST(req: Request) {
     userMessage += `\n\nTarget LLM / system: ${targetLLM.trim()} — optimise the prompt for this model's strengths.`;
   }
 
-  const result = streamText({
-    model: groq("llama-3.3-70b-versatile"),
+  return streamWithFallback({
     system: PROMPT_ENGINEER_SYSTEM,
     messages: [{ role: "user", content: userMessage }],
     maxOutputTokens: 2048,
     temperature: 0.4,
   });
-
-  return result.toTextStreamResponse();
 }

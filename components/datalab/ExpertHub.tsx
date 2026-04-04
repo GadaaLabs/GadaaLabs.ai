@@ -527,7 +527,7 @@ function ExpertChat({
         }),
       });
 
-      if (!res.ok || !res.body) throw new Error("Request failed");
+      if (!res.ok || !res.body) throw new Error(`Request failed (${res.status})`);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -542,6 +542,17 @@ function ExpertChat({
         setMessages((prev) => {
           const updated = [...prev];
           updated[updated.length - 1] = { role: "assistant", content: assistantText };
+          return updated;
+        });
+      }
+
+      if (!assistantText.trim()) {
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            role: "assistant",
+            content: "⚠️ No response received. Please try sending your message again.",
+          };
           return updated;
         });
       }

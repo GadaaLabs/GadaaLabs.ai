@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DataLab EDA Expansion</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #08080f; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; padding: 28px 24px; overflow-y: auto; }
+
+h1 { font-size: 22px; font-weight: 800; color: #f1f5f9; margin-bottom: 4px; }
+.subtitle { font-size: 13px; color: #64748b; margin-bottom: 28px; }
+
+.section-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+  color: #7c3aed; margin-bottom: 14px; display: flex; align-items: center; gap: 8px;
+}
+.section-label::after { content: ''; flex: 1; height: 1px; background: #1e1e2e; }
+
+/* TAB BAR */
+.tab-bar {
+  display: flex; gap: 2px; background: #0a0a12; border: 1px solid #1e1e2e;
+  border-radius: 12px; padding: 5px; margin-bottom: 24px; flex-wrap: wrap;
+}
+.tab {
+  padding: 7px 14px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  cursor: pointer; white-space: nowrap; transition: all 0.15s;
+}
+.tab.active { background: #1e1b4b; color: #a78bfa; }
+.tab.inactive { color: #475569; }
+.tab.new { color: #22d3ee; }
+.tab.new.active { background: #082f49; color: #22d3ee; }
+.tab.gold { color: #fbbf24; }
+.tab.gold.active { background: #451a03; color: #fbbf24; }
+.tab.green { color: #4ade80; }
+.tab.green.active { background: #052e16; color: #4ade80; }
+
+/* CARDS */
+.card {
+  background: #0d0d1a; border: 1px solid #1a1a2e; border-radius: 14px; padding: 18px;
+  margin-bottom: 14px;
+}
+.card-title { font-size: 14px; font-weight: 700; color: #f1f5f9; margin-bottom: 4px; }
+.card-sub { font-size: 11px; color: #475569; margin-bottom: 12px; }
+
+.badge {
+  font-size: 10px; font-weight: 600; padding: 3px 9px; border-radius: 20px;
+  display: inline-block; margin-left: 6px;
+}
+.b-new { background: #082f49; color: #38bdf8; border: 1px solid #0c4a6e; }
+.b-gold { background: #451a03; color: #fbbf24; border: 1px solid #78350f; }
+.b-green { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+.b-purple { background: #2e1065; color: #c084fc; border: 1px solid #4c1d95; }
+
+/* chart type grid */
+.chart-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 10px; }
+.chart-type {
+  background: #0a0a12; border: 1px solid #1e1e2e; border-radius: 10px;
+  padding: 12px; text-align: center;
+}
+.chart-icon { font-size: 22px; margin-bottom: 5px; }
+.chart-name { font-size: 11px; font-weight: 600; color: #e2e8f0; }
+.chart-when { font-size: 9px; color: #475569; margin-top: 2px; line-height: 1.4; }
+.chart-type.new-chart { border-color: #0c4a6e; background: #040d14; }
+.chart-type.new-chart .chart-name { color: #38bdf8; }
+
+/* workflow steps */
+.workflow { display: flex; flex-direction: column; gap: 8px; }
+.wf-step {
+  display: flex; align-items: flex-start; gap: 12px;
+  background: #0a0a12; border: 1px solid #1e1e2e; border-radius: 10px; padding: 12px;
+}
+.wf-num {
+  width: 24px; height: 24px; border-radius: 50%; background: #1e1b4b;
+  color: #a78bfa; font-size: 11px; font-weight: 800; display: flex;
+  align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;
+}
+.wf-body { flex: 1; }
+.wf-title { font-size: 12px; font-weight: 700; color: #e2e8f0; }
+.wf-desc { font-size: 11px; color: #64748b; margin-top: 2px; line-height: 1.4; }
+.wf-output {
+  font-size: 10px; color: #4ade80; background: #052e16; border-radius: 6px;
+  padding: 4px 8px; display: inline-block; margin-top: 5px;
+}
+
+/* report mockup */
+.report-card {
+  background: #0d0d1a; border: 1px solid #1a1a2e; border-radius: 14px; overflow: hidden;
+}
+.report-header {
+  background: linear-gradient(135deg, #1e1b4b 0%, #082f49 100%);
+  padding: 20px 24px; border-bottom: 1px solid #1e1e2e;
+}
+.report-title { font-size: 17px; font-weight: 800; color: #f1f5f9; }
+.report-meta { font-size: 11px; color: #94a3b8; margin-top: 3px; }
+.report-body { padding: 20px 24px; }
+.finding {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 10px 0; border-bottom: 1px solid #12121f;
+}
+.finding:last-child { border-bottom: none; }
+.finding-icon { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+.finding-text { font-size: 12px; color: #94a3b8; line-height: 1.5; }
+.finding-text strong { color: #e2e8f0; }
+.kpi-row { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.kpi {
+  flex: 1; min-width: 80px; background: #0a0a12; border: 1px solid #1e1e2e;
+  border-radius: 10px; padding: 12px; text-align: center;
+}
+.kpi-val { font-size: 20px; font-weight: 800; color: #a78bfa; }
+.kpi-label { font-size: 9px; color: #475569; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 3px; }
+.kpi-delta { font-size: 10px; color: #4ade80; margin-top: 2px; }
+
+.export-btns { display: flex; gap: 8px; margin-top: 16px; }
+.export-btn {
+  flex: 1; padding: 10px; border-radius: 10px; font-size: 12px; font-weight: 700;
+  text-align: center; cursor: pointer;
+}
+.export-btn.primary { background: linear-gradient(135deg, #7c3aed, #06b6d4); color: #fff; border: none; }
+.export-btn.secondary { background: transparent; color: #a78bfa; border: 1px solid #4c1d95; }
+
+/* scatter mini */
+.scatter { position: relative; width: 100%; height: 80px; background: #0a0a12; border-radius: 8px; overflow: hidden; margin-bottom: 8px; }
+.dot { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: #7c3aed; opacity: 0.7; transform: translate(-50%,-50%); }
+.dot.outlier { background: #f87171; opacity: 1; width: 7px; height: 7px; }
+.trend-line { position: absolute; left: 5%; bottom: 15%; width: 90%; height: 1px; background: linear-gradient(90deg, #22d3ee44, #22d3ee); transform: rotate(-18deg); transform-origin: left center; }
+
+/* box plot mini */
+.boxplot { display: flex; align-items: center; gap: 4px; height: 32px; margin-bottom: 6px; }
+.bp-whisker { width: 2px; height: 16px; background: #475569; }
+.bp-box { height: 24px; background: #1e1b4b; border: 1px solid #7c3aed; border-radius: 3px; display: flex; align-items: center; justify-content: center; }
+.bp-median { width: 2px; height: 24px; background: #22d3ee; }
+.bp-label { font-size: 9px; color: #475569; flex-shrink: 0; }
+.bp-outlier { width: 5px; height: 5px; border-radius: 50%; background: #f87171; flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<h1>DataLab — Full EDA & DS Workflow Design</h1>
+<p class="subtitle">Expanded tab structure + chart types + stakeholder report</p>
+
+<!-- TAB BAR PREVIEW -->
+<div class="section-label" style="margin-bottom:10px">Tab Structure</div>
+<div class="tab-bar">
+  <div class="tab active">Overview</div>
+  <div class="tab inactive new">Distributions</div>
+  <div class="tab inactive new">Correlations</div>
+  <div class="tab inactive new">Outliers</div>
+  <div class="tab inactive new">Missing Data</div>
+  <div class="tab inactive new">Time Series</div>
+  <div class="tab inactive">AI Analysis</div>
+  <div class="tab inactive">Code</div>
+  <div class="tab inactive gold">DS Workflow</div>
+  <div class="tab inactive green">Report</div>
+  <div class="tab inactive">Chat</div>
+</div>
+<div style="font-size:11px; color:#475569; margin-bottom:28px;">
+  <span style="color:#22d3ee">■ Blue</span> = new EDA tabs &nbsp;|&nbsp; <span style="color:#fbbf24">■ Gold</span> = new DS Workflow tab &nbsp;|&nbsp; <span style="color:#4ade80">■ Green</span> = new Stakeholder Report tab &nbsp;|&nbsp; White = existing
+</div>
+
+<!-- SECTION 1: NEW CHART TYPES -->
+<div class="section-label">New Chart Types (across EDA tabs)</div>
+<div class="chart-grid">
+  <div class="chart-type"><div class="chart-icon">📊</div><div class="chart-name">Histogram + KDE</div><div class="chart-when">Numeric distributions with smooth density curve overlay</div></div>
+  <div class="chart-type new-chart"><div class="chart-icon">📦</div><div class="chart-name">Box Plot</div><div class="chart-when">Q1/Q3/median/whiskers + outlier dots — side by side per column</div></div>
+  <div class="chart-type new-chart"><div class="chart-icon">🔵</div><div class="chart-name">Scatter Matrix</div><div class="chart-when">Pairplot of all numeric pairs — colored by category if present</div></div>
+  <div class="chart-type new-chart"><div class="chart-icon">🌡️</div><div class="chart-name">Correlation Heatmap</div><div class="chart-when">Pearson r matrix with color scale + annotated values</div></div>
+  <div class="chart-type new-chart"><div class="chart-icon">🎻</div><div class="chart-name">Violin Plot</div><div class="chart-when">Distribution shape + box inside — great for comparing groups</div></div>
+  <div class="chart-type new-chart"><div class="chart-icon">🟦</div><div class="chart-name">Missing Data Heatmap</div><div class="chart-when">Column × row null map — reveals missingness patterns</div></div>
+  <div class="chart-type new-chart"><div class="chart-icon">📈</div><div class="chart-name">Time Series Line</div><div class="chart-when">Auto-detected datetime columns → trend + seasonality</div></div>
+  <div class="chart-type new-chart"><div class="chart-icon">🥧</div><div class="chart-name">Pie / Donut</div><div class="chart-when">Low-cardinality categoricals (≤6 values)</div></div>
+  <div class="chart-type new-chart"><div class="chart-icon">📉</div><div class="chart-name">Cumulative Distribution</div><div class="chart-when">CDF curve per numeric column — useful for percentile analysis</div></div>
+</div>
+
+<!-- box plot mini preview -->
+<div class="card" style="margin-bottom:24px">
+  <div class="card-title">Box Plot Preview — Age <span class="badge b-new">NEW</span></div>
+  <div class="card-sub">IQR outlier detection · whiskers at 1.5× IQR</div>
+  <div style="padding: 8px 0;">
+    <div style="font-size:10px; color:#475569; margin-bottom:6px;">age</div>
+    <div class="boxplot">
+      <div class="bp-label">18</div>
+      <div class="bp-whisker"></div>
+      <div style="flex:1; height:2px; background:#334155"></div>
+      <div class="bp-box" style="width:38%"><div class="bp-median"></div></div>
+      <div style="flex:0.4; height:2px; background:#334155"></div>
+      <div class="bp-whisker"></div>
+      <div style="width:8px"></div>
+      <div class="bp-outlier" title="Outlier: 94"></div>
+      <div class="bp-label">65</div>
+    </div>
+    <div style="display:flex; justify-content:space-between; font-size:9px; color:#334155; padding: 0 20px;">
+      <span>Q1: 26</span><span>Median: 33</span><span>Q3: 44</span><span>IQR: 18</span><span>Outliers: 3</span>
+    </div>
+  </div>
+  <!-- scatter mini -->
+  <div style="margin-top:12px">
+    <div style="font-size:10px; color:#475569; margin-bottom:6px;">age vs income — Scatter <span class="badge b-new">NEW</span></div>
+    <div class="scatter">
+      <div class="trend-line"></div>
+      <div class="dot" style="left:12%;top:75%"></div><div class="dot" style="left:18%;top:65%"></div>
+      <div class="dot" style="left:22%;top:70%"></div><div class="dot" style="left:28%;top:55%"></div>
+      <div class="dot" style="left:33%;top:60%"></div><div class="dot" style="left:38%;top:45%"></div>
+      <div class="dot" style="left:42%;top:50%"></div><div class="dot" style="left:47%;top:40%"></div>
+      <div class="dot" style="left:52%;top:42%"></div><div class="dot" style="left:57%;top:35%"></div>
+      <div class="dot" style="left:62%;top:38%"></div><div class="dot" style="left:67%;top:28%"></div>
+      <div class="dot" style="left:72%;top:32%"></div><div class="dot" style="left:78%;top:25%"></div>
+      <div class="dot outlier" style="left:88%;top:10%"></div>
+      <div class="dot outlier" style="left:92%;top:8%"></div>
+      <div style="position:absolute; bottom:4px; left:6px; font-size:8px; color:#22d3ee">r = 0.68 · p &lt; 0.001</div>
+    </div>
+  </div>
+</div>
+
+<!-- SECTION 2: DS WORKFLOW TAB -->
+<div class="section-label">End-to-End Data Science Workflow Tab <span class="badge b-gold">NEW</span></div>
+<div class="card" style="margin-bottom:24px">
+  <div class="card-title">DS Workflow — AI-guided pipeline from raw data → model-ready</div>
+  <div class="card-sub">Each step auto-populated by agents analyzing your dataset. Editable.</div>
+  <div class="workflow">
+    <div class="wf-step">
+      <div class="wf-num">1</div>
+      <div class="wf-body">
+        <div class="wf-title">Data Quality Assessment</div>
+        <div class="wf-desc">Nulls, duplicates, type mismatches, constant columns, high-cardinality flags. Agent rates overall data quality 0–100.</div>
+        <span class="wf-output">Quality Score: 84/100 · 3 issues flagged</span>
+      </div>
+    </div>
+    <div class="wf-step">
+      <div class="wf-num">2</div>
+      <div class="wf-body">
+        <div class="wf-title">Preprocessing Recommendations</div>
+        <div class="wf-desc">Imputation strategy per column, scaling suggestions (StandardScaler / MinMax / RobustScaler), encoding for categoricals (OHE vs. ordinal vs. target-encoding).</div>
+        <span class="wf-output">Generated sklearn Pipeline code →</span>
+      </div>
+    </div>
+    <div class="wf-step">
+      <div class="wf-num">3</div>
+      <div class="wf-body">
+        <div class="wf-title">Feature Engineering</div>
+        <div class="wf-desc">Suggested derived features, interaction terms, binning recommendations, datetime decomposition. Agent explains why each feature adds signal.</div>
+        <span class="wf-output">8 feature suggestions · 3 high-impact</span>
+      </div>
+    </div>
+    <div class="wf-step">
+      <div class="wf-num">4</div>
+      <div class="wf-body">
+        <div class="wf-title">Target Variable Analysis</div>
+        <div class="wf-desc">User selects target column. Agent determines task type (regression / binary classification / multiclass), checks class imbalance, suggests evaluation metrics.</div>
+        <span class="wf-output">Task: Binary Classification · Imbalance: 73/27 → suggest SMOTE</span>
+      </div>
+    </div>
+    <div class="wf-step">
+      <div class="wf-num">5</div>
+      <div class="wf-body">
+        <div class="wf-title">Model Selection Guide</div>
+        <div class="wf-desc">Top 3 recommended algorithms with reasoning (dataset size, feature types, interpretability needs). Includes complexity vs. performance trade-off matrix.</div>
+        <span class="wf-output">1. XGBoost  2. LogisticReg  3. RandomForest</span>
+      </div>
+    </div>
+    <div class="wf-step">
+      <div class="wf-num">6</div>
+      <div class="wf-body">
+        <div class="wf-title">Ready-to-Run Notebook</div>
+        <div class="wf-desc">Complete Python notebook: data loading → EDA → preprocessing pipeline → model training + cross-validation → evaluation metrics → prediction export.</div>
+        <span class="wf-output">Download .ipynb · Copy to Code tab</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SECTION 3: STAKEHOLDER REPORT -->
+<div class="section-label">Stakeholder Report Tab <span class="badge b-green">NEW</span></div>
+<div class="report-card" style="margin-bottom:14px">
+  <div class="report-header">
+    <div class="report-title">Executive Data Analysis Report</div>
+    <div class="report-meta">adult_census.csv · 32,561 rows · Generated 2026-04-03 · Powered by GadaaLabs DataLab</div>
+  </div>
+  <div class="report-body">
+    <!-- KPIs -->
+    <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:10px;">Dataset at a Glance</div>
+    <div class="kpi-row">
+      <div class="kpi"><div class="kpi-val">32,561</div><div class="kpi-label">Records</div><div class="kpi-delta">↑ Complete</div></div>
+      <div class="kpi"><div class="kpi-val">15</div><div class="kpi-label">Features</div></div>
+      <div class="kpi"><div class="kpi-val">84</div><div class="kpi-label" style="color:#4ade80">Quality Score</div></div>
+      <div class="kpi"><div class="kpi-val">7</div><div class="kpi-label">Key Insights</div></div>
+    </div>
+
+    <!-- findings -->
+    <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:10px;">Key Findings</div>
+    <div class="finding"><div class="finding-icon">📌</div><div class="finding-text"><strong>Income skews right</strong> — Median income ($54K) is 15% below mean ($62K), driven by a high-earner tail. The top 5% earn more than the bottom 40% combined.</div></div>
+    <div class="finding"><div class="finding-icon">⚠️</div><div class="finding-text"><strong>Class imbalance detected</strong> — 73% of records fall in the &lt;$50K class vs. 27% in ≥$50K. Any classification model needs SMOTE or class-weight adjustment to avoid biased predictions.</div></div>
+    <div class="finding"><div class="finding-icon">🔗</div><div class="finding-text"><strong>Age × Income correlation is strong</strong> (r = 0.68) — earnings peak in the 45–55 cohort. Younger workers cluster heavily below $40K regardless of education.</div></div>
+    <div class="finding"><div class="finding-icon">🎓</div><div class="finding-text"><strong>Education drives earnings non-linearly</strong> — Bachelor's holders earn 2.1× more than HS graduates on median, but Master's/Doctorate holders earn only 1.3× more than Bachelor's.</div></div>
+    <div class="finding"><div class="finding-icon">🚨</div><div class="finding-text"><strong>24 outliers flagged in capital-gains</strong> — likely data entry errors or genuine high-net-worth individuals. Remove before training or treat as a separate segment.</div></div>
+
+    <!-- recommendations -->
+    <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; margin-top:14px; margin-bottom:10px;">Recommendations</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="background:#0a0a12; border-left:3px solid #22d3ee; border-radius:0 8px 8px 0; padding:8px 12px; font-size:12px; color:#94a3b8; line-height:1.5;"><strong style="color:#38bdf8">1.</strong> Log-transform <code style="color:#a78bfa">income</code> and <code style="color:#a78bfa">capital-gains</code> before modeling — both violate normality assumptions.</div>
+      <div style="background:#0a0a12; border-left:3px solid #22d3ee; border-radius:0 8px 8px 0; padding:8px 12px; font-size:12px; color:#94a3b8; line-height:1.5;"><strong style="color:#38bdf8">2.</strong> Use <code style="color:#a78bfa">education-num</code> (ordinal) instead of <code style="color:#a78bfa">education</code> (categorical) — identical information, fewer columns after encoding.</div>
+      <div style="background:#0a0a12; border-left:3px solid #22d3ee; border-radius:0 8px 8px 0; padding:8px 12px; font-size:12px; color:#94a3b8; line-height:1.5;"><strong style="color:#38bdf8">3.</strong> Start with XGBoost — dataset size (32K), mixed feature types, and moderate class imbalance are ideal conditions. Expected baseline AUC: 0.87–0.91.</div>
+    </div>
+
+    <div class="export-btns">
+      <button class="export-btn primary">⬇ Export PDF Report</button>
+      <button class="export-btn secondary">📋 Copy Markdown</button>
+    </div>
+  </div>
+</div>
+
+<div style="background:#0d0d1a; border:1px solid #7c3aed40; border-radius:12px; padding:14px; margin-top:8px;">
+  <div style="font-size:13px; color:#a78bfa; font-weight:700; margin-bottom:4px;">Does this cover the full vision?</div>
+  <div style="font-size:12px; color:#64748b;">Reply in the terminal — any additions or changes before we spec and build?</div>
+</div>
+</body>
+</html>

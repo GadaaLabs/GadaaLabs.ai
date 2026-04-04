@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DataLab Full Mockup</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  background: #06060f;
+  color: #e2e8f0;
+  font-family: -apple-system, 'Inter', system-ui, sans-serif;
+  min-height: 100vh;
+  overflow-y: auto;
+}
+
+/* ── NAV ── */
+.top-nav {
+  position: sticky; top: 0; z-index: 100;
+  background: #06060fdd; backdrop-filter: blur(12px);
+  border-bottom: 1px solid #1a1a2e;
+  padding: 0 24px;
+  display: flex; align-items: center; gap: 0;
+  height: 48px;
+  overflow-x: auto;
+}
+.nav-brand { font-size: 13px; font-weight: 800; color: #a78bfa; margin-right: 20px; white-space: nowrap; letter-spacing: -0.02em; }
+.nav-tab {
+  padding: 0 16px; height: 48px; display: flex; align-items: center;
+  font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  border-bottom: 2px solid transparent; transition: all 0.15s;
+  color: #475569;
+}
+.nav-tab:hover { color: #94a3b8; }
+.nav-tab.active { color: #a78bfa; border-bottom-color: #7c3aed; }
+.nav-tab.new { color: #22d3ee; }
+.nav-tab.new.active { border-bottom-color: #22d3ee; }
+.nav-tab.gold { color: #fbbf24; }
+.nav-tab.gold.active { border-bottom-color: #fbbf24; }
+.nav-tab.green { color: #4ade80; }
+.nav-tab.green.active { border-bottom-color: #4ade80; }
+.nav-badge { font-size: 8px; padding: 1px 5px; border-radius: 20px; background: #22d3ee22; color: #22d3ee; margin-left: 4px; font-weight: 700; }
+
+/* ── PAGES ── */
+.page { display: none; padding: 28px 24px; max-width: 1100px; margin: 0 auto; }
+.page.active { display: block; }
+
+.section-label {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  color: #7c3aed; margin-bottom: 14px; display: flex; align-items: center; gap: 10px;
+}
+.section-label::after { content: ''; flex: 1; height: 1px; background: #1a1a2e; }
+
+/* ── CHART CARD ── */
+.chart-card {
+  background: #0d0d1a; border: 1px solid #1a1a2e; border-radius: 14px;
+  padding: 20px; margin-bottom: 20px;
+}
+.chart-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+.chart-title { font-size: 15px; font-weight: 700; color: #f1f5f9; }
+.chart-sub { font-size: 11px; color: #475569; margin-top: 3px; }
+.badge { font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+.b-orange { background: #431407; color: #fb923c; border: 1px solid #7c2d12; }
+.b-green  { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+.b-blue   { background: #082f49; color: #38bdf8; border: 1px solid #0c4a6e; }
+.b-purple { background: #2e1065; color: #c084fc; border: 1px solid #4c1d95; }
+.b-pink   { background: #4a0520; color: #f472b6; border: 1px solid #831843; }
+
+/* histogram */
+.histo { position: relative; height: 100px; display: flex; align-items: flex-end; gap: 3px; margin-bottom: 4px; }
+.hbar { flex: 1; border-radius: 3px 3px 0 0; background: linear-gradient(180deg,#7c3aed,#4c1d95); min-height: 2px; }
+.hbar.hi { background: linear-gradient(180deg,#a78bfa,#7c3aed); }
+.ann-line { position: absolute; left: 0; right: 0; border-top: 2px dashed; pointer-events: none; }
+.ann-tag { position: absolute; font-size: 8px; font-weight: 700; top: -13px; white-space: nowrap; }
+.histo-axis { display: flex; justify-content: space-between; font-size: 9px; color: #334155; border-top: 1px solid #1a1a2e; padding-top: 4px; margin-bottom: 12px; }
+
+/* box plot */
+.boxplot-wrap { padding: 8px 0 12px; }
+.bp-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.bp-col-name { font-size: 10px; color: #94a3b8; width: 70px; text-align: right; flex-shrink: 0; }
+.bp-track { flex: 1; height: 28px; position: relative; display: flex; align-items: center; }
+.bp-whisker-line { position: absolute; top: 50%; height: 2px; background: #334155; }
+.bp-box { position: absolute; height: 22px; background: #1e1b4b; border: 1.5px solid #7c3aed; border-radius: 3px; }
+.bp-median-line { position: absolute; top: 3px; width: 2px; height: 16px; background: #22d3ee; }
+.bp-outlier-dot { position: absolute; width: 6px; height: 6px; background: #f87171; border-radius: 50%; top: 50%; transform: translateY(-50%); }
+
+/* scatter */
+.scatter-wrap { position: relative; height: 120px; background: #0a0a12; border-radius: 10px; overflow: hidden; margin-bottom: 8px; }
+.sdot { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: #7c3aed; opacity: 0.65; transform: translate(-50%,-50%); }
+.sdot.out { background: #f87171; opacity: 1; width: 7px; height: 7px; }
+.trend-line { position: absolute; height: 1.5px; background: linear-gradient(90deg,#22d3ee44,#22d3ee); transform-origin: left center; }
+.scatter-label { position: absolute; font-size: 9px; font-weight: 700; }
+
+/* donut */
+.donut-wrap { display: flex; align-items: center; gap: 20px; padding: 4px 0 10px; }
+.donut-svg { flex-shrink: 0; }
+.donut-legend { display: flex; flex-direction: column; gap: 5px; flex: 1; }
+.donut-leg-item { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #94a3b8; }
+.donut-leg-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+
+/* CDF */
+.cdf-wrap { position: relative; height: 80px; margin-bottom: 8px; }
+.cdf-line { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; }
+
+/* violin placeholder */
+.violin-wrap { display: flex; gap: 10px; padding: 6px 0 10px; }
+.violin-shape { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.violin-body { width: 40px; position: relative; }
+.violin-label { font-size: 9px; color: #475569; }
+
+/* stats chips */
+.chips { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.chip { flex: 1; min-width: 60px; background: #0a0a12; border: 1px solid #1e1e2e; border-radius: 10px; padding: 7px 8px; text-align: center; }
+.chip-label { font-size: 8px; color: #475569; text-transform: uppercase; letter-spacing: 0.06em; }
+.chip-val { font-size: 13px; font-weight: 800; margin-top: 2px; }
+.cv-p { color: #a78bfa; } .cv-c { color: #22d3ee; } .cv-k { color: #f472b6; } .cv-g { color: #4ade80; }
+
+/* insight */
+.insight {
+  background: #0a0a12; border-left: 3px solid #7c3aed;
+  border-radius: 0 10px 10px 0; padding: 10px 14px;
+  font-size: 12px; color: #94a3b8; line-height: 1.65;
+}
+.insight strong { color: #c4b5fd; }
+.insight-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #7c3aed; margin-bottom: 4px; }
+
+/* ── HEATMAP ── */
+.hm-grid { display: inline-grid; gap: 3px; }
+.hm-cell { border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; cursor: default; transition: transform 0.1s; }
+.hm-cell:hover { transform: scale(1.1); z-index: 2; }
+.hm-axis-label { font-size: 9px; color: #475569; display: flex; align-items: center; justify-content: center; }
+
+/* ── MISSING DATA ── */
+.missing-hm { display: grid; gap: 2px; margin-bottom: 12px; }
+.miss-cell { border-radius: 2px; height: 4px; }
+
+/* ── CORR CHART ── */
+.corr-section { margin-bottom: 20px; }
+
+/* ── DS WORKFLOW ── */
+.wf-list { display: flex; flex-direction: column; gap: 10px; }
+.wf-item { background: #0d0d1a; border: 1px solid #1a1a2e; border-radius: 12px; padding: 16px; display: flex; gap: 14px; }
+.wf-num { width: 28px; height: 28px; border-radius: 50%; background: #1e1b4b; color: #a78bfa; font-size: 12px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.wf-num.done { background: #052e16; color: #4ade80; }
+.wf-num.active-step { background: #082f49; color: #38bdf8; animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+.wf-body { flex: 1; }
+.wf-title { font-size: 13px; font-weight: 700; color: #f1f5f9; margin-bottom: 3px; }
+.wf-desc { font-size: 11px; color: #64748b; line-height: 1.5; margin-bottom: 6px; }
+.wf-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; padding: 3px 10px; border-radius: 20px; font-weight: 600; }
+.pill-green { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+.pill-blue  { background: #082f49; color: #38bdf8; border: 1px solid #0c4a6e; }
+.pill-orange{ background: #431407; color: #fb923c; border: 1px solid #7c2d12; }
+.pill-purple{ background: #2e1065; color: #c084fc; border: 1px solid #4c1d95; }
+
+/* code block */
+.code-block { background: #030308; border: 1px solid #1a1a2e; border-radius: 8px; padding: 12px 14px; font-family: 'JetBrains Mono','Fira Code',monospace; font-size: 11px; line-height: 1.7; margin-top: 8px; overflow-x: auto; }
+.kw { color: #f472b6; } .fn { color: #60a5fa; } .st { color: #4ade80; } .cm { color: #334155; } .num { color: #fb923c; }
+
+/* ── REPORT ── */
+.report-wrap { background: #0d0d1a; border: 1px solid #1a1a2e; border-radius: 14px; overflow: hidden; }
+.report-hero { background: linear-gradient(135deg, #1e1b4b 0%, #0c2d4a 100%); padding: 24px 28px; }
+.report-hero-title { font-size: 20px; font-weight: 800; color: #f1f5f9; }
+.report-hero-meta { font-size: 11px; color: #94a3b8; margin-top: 5px; }
+.report-body { padding: 24px 28px; }
+.kpi-row { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+.kpi { flex: 1; min-width: 80px; background: #0a0a12; border: 1px solid #1e1e2e; border-radius: 12px; padding: 14px; text-align: center; }
+.kpi-val { font-size: 22px; font-weight: 900; color: #a78bfa; }
+.kpi-label { font-size: 9px; color: #475569; text-transform: uppercase; letter-spacing: 0.07em; margin-top: 3px; }
+.kpi-delta { font-size: 10px; color: #4ade80; margin-top: 3px; }
+.finding { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid #0f0f1a; }
+.finding:last-child { border-bottom: none; }
+.finding-icon { font-size: 15px; flex-shrink: 0; margin-top: 2px; }
+.finding-text { font-size: 12px; color: #94a3b8; line-height: 1.6; }
+.finding-text strong { color: #e2e8f0; }
+.rec-item { background: #0a0a12; border-left: 3px solid #22d3ee; border-radius: 0 8px 8px 0; padding: 9px 13px; font-size: 12px; color: #94a3b8; margin-bottom: 7px; line-height: 1.5; }
+.rec-item strong { color: #38bdf8; }
+.export-row { display: flex; gap: 10px; margin-top: 20px; }
+.btn-primary { flex: 1; background: linear-gradient(135deg,#7c3aed,#0284c7); color: #fff; border: none; border-radius: 10px; padding: 12px; font-size: 13px; font-weight: 700; cursor: pointer; }
+.btn-secondary { flex: 1; background: transparent; color: #a78bfa; border: 1px solid #4c1d95; border-radius: 10px; padding: 12px; font-size: 13px; font-weight: 700; cursor: pointer; }
+
+/* ── ACCESS ── */
+.access-wrap { max-width: 520px; }
+.access-card { background: #0d0d1a; border: 1px solid #1a1a2e; border-radius: 14px; overflow: hidden; margin-bottom: 20px; }
+.access-head { padding: 20px 24px; border-bottom: 1px solid #1a1a2e; }
+.access-tabs-row { display: flex; background: #0a0a12; border-radius: 10px; padding: 4px; gap: 4px; margin-top: 12px; }
+.atab { flex: 1; text-align: center; padding: 8px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.atab.on { background: #1e1b4b; color: #a78bfa; }
+.atab.off { color: #475569; }
+.access-body { padding: 20px 24px; }
+.field { margin-bottom: 14px; }
+.field-label { font-size: 10px; color: #64748b; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 5px; }
+.field-input { width: 100%; background: #0a0a12; border: 1px solid #1e1e2e; border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #475569; }
+.field-textarea { width: 100%; background: #0a0a12; border: 1px solid #1e1e2e; border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #475569; height: 64px; resize: none; }
+.submit-btn { width: 100%; background: linear-gradient(135deg,#7c3aed,#06b6d4); border: none; border-radius: 10px; padding: 13px; font-size: 13px; font-weight: 700; color: #fff; cursor: pointer; margin-top: 4px; }
+.submit-hint { font-size: 10px; color: #334155; text-align: center; margin-top: 8px; }
+
+.admin-card { background: #0d0d1a; border: 1px solid #1a1a2e; border-radius: 14px; padding: 18px; }
+.admin-row { display: flex; align-items: center; gap: 12px; background: #0a0a12; border: 1px solid #1e1e2e; border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
+.admin-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; flex-shrink: 0; }
+.admin-info { flex: 1; min-width: 0; }
+.admin-name { font-size: 13px; font-weight: 600; color: #e2e8f0; }
+.admin-detail { font-size: 10px; color: #475569; margin-top: 1px; }
+.type-pill { font-size: 9px; padding: 1px 6px; border-radius: 20px; margin-left: 5px; font-weight: 700; }
+.tp-gh { background: #082f49; color: #38bdf8; }
+.tp-em { background: #052e16; color: #4ade80; }
+.admin-action { font-size: 11px; font-weight: 600; padding: 6px 11px; border-radius: 8px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+.aa-approve { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+.aa-copy { background: #082f49; color: #38bdf8; border: 1px solid #0c4a6e; }
+
+.flow-steps { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 16px; }
+.flow-step { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; min-width: 60px; }
+.flow-icon { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 17px; }
+.flow-text { font-size: 9px; color: #64748b; text-align: center; line-height: 1.4; }
+.flow-arr { color: #1e1e2e; font-size: 16px; margin-bottom: 18px; }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<div class="top-nav">
+  <span class="nav-brand">GadaaLabs DataLab</span>
+  <div class="nav-tab active" onclick="show('distributions')">Distributions <span class="nav-badge">NEW</span></div>
+  <div class="nav-tab new" onclick="show('correlations')">Correlations <span class="nav-badge">NEW</span></div>
+  <div class="nav-tab new" onclick="show('outliers')">Outliers <span class="nav-badge">NEW</span></div>
+  <div class="nav-tab new" onclick="show('missing')">Missing Data <span class="nav-badge">NEW</span></div>
+  <div class="nav-tab gold" onclick="show('workflow')">DS Workflow</div>
+  <div class="nav-tab green" onclick="show('report')">Report</div>
+  <div class="nav-tab" onclick="show('access')">Access</div>
+</div>
+
+<!-- ══════════════ DISTRIBUTIONS ══════════════ -->
+<div class="page active" id="page-distributions">
+  <div class="section-label" style="margin-bottom:18px">Distributions — agent selects chart type per column automatically</div>
+
+  <!-- HISTOGRAM + KDE (numeric, continuous) -->
+  <div class="chart-card">
+    <div class="chart-head">
+      <div>
+        <div class="chart-title">Annual Income</div>
+        <div class="chart-sub">Numeric · 32,561 records · 0 nulls · USD estimated · <strong style="color:#7c3aed">→ Histogram + KDE</strong></div>
+      </div>
+      <span class="badge b-orange">Right-skewed</span>
+    </div>
+    <div class="histo">
+      <div class="ann-line" style="bottom:46%;border-color:#22d3ee"><span class="ann-tag" style="color:#22d3ee;right:4px">μ = $62.4K</span></div>
+      <div class="ann-line" style="bottom:57%;border-color:#f472b6"><span class="ann-tag" style="color:#f472b6;left:4px">M = $54K</span></div>
+      <div class="hbar" style="height:10%"></div>
+      <div class="hbar" style="height:22%"></div>
+      <div class="hbar" style="height:48%"></div>
+      <div class="hbar" style="height:78%"></div>
+      <div class="hbar hi" style="height:100%"></div>
+      <div class="hbar hi" style="height:90%"></div>
+      <div class="hbar" style="height:62%"></div>
+      <div class="hbar" style="height:38%"></div>
+      <div class="hbar" style="height:18%"></div>
+      <div class="hbar" style="height:7%"></div>
+    </div>
+    <div class="histo-axis"><span>$12K</span><span>$28K</span><span>$45K</span><span>$62K</span><span>$80K</span><span>$200K+</span></div>
+    <div class="chips">
+      <div class="chip"><div class="chip-label">Mean</div><div class="chip-val cv-p">$62,400</div></div>
+      <div class="chip"><div class="chip-label">Median</div><div class="chip-val cv-c">$54,000</div></div>
+      <div class="chip"><div class="chip-label">Std Dev</div><div class="chip-val cv-k">$31,200</div></div>
+      <div class="chip"><div class="chip-label">Skewness</div><div class="chip-val cv-p">+1.42</div></div>
+      <div class="chip"><div class="chip-label">Outliers</div><div class="chip-val cv-g">24</div></div>
+    </div>
+    <div class="insight-label">AI Insight</div>
+    <div class="insight"><strong>Income is strongly right-skewed (skewness = 1.42).</strong> The mean exceeds the median by 15%, dragged up by a high-earner tail — the top 5% earn more than the bottom 40% combined. Before feeding this into a linear model, apply a log transformation: <code style="color:#a78bfa">np.log1p(income)</code>. Also consider binning into brackets (&lt;$30K / $30–75K / $75K+) for classification tasks to reduce noise from outliers.</div>
+  </div>
+
+  <!-- DONUT (categorical ≤6 values) -->
+  <div class="chart-card">
+    <div class="chart-head">
+      <div>
+        <div class="chart-title">Sex</div>
+        <div class="chart-sub">Categorical · 2 unique values · 0 nulls · <strong style="color:#7c3aed">→ Donut (≤6 categories)</strong></div>
+      </div>
+      <span class="badge b-orange">Imbalanced</span>
+    </div>
+    <div class="donut-wrap">
+      <svg class="donut-svg" width="90" height="90" viewBox="0 0 90 90">
+        <circle cx="45" cy="45" r="32" fill="none" stroke="#1a1a2e" stroke-width="18"/>
+        <circle cx="45" cy="45" r="32" fill="none" stroke="#7c3aed" stroke-width="18"
+          stroke-dasharray="130 71" stroke-dashoffset="0" transform="rotate(-90 45 45)"/>
+        <circle cx="45" cy="45" r="32" fill="none" stroke="#06b6d4" stroke-width="18"
+          stroke-dasharray="71 130" stroke-dashoffset="-130" transform="rotate(-90 45 45)"/>
+        <text x="45" y="49" text-anchor="middle" fill="#a78bfa" font-size="13" font-weight="800">67%</text>
+      </svg>
+      <div class="donut-legend">
+        <div class="donut-leg-item"><div class="donut-leg-dot" style="background:#7c3aed"></div>Male — 67% (21,790)</div>
+        <div class="donut-leg-item"><div class="donut-leg-dot" style="background:#06b6d4"></div>Female — 33% (10,771)</div>
+      </div>
+    </div>
+    <div class="chips">
+      <div class="chip"><div class="chip-label">Majority</div><div class="chip-val cv-p">Male</div></div>
+      <div class="chip"><div class="chip-label">Ratio</div><div class="chip-val cv-c">2.02×</div></div>
+      <div class="chip"><div class="chip-label">Null %</div><div class="chip-val cv-g">0.0%</div></div>
+    </div>
+    <div class="insight-label">AI Insight</div>
+    <div class="insight"><strong>Sex is 2:1 imbalanced toward Male (67%).</strong> If this is a target-adjacent feature (e.g. predicting income), this imbalance will bias model predictions. Consider fairness-aware modeling techniques or at minimum report disaggregated metrics (AUC/F1 split by sex). Do not one-hot encode naively — use a single binary column <code style="color:#a78bfa">is_male</code>.</div>
+  </div>
+
+  <!-- HORIZONTAL BAR (categorical 7–20 values) -->
+  <div class="chart-card">
+    <div class="chart-head">
+      <div>
+        <div class="chart-title">Occupation</div>
+        <div class="chart-sub">Categorical · 14 unique values · 1,843 nulls (5.7%) · <strong style="color:#7c3aed">→ Horizontal Bar (7–20 categories)</strong></div>
+      </div>
+      <span class="badge b-blue">Top 7 shown</span>
+    </div>
+    <div style="padding: 4px 0 10px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;"><span style="font-size:10px;color:#94a3b8;width:110px;text-align:right;flex-shrink:0">Prof-specialty</span><div style="flex:1;height:16px;background:#0f0f1a;border-radius:3px;overflow:hidden"><div style="width:62%;height:100%;background:linear-gradient(90deg,#7c3aed,#6d28d9);display:flex;align-items:center;padding-left:6px;font-size:9px;color:#fff;font-weight:700">4,140</div></div></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;"><span style="font-size:10px;color:#94a3b8;width:110px;text-align:right;flex-shrink:0">Craft-repair</span><div style="flex:1;height:16px;background:#0f0f1a;border-radius:3px;overflow:hidden"><div style="width:60%;height:100%;background:linear-gradient(90deg,#0284c7,#0369a1);display:flex;align-items:center;padding-left:6px;font-size:9px;color:#fff;font-weight:700">4,099</div></div></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;"><span style="font-size:10px;color:#94a3b8;width:110px;text-align:right;flex-shrink:0">Exec-managerial</span><div style="flex:1;height:16px;background:#0f0f1a;border-radius:3px;overflow:hidden"><div style="width:56%;height:100%;background:linear-gradient(90deg,#0d9488,#0f766e);display:flex;align-items:center;padding-left:6px;font-size:9px;color:#fff;font-weight:700">4,066</div></div></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;"><span style="font-size:10px;color:#94a3b8;width:110px;text-align:right;flex-shrink:0">Adm-clerical</span><div style="flex:1;height:16px;background:#0f0f1a;border-radius:3px;overflow:hidden"><div style="width:52%;height:100%;background:linear-gradient(90deg,#b45309,#92400e);display:flex;align-items:center;padding-left:6px;font-size:9px;color:#fff;font-weight:700">3,770</div></div></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;"><span style="font-size:10px;color:#94a3b8;width:110px;text-align:right;flex-shrink:0">Sales</span><div style="flex:1;height:16px;background:#0f0f1a;border-radius:3px;overflow:hidden"><div style="width:40%;height:100%;background:linear-gradient(90deg,#7e22ce,#6b21a8);display:flex;align-items:center;padding-left:6px;font-size:9px;color:#fff;font-weight:700">3,650</div></div></div>
+    </div>
+    <div class="chips">
+      <div class="chip"><div class="chip-label">Top</div><div class="chip-val cv-p" style="font-size:10px">Prof-spec.</div></div>
+      <div class="chip"><div class="chip-label">Unique</div><div class="chip-val cv-c">14</div></div>
+      <div class="chip"><div class="chip-label">Null %</div><div class="chip-val cv-k">5.7%</div></div>
+      <div class="chip"><div class="chip-label">Entropy</div><div class="chip-val cv-g">3.62</div></div>
+    </div>
+    <div class="insight-label">AI Insight</div>
+    <div class="insight"><strong>5.7% missing values in Occupation</strong> — likely not random (low-income workers may have left it blank). Do not use mean/mode imputation; instead create a new category <code style="color:#a78bfa">"Unknown"</code> and treat missingness as a signal. The top 3 occupations (Prof-specialty, Craft-repair, Exec-managerial) account for 37% of the data — this column carries high predictive signal for income prediction tasks.</div>
+  </div>
+</div>
+
+<!-- ══════════════ CORRELATIONS ══════════════ -->
+<div class="page" id="page-correlations">
+  <div class="section-label" style="margin-bottom:18px">Correlations — full matrix + scatter for each significant pair</div>
+
+  <div class="chart-card">
+    <div class="chart-head">
+      <div><div class="chart-title">Correlation Matrix</div><div class="chart-sub">Pearson r — all numeric columns · hover cells for detail</div></div>
+      <span class="badge b-purple">5 columns</span>
+    </div>
+    <div style="overflow-x:auto;padding-bottom:8px;">
+    <div class="hm-grid" style="grid-template-columns: 80px repeat(5,58px); grid-template-rows: 28px repeat(5,58px);">
+      <div></div>
+      <div class="hm-axis-label" style="font-size:9px;color:#475569">age</div>
+      <div class="hm-axis-label" style="font-size:9px;color:#475569">income</div>
+      <div class="hm-axis-label" style="font-size:9px;color:#475569">hrs/wk</div>
+      <div class="hm-axis-label" style="font-size:9px;color:#475569">cap-gain</div>
+      <div class="hm-axis-label" style="font-size:9px;color:#475569">educ-num</div>
+
+      <div class="hm-axis-label" style="font-size:9px;color:#475569;justify-content:flex-end;padding-right:6px">age</div>
+      <div class="hm-cell" style="background:#4c1d95;color:#c4b5fd;width:58px;height:58px">1.00</div>
+      <div class="hm-cell" style="background:#1e3a5f;color:#7dd3fc;width:58px;height:58px">0.68</div>
+      <div class="hm-cell" style="background:#0f2d1a;color:#4ade80;width:58px;height:58px">0.31</div>
+      <div class="hm-cell" style="background:#1a2a40;color:#93c5fd;width:58px;height:58px">0.42</div>
+      <div class="hm-cell" style="background:#12241a;color:#6ee7b7;width:58px;height:58px">0.24</div>
+
+      <div class="hm-axis-label" style="font-size:9px;color:#475569;justify-content:flex-end;padding-right:6px">income</div>
+      <div class="hm-cell" style="background:#1e3a5f;color:#7dd3fc;width:58px;height:58px">0.68</div>
+      <div class="hm-cell" style="background:#4c1d95;color:#c4b5fd;width:58px;height:58px">1.00</div>
+      <div class="hm-cell" style="background:#3a1a05;color:#fb923c;width:58px;height:58px">−0.12</div>
+      <div class="hm-cell" style="background:#1a3a1a;color:#86efac;width:58px;height:58px">0.51</div>
+      <div class="hm-cell" style="background:#1e3a5f;color:#7dd3fc;width:58px;height:58px">0.64</div>
+
+      <div class="hm-axis-label" style="font-size:9px;color:#475569;justify-content:flex-end;padding-right:6px">hrs/wk</div>
+      <div class="hm-cell" style="background:#0f2d1a;color:#4ade80;width:58px;height:58px">0.31</div>
+      <div class="hm-cell" style="background:#3a1a05;color:#fb923c;width:58px;height:58px">−0.12</div>
+      <div class="hm-cell" style="background:#4c1d95;color:#c4b5fd;width:58px;height:58px">1.00</div>
+      <div class="hm-cell" style="background:#4a0b0b;color:#f87171;width:58px;height:58px">−0.48</div>
+      <div class="hm-cell" style="background:#0f0f0f;color:#64748b;width:58px;height:58px">0.05</div>
+
+      <div class="hm-axis-label" style="font-size:9px;color:#475569;justify-content:flex-end;padding-right:6px">cap-gain</div>
+      <div class="hm-cell" style="background:#1a2a40;color:#93c5fd;width:58px;height:58px">0.42</div>
+      <div class="hm-cell" style="background:#1a3a1a;color:#86efac;width:58px;height:58px">0.51</div>
+      <div class="hm-cell" style="background:#4a0b0b;color:#f87171;width:58px;height:58px">−0.48</div>
+      <div class="hm-cell" style="background:#4c1d95;color:#c4b5fd;width:58px;height:58px">1.00</div>
+      <div class="hm-cell" style="background:#12241a;color:#6ee7b7;width:58px;height:58px">0.21</div>
+
+      <div class="hm-axis-label" style="font-size:9px;color:#475569;justify-content:flex-end;padding-right:6px">educ-num</div>
+      <div class="hm-cell" style="background:#12241a;color:#6ee7b7;width:58px;height:58px">0.24</div>
+      <div class="hm-cell" style="background:#1e3a5f;color:#7dd3fc;width:58px;height:58px">0.64</div>
+      <div class="hm-cell" style="background:#0f0f0f;color:#64748b;width:58px;height:58px">0.05</div>
+      <div class="hm-cell" style="background:#12241a;color:#6ee7b7;width:58px;height:58px">0.21</div>
+      <div class="hm-cell" style="background:#4c1d95;color:#c4b5fd;width:58px;height:58px">1.00</div>
+    </div>
+    </div>
+    <div style="display:flex;gap:14px;font-size:10px;margin-top:10px;flex-wrap:wrap;">
+      <span style="color:#c4b5fd">■ Strong +ve</span><span style="color:#7dd3fc">■ Moderate +ve</span><span style="color:#4ade80">■ Weak +ve</span><span style="color:#fb923c">■ Weak −ve</span><span style="color:#f87171">■ Moderate −ve</span>
+    </div>
+    <div class="insight-label" style="margin-top:14px">AI Insight</div>
+    <div class="insight"><strong>Two strong positive correlations stand out:</strong> age↔income (r=0.68) and education-num↔income (r=0.64) — both are expected signals and are the two strongest predictors for income classification. The cap-gain↔hrs/week negative correlation (r=−0.48) is surprising: high-capital-gain individuals work fewer hours, suggesting passive/investment income rather than labor income. This multicollinearity between age, income, and education-num may inflate standard errors in logistic regression — consider PCA or VIF pruning before fitting linear models.</div>
+  </div>
+
+  <!-- Scatter pair -->
+  <div class="chart-card">
+    <div class="chart-head">
+      <div><div class="chart-title">Age vs. Annual Income</div><div class="chart-sub">Scatter — strongest numeric pair · r = 0.68 · <strong style="color:#7c3aed">→ Scatter Plot</strong></div></div>
+      <span class="badge b-green">p &lt; 0.001</span>
+    </div>
+    <div class="scatter-wrap">
+      <div class="trend-line" style="left:5%;bottom:18%;width:90%;transform:rotate(-22deg)"></div>
+      <div class="sdot" style="left:10%;top:80%"></div><div class="sdot" style="left:14%;top:75%"></div><div class="sdot" style="left:18%;top:70%"></div><div class="sdot" style="left:22%;top:65%"></div><div class="sdot" style="left:26%;top:72%"></div>
+      <div class="sdot" style="left:30%;top:60%"></div><div class="sdot" style="left:34%;top:55%"></div><div class="sdot" style="left:38%;top:58%"></div><div class="sdot" style="left:42%;top:50%"></div><div class="sdot" style="left:46%;top:48%"></div>
+      <div class="sdot" style="left:50%;top:45%"></div><div class="sdot" style="left:54%;top:40%"></div><div class="sdot" style="left:58%;top:38%"></div><div class="sdot" style="left:62%;top:35%"></div><div class="sdot" style="left:66%;top:30%"></div>
+      <div class="sdot" style="left:70%;top:28%"></div><div class="sdot" style="left:74%;top:25%"></div><div class="sdot" style="left:78%;top:32%"></div>
+      <div class="sdot out" style="left:88%;top:8%"></div><div class="sdot out" style="left:92%;top:6%"></div><div class="sdot out" style="left:85%;top:12%"></div>
+      <div class="scatter-label" style="bottom:4px;left:8px;color:#22d3ee">r = 0.68 · p &lt; 0.001</div>
+      <div class="scatter-label" style="top:4px;right:8px;color:#f87171;font-size:8px">● 3 outliers</div>
+    </div>
+    <div class="chips">
+      <div class="chip"><div class="chip-label">Pearson r</div><div class="chip-val cv-c">0.68</div></div>
+      <div class="chip"><div class="chip-label">R²</div><div class="chip-val cv-p">0.46</div></div>
+      <div class="chip"><div class="chip-label">p-value</div><div class="chip-val cv-g">&lt;0.001</div></div>
+      <div class="chip"><div class="chip-label">Outliers</div><div class="chip-val cv-k">3</div></div>
+    </div>
+    <div class="insight-label">AI Insight</div>
+    <div class="insight"><strong>Age explains 46% of income variance (R²=0.46)</strong>, making it the single most predictive numeric feature in this dataset. The relationship is linear through ages 25–55 but flattens and reverses slightly after 60, suggesting retirement income patterns. The 3 high-income outliers (age &gt;75, income &gt;$180K) may represent data errors or active executives — flag for human review before modeling.</div>
+  </div>
+</div>
+
+<!-- ══════════════ OUTLIERS ══════════════ -->
+<div class="page" id="page-outliers">
+  <div class="section-label" style="margin-bottom:18px">Outlier Detection — box plots with IQR fences per numeric column</div>
+
+  <div class="chart-card">
+    <div class="chart-head">
+      <div><div class="chart-title">Box Plots — All Numeric Columns</div><div class="chart-sub">IQR method · whiskers at 1.5× IQR · red dots = outliers · <strong style="color:#7c3aed">→ Box Plot (outlier-heavy)</strong></div></div>
+      <span class="badge b-pink">24 total outliers</span>
+    </div>
+    <div class="boxplot-wrap">
+      <div class="bp-row">
+        <span class="bp-col-name">age</span>
+        <div class="bp-track">
+          <div class="bp-whisker-line" style="left:5%;width:18%"></div>
+          <div class="bp-box" style="left:23%;width:38%"><div class="bp-median-line" style="left:40%"></div></div>
+          <div class="bp-whisker-line" style="left:61%;width:20%"></div>
+          <div class="bp-outlier-dot" style="left:85%"></div>
+          <div class="bp-outlier-dot" style="left:90%"></div>
+          <div class="bp-outlier-dot" style="left:95%"></div>
+        </div>
+        <span style="font-size:9px;color:#475569;width:60px">3 outliers</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:0 0 10px 78px;font-size:8px;color:#334155"><span>18</span><span>Q1=26</span><span>M=33</span><span>Q3=44</span><span>65</span></div>
+
+      <div class="bp-row">
+        <span class="bp-col-name">capital-gain</span>
+        <div class="bp-track">
+          <div class="bp-whisker-line" style="left:2%;width:3%"></div>
+          <div class="bp-box" style="left:5%;width:8%"><div class="bp-median-line" style="left:10%"></div></div>
+          <div class="bp-whisker-line" style="left:13%;width:5%"></div>
+          <div class="bp-outlier-dot" style="left:35%"></div><div class="bp-outlier-dot" style="left:45%"></div><div class="bp-outlier-dot" style="left:55%"></div><div class="bp-outlier-dot" style="left:65%"></div><div class="bp-outlier-dot" style="left:72%"></div><div class="bp-outlier-dot" style="left:80%"></div><div class="bp-outlier-dot" style="left:87%"></div><div class="bp-outlier-dot" style="left:92%"></div>
+        </div>
+        <span style="font-size:9px;color:#f87171;width:60px;font-weight:700">21 outliers</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:0 0 10px 78px;font-size:8px;color:#334155"><span>$0</span><span>Q1=$0</span><span>M=$0</span><span>Q3=$0</span><span>$99K</span></div>
+
+      <div class="bp-row">
+        <span class="bp-col-name">hrs-per-week</span>
+        <div class="bp-track">
+          <div class="bp-whisker-line" style="left:8%;width:15%"></div>
+          <div class="bp-box" style="left:23%;width:34%"><div class="bp-median-line" style="left:42%"></div></div>
+          <div class="bp-whisker-line" style="left:57%;width:22%"></div>
+        </div>
+        <span style="font-size:9px;color:#4ade80;width:60px">0 outliers</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:0 0 6px 78px;font-size:8px;color:#334155"><span>1</span><span>Q1=40</span><span>M=40</span><span>Q3=45</span><span>99</span></div>
+    </div>
+    <div class="insight-label">AI Insight</div>
+    <div class="insight"><strong>capital-gain is severely right-tailed with 21 outliers</strong> — its median is literally $0 (most people have no capital gains), yet the column has extreme values up to $99,999. This near-zero distribution with a heavy tail means standard scaling will compress 95% of values into a tiny range. Recommended: binarize into <code style="color:#a78bfa">has_capital_gain (0/1)</code> + a separate <code style="color:#a78bfa">log_capital_gain</code> feature. The 3 age outliers (ages 82–90) appear genuine and should be kept but capped at 80 for modeling purposes.</div>
+  </div>
+</div>
+
+<!-- ══════════════ MISSING DATA ══════════════ -->
+<div class="page" id="page-missing">
+  <div class="section-label" style="margin-bottom:18px">Missing Data — pattern analysis and imputation strategy</div>
+  <div class="chart-card">
+    <div class="chart-head">
+      <div><div class="chart-title">Missingness by Column</div><div class="chart-sub">Null % per column · sorted descending · 200-row sample heatmap</div></div>
+      <span class="badge b-orange">3 columns affected</span>
+    </div>
+    <div style="padding:4px 0 12px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:10px;color:#f87171;width:100px;text-align:right">occupation</span><div style="flex:1;height:14px;background:#0f0f1a;border-radius:3px;overflow:hidden"><div style="width:5.7%;height:100%;background:#ef4444"></div></div><span style="font-size:10px;color:#f87171;font-weight:700;width:40px">5.7%</span></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:10px;color:#fb923c;width:100px;text-align:right">workclass</span><div style="flex:1;height:14px;background:#0f0f1a;border-radius:3px;overflow:hidden"><div style="width:5.6%;height:100%;background:#f97316"></div></div><span style="font-size:10px;color:#fb923c;font-weight:700;width:40px">5.6%</span></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:10px;color:#fbbf24;width:100px;text-align:right">native-country</span><div style="flex:1;height:14px;background:#0f0f1a;border-radius:3px;overflow:hidden"><div style="width:1.8%;height:100%;background:#eab308"></div></div><span style="font-size:10px;color:#fbbf24;font-weight:700;width:40px">1.8%</span></div>
+      <div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;color:#4ade80;width:100px;text-align:right">all others</span><div style="flex:1;height:14px;background:#0f0f1a;border-radius:3px;overflow:hidden"><div style="width:0%;height:100%;background:#22c55e"></div></div><span style="font-size:10px;color:#4ade80;font-weight:700;width:40px">0.0%</span></div>
+    </div>
+    <div style="font-size:10px;color:#64748b;margin-bottom:8px;font-weight:600">Row-level co-occurrence (sample of 80 rows shown):</div>
+    <div class="missing-hm" style="grid-template-columns:repeat(80,1fr);">
+      <!-- 80 sample rows, 3 cols: occupation, workclass, native-country -->
+      <!-- Generate visual pattern showing correlated missingness -->
+      <script>
+      (function(){
+        const c=document.currentScript.parentElement;
+        const colors=['#ef4444','#f97316','#eab308'];
+        const labels=['occ','work','nat'];
+        // Build header
+        const header=document.createElement('div');
+        header.style.cssText='grid-column:1/-1;display:flex;gap:8px;margin-bottom:4px;';
+        colors.forEach((col,i)=>{
+          const s=document.createElement('span');
+          s.style.cssText=`font-size:9px;color:${col};display:flex;align-items:center;gap:3px`;
+          s.innerHTML=`<span style="width:8px;height:8px;background:${col};border-radius:2px;display:inline-block"></span>${labels[i]}`;
+          header.appendChild(s);
+        });
+        c.before(header);
+        // rows
+        for(let col=0;col<3;col++){
+          const row=document.createElement('div');
+          row.style.cssText='display:contents';
+          for(let r=0;r<80;r++){
+            const cell=document.createElement('div');
+            const missing=(col<2&&r%18===0)||(col===0&&r%17===1)||(col===2&&r%55===0);
+            cell.style.cssText=`height:6px;background:${missing?colors[col]:'#1a1a2e'};border-radius:1px;`;
+            c.appendChild(cell);
+          }
+        }
+      })();
+      </script>
+    </div>
+    <div class="insight-label" style="margin-top:8px">AI Insight</div>
+    <div class="insight"><strong>Occupation and workclass have almost identical missingness (5.7% vs 5.6%)</strong>, and co-occur in 94% of the same rows — these two columns are missing together, likely because self-employed individuals didn't have a formal occupation/workclass to report. This is <em>Missing Not At Random (MNAR)</em> — imputing with mode would introduce false signal. Best strategy: create a joint <code style="color:#a78bfa">is_self_employed</code> flag from the missingness pattern, then impute with a new category <code style="color:#a78bfa">"Self-Employed"</code>.</div>
+  </div>
+</div>
+
+<!-- ══════════════ DS WORKFLOW ══════════════ -->
+<div class="page" id="page-workflow">
+  <div class="section-label" style="margin-bottom:18px">End-to-End Data Science Workflow — AI-guided, fully generated</div>
+  <div class="wf-list">
+    <div class="wf-item"><div class="wf-num done">✓</div><div class="wf-body"><div class="wf-title">1 · Data Quality Assessment</div><div class="wf-desc">Nulls, duplicates, type mismatches, constant columns, high-cardinality flags. Overall health scored 0–100.</div><span class="wf-pill pill-green">Score: 84/100 · 3 issues flagged</span></div></div>
+    <div class="wf-item"><div class="wf-num done">✓</div><div class="wf-body"><div class="wf-title">2 · Preprocessing Recommendations</div><div class="wf-desc">Per-column imputation strategy, scaling choice, encoding method. Generated as a runnable sklearn Pipeline.</div>
+    <div class="code-block"><span class="cm"># Generated by DataLab Feature Engineer</span><br><span class="kw">from</span> sklearn.pipeline <span class="kw">import</span> Pipeline<br><span class="kw">from</span> sklearn.preprocessing <span class="kw">import</span> StandardScaler, OrdinalEncoder<br><span class="kw">from</span> sklearn.impute <span class="kw">import</span> SimpleImputer<br><br>numeric_pipe = Pipeline([<br>&nbsp;&nbsp;(<span class="st">'impute'</span>, SimpleImputer(strategy=<span class="st">'median'</span>)),<br>&nbsp;&nbsp;(<span class="st">'scale'</span>, StandardScaler())<br>])<br>cat_pipe = Pipeline([<br>&nbsp;&nbsp;(<span class="st">'impute'</span>, SimpleImputer(strategy=<span class="st">'constant'</span>, fill_value=<span class="st">'Unknown'</span>)),<br>&nbsp;&nbsp;(<span class="st">'encode'</span>, OrdinalEncoder())<br>])</div>
+    </div></div>
+    <div class="wf-item"><div class="wf-num done">✓</div><div class="wf-body"><div class="wf-title">3 · Feature Engineering</div><div class="wf-desc">Suggested derived features with signal strength estimates and one-click code generation.</div><span class="wf-pill pill-blue" style="margin-right:6px">8 suggestions</span><span class="wf-pill pill-purple">3 high-impact</span></div></div>
+    <div class="wf-item"><div class="wf-num active-step">4</div><div class="wf-body"><div class="wf-title">4 · Target Variable Analysis</div><div class="wf-desc">Select your prediction target — agent determines task type, checks class imbalance, recommends evaluation metrics.</div><div style="margin-top:8px;display:flex;gap:8px;align-items:center"><div style="background:#0a0a12;border:1px solid #1e1e2e;border-radius:8px;padding:8px 14px;font-size:12px;color:#475569;flex:1">Select target column…</div><div style="font-size:12px;font-weight:700;color:#a78bfa;padding:8px 14px;background:#1e1b4b;border-radius:8px;cursor:pointer">Analyze →</div></div></div></div>
+    <div class="wf-item" style="opacity:0.4"><div class="wf-num">5</div><div class="wf-body"><div class="wf-title">5 · Model Selection</div><div class="wf-desc">Top 3 recommended algorithms with reasoning, complexity vs. performance trade-off matrix.</div></div></div>
+    <div class="wf-item" style="opacity:0.4"><div class="wf-num">6</div><div class="wf-body"><div class="wf-title">6 · Ready-to-Run Notebook</div><div class="wf-desc">Complete .ipynb — loading → EDA → preprocessing → training → evaluation → export. Download or open in Code tab.</div></div></div>
+  </div>
+</div>
+
+<!-- ══════════════ REPORT ══════════════ -->
+<div class="page" id="page-report">
+  <div class="section-label" style="margin-bottom:18px">Stakeholder Report — auto-generated, export-ready</div>
+  <div class="report-wrap">
+    <div class="report-hero">
+      <div class="report-title">Executive Data Analysis Report</div>
+      <div class="report-meta">adult_census.csv · 32,561 rows · 15 features · Generated 2026-04-03 · GadaaLabs DataLab</div>
+    </div>
+    <div class="report-body">
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px">Dataset at a Glance</div>
+      <div class="kpi-row">
+        <div class="kpi"><div class="kpi-val">32,561</div><div class="kpi-label">Records</div><div class="kpi-delta">✓ Complete</div></div>
+        <div class="kpi"><div class="kpi-val">15</div><div class="kpi-label">Features</div></div>
+        <div class="kpi"><div class="kpi-val" style="color:#4ade80">84</div><div class="kpi-label">Quality</div><div class="kpi-delta">Good</div></div>
+        <div class="kpi"><div class="kpi-val">7</div><div class="kpi-label">Insights</div></div>
+        <div class="kpi"><div class="kpi-val" style="color:#f87171">3</div><div class="kpi-label">Issues</div><div class="kpi-delta" style="color:#f87171">Review</div></div>
+      </div>
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px">Key Findings</div>
+      <div class="finding"><div class="finding-icon">📌</div><div class="finding-text"><strong>Income skews heavily right.</strong> The mean ($62.4K) exceeds the median ($54K) by 15%, driven by a high-earner tail. Log-transform recommended before regression modeling.</div></div>
+      <div class="finding"><div class="finding-icon">⚖️</div><div class="finding-text"><strong>Class imbalance: 73% earn &lt;$50K, 27% earn ≥$50K.</strong> Any classifier will need SMOTE or class_weight="balanced" to avoid predicting the majority class by default (naive accuracy 73% = useless baseline).</div></div>
+      <div class="finding"><div class="finding-icon">🔗</div><div class="finding-text"><strong>Age and education are the top two predictors</strong> of income (r = 0.68 and 0.64 respectively). However they're also correlated with each other (r = 0.24), so check VIF before using both in linear models.</div></div>
+      <div class="finding"><div class="finding-icon">🚨</div><div class="finding-text"><strong>capital-gain has 21 outliers and a near-zero median.</strong> 95% of rows have $0 capital gain. Split into a binary flag + log-transformed value for best signal extraction.</div></div>
+      <div class="finding"><div class="finding-icon">⚠️</div><div class="finding-text"><strong>occupation and workclass are co-missing (MNAR).</strong> Missing together in 94% of cases — impute as "Self-Employed" category, not mode. Creating an <code style="color:#a78bfa">is_self_employed</code> feature from this pattern may add signal.</div></div>
+
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;margin-top:18px;margin-bottom:10px">Recommendations</div>
+      <div class="rec-item"><strong>1.</strong> Log-transform <code style="color:#a78bfa">income</code> and <code style="color:#a78bfa">capital-gain</code>, binarize capital-gain into <code style="color:#a78bfa">has_capital_gain</code>. Expected improvement: ~4% AUC.</div>
+      <div class="rec-item"><strong>2.</strong> Use <code style="color:#a78bfa">education-num</code> (ordinal) and drop <code style="color:#a78bfa">education</code> (redundant string version). Reduces dimensionality with zero information loss.</div>
+      <div class="rec-item"><strong>3.</strong> Start with <strong>XGBoost</strong> — dataset size (32K), mixed feature types, class imbalance, and presence of outliers all favor tree-based ensembles. Expected baseline AUC: 0.87–0.91.</div>
+      <div class="export-row">
+        <button class="btn-primary">⬇ Export PDF Report</button>
+        <button class="btn-secondary">📋 Copy Markdown</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ ACCESS ══════════════ -->
+<div class="page" id="page-access">
+  <div class="section-label" style="margin-bottom:18px">Access Request — GitHub or Email</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start;">
+    <div>
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px">User sees (denied page)</div>
+      <div class="access-card">
+        <div class="access-head">
+          <div style="font-size:16px;font-weight:800;color:#f1f5f9">Request DataLab Access</div>
+          <div style="font-size:12px;color:#64748b;margin-top:3px">Get access in under 24 hours</div>
+          <div class="access-tabs-row">
+            <div class="atab off">GitHub Account</div>
+            <div class="atab on">Email Request</div>
+          </div>
+        </div>
+        <div class="access-body">
+          <div class="field"><div class="field-label">Full Name</div><div class="field-input" style="line-height:2">Jane Smith</div></div>
+          <div class="field"><div class="field-label">Email Address</div><div class="field-input" style="line-height:2">jane@company.com</div></div>
+          <div class="field"><div class="field-label">Why do you need access? (optional)</div><div class="field-textarea">Q2 sales data analysis for board report...</div></div>
+          <button class="submit-btn">Request Access →</button>
+          <div class="submit-hint">No account required · Reviewed within 24h</div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px">Admin sees (dashboard)</div>
+      <div class="admin-card">
+        <div style="font-size:13px;font-weight:700;color:#f1f5f9;margin-bottom:12px">Pending Requests</div>
+        <div class="admin-row">
+          <div class="admin-avatar" style="background:#1e1b4b;color:#a78bfa">S</div>
+          <div class="admin-info">
+            <div class="admin-name">seif_dev <span class="type-pill tp-gh">GitHub</span></div>
+            <div class="admin-detail">ID: 8842901 · 2h ago</div>
+          </div>
+          <button class="admin-action aa-approve">Approve</button>
+        </div>
+        <div class="admin-row">
+          <div class="admin-avatar" style="background:#052e16;color:#4ade80">J</div>
+          <div class="admin-info">
+            <div class="admin-name">Jane Smith <span class="type-pill tp-em">Email</span></div>
+            <div class="admin-detail">jane@company.com · 5h ago · "Q2 board report"</div>
+          </div>
+          <button class="admin-action aa-copy">Copy Link</button>
+        </div>
+      </div>
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;margin-top:18px;margin-bottom:8px">Magic Link Flow</div>
+      <div class="flow-steps">
+        <div class="flow-step"><div class="flow-icon" style="background:#1e1b4b">📝</div><div class="flow-text">User fills form</div></div>
+        <div class="flow-arr">›</div>
+        <div class="flow-step"><div class="flow-icon" style="background:#0c2d4a">🔔</div><div class="flow-text">Admin notified</div></div>
+        <div class="flow-arr">›</div>
+        <div class="flow-step"><div class="flow-icon" style="background:#0c3d1a">🔗</div><div class="flow-text">Copy magic link</div></div>
+        <div class="flow-arr">›</div>
+        <div class="flow-step"><div class="flow-icon" style="background:#1a0c3d">📧</div><div class="flow-text">Email to user</div></div>
+        <div class="flow-arr">›</div>
+        <div class="flow-step"><div class="flow-icon" style="background:#0c3d1a">✅</div><div class="flow-text">7-day access</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function show(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>

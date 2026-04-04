@@ -1,14 +1,8 @@
-import { createGroq } from "@ai-sdk/groq";
-import { streamText } from "ai";
 import { headers } from "next/headers";
 import { checkRateLimit } from "@/lib/rate-limit";
-
-const groq = createGroq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+import { streamWithFallback } from "@/lib/ai-with-fallback";
 
 export async function POST(req: Request) {
-  // Rate limiting
   const headersList = await headers();
   const ip =
     headersList.get("x-forwarded-for")?.split(",")[0].trim() ??
@@ -32,8 +26,7 @@ export async function POST(req: Request) {
     });
   }
 
-  const result = streamText({
-    model: groq("llama-3.3-70b-versatile"),
+  const response = await streamWithFallback({
     system:
       system ??
       "You are a helpful AI engineering tutor at GadaaLabs. Give concise, accurate, technically precise answers. Use code examples when relevant.",
@@ -41,9 +34,6 @@ export async function POST(req: Request) {
     temperature: 0.7,
   });
 
-  return result.toTextStreamResponse({
-    headers: {
-      "X-RateLimit-Remaining": String(remaining),
-    },
-  });
+  response.headers.set("X-RateLimit-Remaining", String(remaining));
+  return response;
 }
