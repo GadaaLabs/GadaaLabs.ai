@@ -34,6 +34,20 @@ export interface TimeSeriesData {
   points: { period: string; count: number }[];
 }
 
+export interface CleaningAction {
+  column: string;
+  action: "drop_column" | "impute_mean" | "impute_median" | "impute_mode" | "drop_rows";
+  reason: string;
+  count: number; // rows imputed / rows dropped (0 for column drops)
+}
+
+export interface CleaningReport {
+  actions: CleaningAction[];
+  originalColumns: number;
+  originalRows: number;
+  droppedRows: number;
+}
+
 export interface DatasetSummary {
   fileName: string;
   fileSizeKB: number;
@@ -46,6 +60,8 @@ export interface DatasetSummary {
   detectedTarget: string | null;         // heuristically detected target column
   timeSeries: TimeSeriesData[];          // monthly counts for datetime columns
   sampleRows: Record<string, number>[]; // up to 300 rows, numeric cols only (scatter)
+  // Preprocessing audit trail
+  cleaningReport?: CleaningReport;
   // Optional fields used by origin components (not computed by default)
   recommendedPairs?: { col1: string; col2: string; r: number }[];
   missingnessPattern?: { rowIndex: number; colsWithNull: string[] }[];
@@ -386,6 +402,140 @@ export function normalizeXmlToRows(xmlString: string): Record<string, unknown>[]
   } catch {
     return [{ raw: xmlString.slice(0, 500) }];
   }
+}
+
+// ─── Auto-preprocessing ───────────────────────────────────────────────────────
+//
+// Runs before computeStats so every downstream tab (EDA, agent, ML) sees
+// clean data automatically. A principal data scientist doesn't ask permission
+// to drop a 100%-null column.
+//
+// Rules applied in order:
+//   1. Drop blank rows (every cell null / empty / whitespace)
+//   2. Drop columns: 100% null, constant (unique ≤ 1), or >80% missing
+//   3. Impute numerics: median if |Pearson skew| > 0.75, else mean
+//   4. Impute categoricals/booleans: mode (most frequent value)
+
+function isBlank(v: unknown): boolean {
+  return v === null || v === undefined || String(v).trim() === "";
+}
+
+export function preprocessAndCompute(
+  rows: Row[],
+  fileName: string,
+  sizeKB: number
+): { summary: DatasetSummary; cleanedRows: Row[] } {
+  if (rows.length === 0) {
+    return { cleanedRows: [], summary: computeStats([], fileName, sizeKB) };
+  }
+
+  const actions: CleaningAction[] = [];
+  const originalRows = rows.length;
+  const originalColumns = Object.keys(rows[0]).length;
+
+  // ── Step 1: Drop fully blank rows ────────────────────────────────────────────
+  let working = rows.filter(row => {
+    const vals = Object.values(row);
+    return !vals.every(isBlank);
+  });
+  const droppedRows = originalRows - working.length;
+  if (droppedRows > 0) {
+    actions.push({ column: "(rows)", action: "drop_rows", reason: "all cells null/empty", count: droppedRows });
+  }
+
+  // ── Step 2: Identify columns to drop ─────────────────────────────────────────
+  const allCols = Object.keys(rows[0]);
+  const n = working.length || 1;
+  const colsToDrop = new Set<string>();
+
+  for (const col of allCols) {
+    const vals = working.map(r => r[col]);
+    const nonNull = vals.filter(v => !isBlank(v));
+    const nullRate = 1 - nonNull.length / n;
+    const unique = new Set(nonNull.map(String)).size;
+
+    if (nullRate >= 1.0) {
+      colsToDrop.add(col);
+      actions.push({ column: col, action: "drop_column", reason: "100% null — no data", count: 0 });
+    } else if (unique <= 1) {
+      colsToDrop.add(col);
+      const val = nonNull.length > 0 ? `"${String(nonNull[0])}"` : "empty";
+      actions.push({ column: col, action: "drop_column", reason: `constant value ${val} — zero variance`, count: 0 });
+    } else if (nullRate > 0.8) {
+      colsToDrop.add(col);
+      actions.push({ column: col, action: "drop_column", reason: `${(nullRate * 100).toFixed(0)}% missing — imputing >80% fabricates data`, count: 0 });
+    }
+  }
+
+  // Remove dropped columns from every row
+  if (colsToDrop.size > 0) {
+    working = working.map(row => {
+      const r = { ...row };
+      for (const col of colsToDrop) delete r[col];
+      return r;
+    });
+  }
+
+  // ── Step 3 & 4: Impute remaining missing values ───────────────────────────────
+  const remainingCols = allCols.filter(c => !colsToDrop.has(c));
+
+  for (const col of remainingCols) {
+    const vals = working.map(r => r[col]);
+    const nonNull = vals.filter(v => !isBlank(v));
+    const nullCount = vals.length - nonNull.length;
+    if (nullCount === 0) continue; // nothing to impute
+
+    // Detect numeric
+    const numericVals = nonNull.map(v => parseFloat(String(v))).filter(isFinite);
+    const isNumeric = numericVals.length / nonNull.length > 0.9 && numericVals.length > 0;
+
+    let fillValue: unknown;
+    let actionType: CleaningAction["action"];
+    let reason: string;
+
+    if (isNumeric) {
+      const sorted = [...numericVals].sort((a, b) => a - b);
+      const mean = sorted.reduce((a, b) => a + b, 0) / sorted.length;
+      const idx = (sorted.length - 1) / 2;
+      const median = sorted[Math.floor(idx)] + (sorted[Math.ceil(idx)] - sorted[Math.floor(idx)]) * (idx - Math.floor(idx));
+      const std = Math.sqrt(sorted.reduce((a, b) => a + (b - mean) ** 2, 0) / sorted.length);
+      const skewness = std > 0 ? (mean - median) / std : 0;
+
+      if (Math.abs(skewness) > 0.75) {
+        fillValue = Math.round(median * 1000) / 1000;
+        actionType = "impute_median";
+        reason = `skew=${skewness.toFixed(2)} — median is more robust`;
+      } else {
+        fillValue = Math.round(mean * 1000) / 1000;
+        actionType = "impute_mean";
+        reason = `approx. normal (skew=${skewness.toFixed(2)}) — mean used`;
+      }
+    } else {
+      // Categorical / boolean / datetime → mode
+      const freq = new Map<string, number>();
+      for (const v of nonNull) {
+        const k = String(v);
+        freq.set(k, (freq.get(k) ?? 0) + 1);
+      }
+      const sorted = [...freq.entries()].sort((a, b) => b[1] - a[1]);
+      fillValue = sorted[0]?.[0] ?? "";
+      actionType = "impute_mode";
+      reason = `categorical — mode "${fillValue}" (${sorted[0]?.[1]} occurrences)`;
+    }
+
+    working = working.map(row => {
+      if (!isBlank(row[col])) return row;
+      return { ...row, [col]: fillValue };
+    });
+
+    actions.push({ column: col, action: actionType, reason, count: nullCount });
+  }
+
+  // ── Build summary with cleaning report ───────────────────────────────────────
+  const summary = computeStats(working, fileName, sizeKB);
+  summary.cleaningReport = { actions, originalColumns, originalRows, droppedRows };
+
+  return { summary, cleanedRows: working };
 }
 
 // ─── Summary → prompt text for AI ────────────────────────────────────────────

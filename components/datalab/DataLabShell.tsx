@@ -18,7 +18,7 @@ import { ClusterAnalysisTab } from "./ClusterAnalysisTab";
 import { PivotTab } from "./PivotTab";
 import { AnomalyDetectionTab } from "./AnomalyDetectionTab";
 import { DataQualityTab } from "./DataQualityTab";
-import { computeStats, summaryToPrompt, type DatasetSummary } from "@/lib/datalab";
+import { preprocessAndCompute, summaryToPrompt, type DatasetSummary } from "@/lib/datalab";
 import {
   BarChart2, Brain, MessageSquare, AlertCircle, Loader2, Send,
   RotateCcw, CheckCircle2, Zap, TrendingUp, Cpu,
@@ -140,11 +140,11 @@ export function DataLabShell() {
     setParsing(true);
     setError(null);
     setTimeout(() => {
-      const s = computeStats(newRows, fileName, sizeKB);
+      const { summary: s, cleanedRows } = preprocessAndCompute(newRows, fileName, sizeKB);
       setSummary(s);
       summaryRef.current = s;
-      setRawRows(newRows);
-      setActiveRows(newRows);
+      setRawRows(cleanedRows);
+      setActiveRows(cleanedRows);
       setMessages([]);
       setAgentOutputs(null);
       setTab("overview");
