@@ -1,7 +1,11 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { Download, FileText, Lock } from "lucide-react";
 import type { DatasetSummary } from "@/lib/datalab";
+
+// Completely isolated — no static import of @react-pdf/renderer in this module graph
+const TechReportPDFButton = dynamic(() => import("./TechReportPDFButton"), { ssr: false });
 
 const PHASE_META: { id: string; label: string; color: string }[] = [
   { id: "triage",      label: "Phase 1 — Triage",                color: "#f59e0b" },
@@ -101,13 +105,16 @@ export function TechReport({ outputs, summary }: Props) {
             </p>
           </div>
         </div>
-        <button
-          onClick={() => downloadMd(md, `${summary.fileName.replace(/\.[^.]+$/, "")}_technical_report.md`)}
-          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all hover:-translate-y-0.5"
-          style={{ background: "rgba(124,58,237,0.12)", border: "1px solid rgba(124,58,237,0.35)", color: "var(--color-purple-400)" }}>
-          <Download className="h-4 w-4" />
-          Download .md
-        </button>
+        <div className="flex items-center gap-2">
+          <TechReportPDFButton outputs={outputs} summary={summary} />
+          <button
+            onClick={() => downloadMd(md, `${summary.fileName.replace(/\.[^.]+$/, "")}_technical_report.md`)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold"
+            style={{ background: "var(--color-bg-elevated)", border: "1px solid var(--color-border-default)", color: "var(--color-text-muted)" }}>
+            <Download className="h-3.5 w-3.5" />
+            .md
+          </button>
+        </div>
       </div>
 
       {/* Schema */}

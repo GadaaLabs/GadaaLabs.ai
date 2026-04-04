@@ -1,8 +1,11 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useState, useCallback } from "react";
 import { Download, Lock, Loader2, Users, Zap, RotateCcw } from "lucide-react";
 import type { DatasetSummary } from "@/lib/datalab";
+
+const StakeholderReportPDFButton = dynamic(() => import("./StakeholderReportPDFButton"), { ssr: false });
 
 function downloadMd(content: string, fileName: string) {
   const blob = new Blob([content], { type: "text/markdown" });
@@ -127,11 +130,12 @@ export function StakeholderReport({ outputs, summary }: Props) {
                 style={{ background: "var(--color-bg-elevated)", border: "1px solid var(--color-border-default)", color: "var(--color-text-muted)" }}>
                 <RotateCcw className="h-3.5 w-3.5" /> Regenerate
               </button>
+              <StakeholderReportPDFButton report={report} summary={summary} />
               <button
                 onClick={() => downloadMd(report, `${summary.fileName.replace(/\.[^.]+$/, "")}_stakeholder_report.md`)}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all hover:-translate-y-0.5"
-                style={{ background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.35)", color: "#10b981" }}>
-                <Download className="h-4 w-4" /> Download .md
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold"
+                style={{ background: "var(--color-bg-elevated)", border: "1px solid var(--color-border-default)", color: "var(--color-text-muted)" }}>
+                <Download className="h-3.5 w-3.5" /> .md
               </button>
             </>
           )}

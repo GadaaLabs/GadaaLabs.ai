@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "avatars.githubusercontent.com" },
     ],
   },
+  // @react-pdf/renderer uses browser-only APIs — exclude from server bundle
+  serverExternalPackages: ["@react-pdf/renderer"],
 };
 
 export default nextConfig;
