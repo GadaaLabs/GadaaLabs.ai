@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { DropZone } from "./DropZone";
 import { StatsTable } from "./StatsTable";
 import { EDADashboard } from "./EDADashboard";
@@ -14,19 +14,21 @@ import { TransformTab } from "./TransformTab";
 import { ModelTrainerTab } from "./ModelTrainerTab";
 import { CompareTab } from "./CompareTab";
 import { DataExplorerTab } from "./DataExplorerTab";
+import { ClusterAnalysisTab } from "./ClusterAnalysisTab";
+import { PivotTab } from "./PivotTab";
 import { computeStats, summaryToPrompt, type DatasetSummary } from "@/lib/datalab";
 import {
   BarChart2, Brain, MessageSquare, AlertCircle, Loader2, Send,
   RotateCcw, CheckCircle2, Zap, TrendingUp, Cpu,
   Sparkles, StickyNote, FlaskConical, Cpu as CpuIcon, Microscope,
-  FileText, Users, Wand2, Activity, GitCompare, Table2,
+  FileText, Users, Wand2, Activity, GitCompare, Table2, Network, LayoutGrid, History,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────
 
-type Tab = "overview" | "charts" | "explorer" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes" | "transform" | "train" | "compare";
+type Tab = "overview" | "charts" | "explorer" | "pivot" | "cluster" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes" | "transform" | "train" | "compare";
 
 interface Message { role: "user" | "assistant"; content: string; }
 
@@ -55,7 +57,54 @@ export function DataLabShell() {
   // Agent phase outputs — populated when 7-phase analysis completes
   const [agentOutputs, setAgentOutputs] = useState<Record<string, string> | null>(null);
 
+  // Session persistence
+  const [savedSession, setSavedSession] = useState<{ fileName: string; savedAt: string } | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = localStorage.getItem("datalab_session_v2");
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return { fileName: parsed.summary?.fileName ?? "Unknown", savedAt: parsed.savedAt ?? "" };
+    } catch { return null; }
+  });
+
   const summaryRef = useRef<DatasetSummary | null>(null);
+
+  // ── Session persistence ───────────────────────
+
+  // Auto-save summary + agentOutputs whenever they change
+  useEffect(() => {
+    if (!summary) return;
+    try {
+      localStorage.setItem("datalab_session_v2", JSON.stringify({
+        summary,
+        agentOutputs,
+        savedAt: new Date().toISOString(),
+      }));
+      setSavedSession({ fileName: summary.fileName, savedAt: new Date().toISOString() });
+    } catch { /* quota exceeded — silently skip */ }
+  }, [summary, agentOutputs]);
+
+  const restoreSession = useCallback(() => {
+    try {
+      const raw = localStorage.getItem("datalab_session_v2");
+      if (!raw) return;
+      const { summary: s, agentOutputs: ao } = JSON.parse(raw);
+      if (!s) return;
+      setSummary(s);
+      summaryRef.current = s;
+      setAgentOutputs(ao ?? null);
+      setRawRows([]);      // raw rows not stored (too large)
+      setActiveRows([]);
+      setTab("overview");
+      setSavedSession(null);
+    } catch { /* corrupt session — ignore */ }
+  }, []);
+
+  const clearSession = useCallback(() => {
+    try { localStorage.removeItem("datalab_session_v2"); } catch { /* noop */ }
+    setSavedSession(null);
+  }, []);
 
   // ── Data load ────────────────────────────────
 
@@ -136,6 +185,8 @@ export function DataLabShell() {
     { id: "overview",           label: "Overview",             icon: BarChart2 },
     { id: "charts",             label: "EDA Dashboard",        icon: TrendingUp },
     { id: "explorer",           label: "Data Explorer",        icon: Table2 },
+    { id: "pivot",              label: "Pivot Table",          icon: LayoutGrid },
+    { id: "cluster",            label: "Clusters",             icon: Network },
     { id: "transform",          label: "Transform",            icon: Wand2 },
     { id: "train",              label: "Train Model",          icon: Activity },
     { id: "compare",            label: "Compare",              icon: GitCompare },
@@ -202,6 +253,33 @@ export function DataLabShell() {
     return (
       <div className="max-w-2xl mx-auto">
         {modeSwitcher}
+
+        {/* Session restore banner */}
+        {savedSession && (
+          <div className="mb-5 rounded-xl px-4 py-3 flex flex-wrap items-center gap-3"
+            style={{ background: "rgba(167,139,250,0.08)", border: "1px solid rgba(167,139,250,0.25)" }}>
+            <History className="h-4 w-4 shrink-0" style={{ color: "#a78bfa" }} />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold" style={{ color: "var(--color-text-secondary)" }}>
+                Previous session found
+              </p>
+              <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                {savedSession.fileName} · saved {new Date(savedSession.savedAt).toLocaleString()}
+              </p>
+            </div>
+            <button onClick={restoreSession}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold"
+              style={{ background: "rgba(167,139,250,0.2)", border: "1px solid rgba(167,139,250,0.4)", color: "#a78bfa" }}>
+              Restore
+            </button>
+            <button onClick={clearSession}
+              className="px-3 py-1.5 rounded-lg text-xs"
+              style={{ background: "var(--color-bg-elevated)", border: "1px solid var(--color-border-default)", color: "var(--color-text-muted)" }}>
+              Dismiss
+            </button>
+          </div>
+        )}
+
         <DropZone onData={handleData} onError={setError} loading={parsing} />
         {error && (
           <div className="mt-4 flex items-start gap-2 px-4 py-3 rounded-xl"
@@ -314,6 +392,14 @@ export function DataLabShell() {
 
       {tab === "compare" && (
         <CompareTab summaryA={summary} />
+      )}
+
+      {tab === "cluster" && (
+        <ClusterAnalysisTab activeRows={activeRows} summary={summary} />
+      )}
+
+      {tab === "pivot" && (
+        <PivotTab activeRows={activeRows} summary={summary} />
       )}
 
       {tab === "analysis" && (
