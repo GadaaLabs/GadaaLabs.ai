@@ -12,10 +12,9 @@ const BORDER = "rgba(255,255,255,0.07)";
 interface Props { summary: DatasetSummary }
 
 export function OutliersTab({ summary }: Props) {
-  const numericCols = summary.columns.filter(
-    (c) => c.type === "numeric" && c.outlierCount !== undefined
-  );
-  const totalOutliers = numericCols.reduce((s, c) => s + (c.outlierCount ?? 0), 0);
+  const numericCols = summary.columns.filter((c) => c.type === "numeric");
+  const colsWithOutlierField = numericCols.map((c) => ({ ...c, outlierCount: c.outlierCount ?? 0 }));
+  const totalOutliers = colsWithOutlierField.reduce((s, c) => s + c.outlierCount, 0);
 
   if (numericCols.length === 0) {
     return (
@@ -25,8 +24,8 @@ export function OutliersTab({ summary }: Props) {
     );
   }
 
-  const sorted = [...numericCols].sort(
-    (a, b) => (b.outlierCount ?? 0) - (a.outlierCount ?? 0)
+  const sorted = [...colsWithOutlierField].sort(
+    (a, b) => b.outlierCount - a.outlierCount
   );
 
   return (
@@ -55,7 +54,7 @@ export function OutliersTab({ summary }: Props) {
       <div style={{ display: "grid",
         gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 12 }}>
         {sorted.map((col) => {
-          const outliers = col.outlierCount ?? 0;
+          const outliers = col.outlierCount;
           const pct = col.count > 0
             ? Math.round((outliers / col.count) * 1000) / 10
             : 0;

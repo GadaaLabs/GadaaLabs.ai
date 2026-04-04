@@ -15,6 +15,8 @@ export interface ColumnStats {
   p75?: number;
   skewness?: number;    // (mean - p50) / std — positive = right-skewed
   kdePoints?: { x: number; y: number }[]; // smoothed density estimate
+  outlierCount?: number;      // count of values beyond 1.5×IQR (optional, from origin components)
+  distributionShape?: string; // e.g. "normal", "right-skewed" (optional, from origin components)
   // categorical
   topValues?: { value: string; count: number }[];
   // for charts
@@ -44,6 +46,9 @@ export interface DatasetSummary {
   detectedTarget: string | null;         // heuristically detected target column
   timeSeries: TimeSeriesData[];          // monthly counts for datetime columns
   sampleRows: Record<string, number>[]; // up to 300 rows, numeric cols only (scatter)
+  // Optional fields used by origin components (not computed by default)
+  recommendedPairs?: { col1: string; col2: string; r: number }[];
+  missingnessPattern?: { rowIndex: number; colsWithNull: string[] }[];
 }
 
 type Row = Record<string, unknown>;

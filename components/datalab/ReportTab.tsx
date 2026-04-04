@@ -140,7 +140,7 @@ function TechnicalReport({ summary, qualityScore, technicalAnalysis, agentOutput
       </Section>
 
       {/* Correlation Summary */}
-      {summary.recommendedPairs.length > 0 && (
+      {(summary.recommendedPairs ?? []).length > 0 && (
         <Section title="Strong Correlations">
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
@@ -151,7 +151,7 @@ function TechnicalReport({ summary, qualityScore, technicalAnalysis, agentOutput
               </tr>
             </thead>
             <tbody>
-              {summary.recommendedPairs.map((p) => {
+              {(summary.recommendedPairs ?? []).map((p) => {
                 const abs = Math.abs(p.r);
                 const strength = abs > 0.7 ? "Strong" : abs > 0.4 ? "Moderate" : "Weak";
                 const dir = p.r > 0 ? "Positive" : "Negative";
@@ -251,11 +251,11 @@ function StakeholderReport({ summary, findings, qualityScore, recommendations, o
           <strong style={{ color: TX1 }}>{summary.fileName}</strong> contains{" "}
           <strong style={{ color: CYAN }}>{summary.rowCount.toLocaleString()} records</strong> with{" "}
           <strong style={{ color: VIOLET }}>{summary.columnCount} features</strong> ({numCols} numeric, {catCols} categorical).
-          {summary.recommendedPairs.length > 0 && (
+          {(summary.recommendedPairs ?? []).length > 0 && (
             <> The strongest relationship in this dataset is between{" "}
-              <strong style={{ color: TX1 }}>{summary.recommendedPairs[0].col1}</strong> and{" "}
-              <strong style={{ color: TX1 }}>{summary.recommendedPairs[0].col2}</strong>{" "}
-              (correlation r = {summary.recommendedPairs[0].r}).</>
+              <strong style={{ color: TX1 }}>{(summary.recommendedPairs ?? [])[0].col1}</strong> and{" "}
+              <strong style={{ color: TX1 }}>{(summary.recommendedPairs ?? [])[0].col2}</strong>{" "}
+              (correlation r = {(summary.recommendedPairs ?? [])[0].r}).</>
           )}
         </p>
       </Section>
@@ -280,7 +280,7 @@ function StakeholderReport({ summary, findings, qualityScore, recommendations, o
             { label: "Complete records", value: `${Math.round((1 - summary.columns.filter(c => c.nullPct > 0).length / summary.columnCount) * 100)}%`, color: GREEN },
             { label: "Columns with gaps", value: summary.columns.filter((c) => c.nullPct > 0).length, color: AMBER },
             { label: "Columns with outliers", value: summary.columns.filter((c) => (c.outlierCount ?? 0) > 0).length, color: ROSE },
-            { label: "Correlated pairs", value: summary.recommendedPairs.length, color: VIOLET },
+            { label: "Correlated pairs", value: (summary.recommendedPairs ?? []).length, color: VIOLET },
           ].map(({ label, value, color }) => (
             <div key={label} style={{ flex: "1 1 120px", background: "rgba(255,255,255,0.02)", border: `1px solid ${BORDER}`,
               borderRadius: 10, padding: "10px 14px", textAlign: "center" }}>
@@ -325,8 +325,8 @@ export function ReportTab({ summary, findings = [], qualityScore = 0, recommenda
   const defaultFindings: string[] = [
     `Dataset contains ${summary.rowCount.toLocaleString()} records across ${summary.columnCount} columns.`,
     `${summary.columns.filter((c) => c.type === "numeric").length} numeric and ${summary.columns.filter((c) => c.type === "categorical").length} categorical features detected.`,
-    summary.recommendedPairs.length > 0
-      ? `Strongest correlation: ${summary.recommendedPairs[0].col1} × ${summary.recommendedPairs[0].col2} (r = ${summary.recommendedPairs[0].r}).`
+    (summary.recommendedPairs ?? []).length > 0
+      ? `Strongest correlation: ${(summary.recommendedPairs ?? [])[0].col1} × ${(summary.recommendedPairs ?? [])[0].col2} (r = ${(summary.recommendedPairs ?? [])[0].r}).`
       : "No strong linear correlations detected between numeric features.",
     `${summary.columns.filter((c) => c.nullPct > 0).length} columns have missing values — review the Technical tab for remediation details.`,
     `${summary.columns.filter((c) => (c.outlierCount ?? 0) > 0).length} columns contain outliers detected via the IQR method.`,

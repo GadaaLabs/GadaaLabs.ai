@@ -14,7 +14,7 @@ export function MissingTab({ summary }: Props) {
   const colsWithNulls = summary.columns
     .filter((c) => c.nullPct > 0)
     .sort((a, b) => b.nullPct - a.nullPct);
-  const { missingnessPattern } = summary;
+  const missingnessPattern = summary.missingnessPattern ?? [];
 
   // Co-occurrence: columns that are null together in the same row
   const coOccurrence = new Map<string, number>();

@@ -20,11 +20,13 @@ function rColor(r: number): string {
 }
 
 export function CorrelationsTab({ summary, chartInsights = {} }: Props) {
-  const { correlationMatrix, recommendedPairs, columns, scatterSamples = [] } = summary;
+  const { correlations = [], correlationMatrix = {}, columns } = summary;
+  // Map our CorrelationPair {colA,colB,r} → local {col1,col2,r} shape
+  const recommendedPairs = correlations.map((p) => ({ col1: p.colA, col2: p.colB, r: p.r }));
   const numericCols = columns.filter((c) => c.type === "numeric");
   const colNames = numericCols.map((c) => c.name);
 
-  if (correlationMatrix.length === 0) {
+  if (colNames.length < 2) {
     return (
       <p style={{ color: TX3, textAlign: "center", padding: "40px 0", fontSize: 13 }}>
         No numeric column pairs found for correlation analysis.
@@ -33,9 +35,10 @@ export function CorrelationsTab({ summary, chartInsights = {} }: Props) {
   }
 
   const rLookup = new Map<string, number>();
-  for (const p of correlationMatrix) {
-    rLookup.set(`${p.col1}|${p.col2}`, p.r);
-    rLookup.set(`${p.col2}|${p.col1}`, p.r);
+  for (const row of Object.keys(correlationMatrix)) {
+    for (const col of Object.keys(correlationMatrix[row])) {
+      rLookup.set(`${row}|${col}`, correlationMatrix[row][col]);
+    }
   }
 
   return (
@@ -99,11 +102,11 @@ export function CorrelationsTab({ summary, chartInsights = {} }: Props) {
             const insight = chartInsights[`${pair.col1}_${pair.col2}`]
               ?? chartInsights[`${pair.col2}_${pair.col1}`];
             const rc = rColor(pair.r);
-            const sample = scatterSamples.find(
-              (s) => (s.col1 === pair.col1 && s.col2 === pair.col2) ||
-                     (s.col1 === pair.col2 && s.col2 === pair.col1)
-            );
-            const points = sample?.points ?? [];
+            // Build scatter points from sampleRows
+            const points = (summary.sampleRows ?? [])
+              .map((row) => ({ x: row[pair.col1], y: row[pair.col2] }))
+              .filter((p) => p.x !== undefined && p.y !== undefined)
+              .slice(0, 200);
             const direction = pair.r > 0 ? "positive" : "negative";
             const strength = Math.abs(pair.r) > 0.7 ? "strong" : Math.abs(pair.r) > 0.4 ? "moderate" : "weak";
 

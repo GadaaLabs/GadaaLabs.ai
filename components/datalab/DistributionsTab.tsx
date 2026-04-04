@@ -13,7 +13,7 @@ export function DistributionsTab({ summary, chartInsights }: Props) {
       <p style={{ fontSize: 12, color: "#5c6a80", marginBottom: 16 }}>
         Each column shown with its agent-selected chart type, annotated with distribution shape, stats, and AI insight.
       </p>
-      <ChartPanel summary={summary} chartInsights={chartInsights} />
+      <ChartPanel summary={summary} />
     </div>
   );
 }
