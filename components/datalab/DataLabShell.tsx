@@ -12,19 +12,20 @@ import { ExpertHub } from "./ExpertHub";
 import { DataScienceAgent } from "./DataScienceAgent";
 import { TransformTab } from "./TransformTab";
 import { ModelTrainerTab } from "./ModelTrainerTab";
+import { CompareTab } from "./CompareTab";
 import { computeStats, summaryToPrompt, type DatasetSummary } from "@/lib/datalab";
 import {
   BarChart2, Brain, MessageSquare, AlertCircle, Loader2, Send,
   RotateCcw, CheckCircle2, Zap, TrendingUp, Cpu,
   Sparkles, StickyNote, FlaskConical, Cpu as CpuIcon, Microscope,
-  FileText, Users, Wand2, Activity,
+  FileText, Users, Wand2, Activity, GitCompare,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────
 
-type Tab = "overview" | "charts" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes" | "transform" | "train";
+type Tab = "overview" | "charts" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes" | "transform" | "train" | "compare";
 
 interface Message { role: "user" | "assistant"; content: string; }
 
@@ -135,6 +136,7 @@ export function DataLabShell() {
     { id: "charts",             label: "EDA Dashboard",        icon: TrendingUp },
     { id: "transform",          label: "Transform",            icon: Wand2 },
     { id: "train",              label: "Train Model",          icon: Activity },
+    { id: "compare",            label: "Compare",              icon: GitCompare },
     { id: "analysis",           label: "Data Science Agent",   icon: Microscope },
     { id: "tech-report",        label: "Tech Report",          icon: FileText },
     { id: "stakeholder-report", label: "Stakeholder Report",   icon: Users },
@@ -302,6 +304,10 @@ export function DataLabShell() {
 
       {tab === "train" && (
         <ModelTrainerTab activeRows={activeRows} summary={summary} />
+      )}
+
+      {tab === "compare" && (
+        <CompareTab summaryA={summary} />
       )}
 
       {tab === "analysis" && (
