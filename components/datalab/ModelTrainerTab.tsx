@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
-import { Activity, Play, Loader2, AlertTriangle, Info } from "lucide-react";
+import { Activity, Play, Loader2, AlertTriangle, Info, Sparkles, Trophy } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import type { DatasetSummary } from "@/lib/datalab";
 
@@ -76,6 +76,77 @@ function predictLinear(X: number[][], w: number[]): number[] {
   });
 }
 
+// ─── Naive Bayes (Gaussian) ───────────────────────────────────────────────────
+
+interface NBModel { classes: number[]; stats: Record<number, { mean: number[]; v: number[]; prior: number }> }
+
+function trainNaiveBayes(X: number[][], y: number[]): NBModel {
+  const classes = [...new Set(y)];
+  const stats: NBModel["stats"] = {};
+  for (const c of classes) {
+    const rows = X.filter((_, i) => y[i] === c);
+    const n    = rows.length;
+    const mean = rows[0].map((_, j) => rows.reduce((s, r) => s + r[j], 0) / n);
+    const v    = rows[0].map((_, j) => rows.reduce((s, r) => s + (r[j] - mean[j]) ** 2, 0) / n + 1e-9);
+    stats[c]   = { mean, v, prior: n / y.length };
+  }
+  return { classes, stats };
+}
+
+function predictNaiveBayes(X: number[][], model: NBModel): number[] {
+  return X.map(x => {
+    let best = model.classes[0], bestP = -Infinity;
+    for (const c of model.classes) {
+      const { mean, v, prior } = model.stats[c];
+      let lp = Math.log(prior);
+      for (let j = 0; j < x.length; j++) lp += -0.5 * Math.log(2 * Math.PI * v[j]) - (x[j] - mean[j]) ** 2 / (2 * v[j]);
+      if (lp > bestP) { bestP = lp; best = c; }
+    }
+    return best;
+  });
+}
+
+// ─── K-Nearest Neighbours (k=5) ───────────────────────────────────────────────
+
+function predictKNN(Xtr: number[][], ytr: number[], Xte: number[][], k = 5): number[] {
+  return Xte.map(xq => {
+    const dists = Xtr
+      .map((xi, i) => ({ d: xi.reduce((s, v, j) => s + (v - xq[j]) ** 2, 0), y: ytr[i] }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, k);
+    const votes: Record<number, number> = {};
+    for (const { y } of dists) votes[y] = (votes[y] ?? 0) + 1;
+    return Number(Object.entries(votes).sort((a, b) => b[1] - a[1])[0][0]);
+  });
+}
+
+// ─── Ridge Regression (linear + L2) ──────────────────────────────────────────
+
+function trainRidge(X: number[][], y: number[], lr = 0.1, iters = 400, lambda = 0.01): number[] {
+  const m = X.length, n = X[0].length;
+  const w = new Array(n + 1).fill(0);
+  for (let it = 0; it < iters; it++) {
+    const g = new Array(n + 1).fill(0);
+    for (let i = 0; i < m; i++) {
+      let pred = w[0];
+      for (let j = 0; j < n; j++) pred += w[j + 1] * X[i][j];
+      const e = pred - y[i];
+      g[0] += e;
+      for (let j = 0; j < n; j++) g[j + 1] += e * X[i][j] + lambda * w[j + 1];
+    }
+    for (let j = 0; j <= n; j++) w[j] -= (lr / m) * g[j];
+  }
+  return w;
+}
+
+// ─── AutoML result type ───────────────────────────────────────────────────────
+
+interface AutoMLEntry {
+  name: string;
+  metrics: ClassMetrics | RegMetrics;
+  type: "class" | "reg";
+}
+
 interface ClassMetrics { accuracy: number; precision: number; recall: number; f1: number; tp: number; fp: number; fn: number; tn: number }
 interface RegMetrics   { r2: number; rmse: number; mae: number }
 
@@ -144,6 +215,8 @@ export function ModelTrainerTab({ activeRows, summary }: Props) {
   const [training, setTraining] = useState(false);
   const [result, setResult] = useState<TrainResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [automlMode, setAutomlMode] = useState(false);
+  const [automlResults, setAutomlResults] = useState<AutoMLEntry[] | null>(null);
 
   // Auto-detect algorithm from target type
   const targetStats = useMemo(
@@ -260,6 +333,88 @@ export function ModelTrainerTab({ activeRows, summary }: Props) {
     }, 20);
   }, [targetCol, featureCols, splitPct, autoAlgo, activeRows]);
 
+  const handleAutoML = useCallback(() => {
+    if (!targetCol || featureCols.size === 0) return;
+    setError(null);
+    setTraining(true);
+    setAutomlResults(null);
+
+    setTimeout(() => {
+      try {
+        const features = [...featureCols];
+        const isClass  = autoAlgo === "logistic";
+        const allSel   = [targetCol, ...features];
+        const clean    = activeRows.filter(row =>
+          allSel.every(col => {
+            const v = row[col];
+            return v !== null && v !== undefined && v !== "" && !isNaN(Number(v));
+          })
+        );
+        if (clean.length < 20) {
+          setError(`Not enough complete rows (${clean.length}). Fill nulls first.`);
+          setTraining(false);
+          return;
+        }
+        const shuffled   = [...clean].sort(() => Math.random() - 0.5).slice(0, MAX_TRAIN);
+        const splitAt    = Math.floor(shuffled.length * splitPct / 100);
+        const trainRows  = shuffled.slice(0, splitAt);
+        const testRows   = shuffled.slice(splitAt);
+        if (testRows.length < 5) { setError("Test set too small."); setTraining(false); return; }
+
+        const toX  = (rows: Row[]) => rows.map(r => features.map(f => Number(r[f])));
+        const Xtr  = toX(trainRows);
+        const Xte  = toX(testRows);
+        const { Xn: Xtrn, means, stds } = normalizeFeatures(Xtr);
+        const Xten = Xte.map(row => row.map((v, j) => (v - means[j]) / stds[j]));
+
+        const entries: AutoMLEntry[] = [];
+
+        if (isClass) {
+          const classes   = [...new Set(shuffled.map(r => String(r[targetCol] ?? "")))].sort();
+          if (classes.length > 2) { setError(`AutoML classification requires a binary target. Found ${classes.length} classes.`); setTraining(false); return; }
+          const [, class1] = classes;
+          const toY  = (rows: Row[]) => rows.map(r => String(r[targetCol]) === class1 ? 1 : 0);
+          const ytr  = toY(trainRows);
+          const yte  = toY(testRows);
+
+          // 1. Logistic Regression
+          const wLog  = trainLogistic(Xtrn, ytr);
+          entries.push({ name: "Logistic Regression", type: "class", metrics: classMetrics(predictLogistic(Xten, wLog), yte) });
+
+          // 2. Naive Bayes
+          const nbModel = trainNaiveBayes(Xtrn, ytr);
+          entries.push({ name: "Naive Bayes", type: "class", metrics: classMetrics(predictNaiveBayes(Xten, nbModel), yte) });
+
+          // 3. KNN (k=5)
+          entries.push({ name: "K-Nearest Neighbors (k=5)", type: "class", metrics: classMetrics(predictKNN(Xtrn, ytr, Xten, 5), yte) });
+        } else {
+          const toY  = (rows: Row[]) => rows.map(r => Number(r[targetCol]));
+          const ytr  = toY(trainRows);
+          const yte  = toY(testRows);
+
+          // 1. Linear Regression
+          const wLin  = trainLinear(Xtrn, ytr);
+          entries.push({ name: "Linear Regression", type: "reg", metrics: regMetrics(predictLinear(Xten, wLin), yte) });
+
+          // 2. Ridge Regression
+          const wRidge = trainRidge(Xtrn, ytr);
+          entries.push({ name: "Ridge Regression (λ=0.01)", type: "reg", metrics: regMetrics(predictLinear(Xten, wRidge), yte) });
+        }
+
+        // Sort by best metric
+        entries.sort((a, b) => {
+          if (a.type === "class") return (b.metrics as ClassMetrics).accuracy - (a.metrics as ClassMetrics).accuracy;
+          return (b.metrics as RegMetrics).r2 - (a.metrics as RegMetrics).r2;
+        });
+        setAutomlResults(entries);
+      } catch (e) {
+        setError((e as Error).message ?? "AutoML failed");
+      } finally {
+        setTraining(false);
+      }
+    }, 20);
+  }, [targetCol, featureCols, splitPct, autoAlgo, activeRows]);
+
   const fmt = (n: number, d = 3) => n.toFixed(d);
 
   return (
@@ -360,15 +515,50 @@ export function ModelTrainerTab({ activeRows, summary }: Props) {
             className="w-full accent-cyan-400" />
         </div>
 
-        {/* Train button */}
-        <button onClick={handleTrain}
-          disabled={training || featureCols.size === 0 || !targetCol}
-          className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-bold transition-all hover:-translate-y-0.5 disabled:opacity-50 disabled:translate-y-0"
-          style={{ background: "linear-gradient(135deg, #06b6d4, #0284c7)", color: "#fff", boxShadow: "0 0 20px rgba(6,182,212,0.25)" }}>
-          {training
-            ? <><Loader2 className="h-4 w-4 animate-spin" /> Training…</>
-            : <><Play className="h-4 w-4" /> Train Model</>}
-        </button>
+        {/* AutoML toggle */}
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl"
+          style={{ background: "var(--color-bg-elevated)", border: "1px solid var(--color-border-default)" }}>
+          <button onClick={() => { setAutomlMode(v => !v); setResult(null); setAutomlResults(null); }}
+            className="flex items-center gap-2"
+            role="switch" aria-checked={automlMode}>
+            <div className="relative w-9 h-5 rounded-full transition-colors"
+              style={{ background: automlMode ? "#a78bfa" : "var(--color-border-default)" }}>
+              <div className="absolute top-0.5 w-4 h-4 rounded-full transition-all"
+                style={{ background: "#fff", left: automlMode ? "calc(100% - 18px)" : "2px" }} />
+            </div>
+          </button>
+          <div>
+            <p className="text-xs font-semibold" style={{ color: "var(--color-text-secondary)" }}>AutoML Mode</p>
+            <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+              {autoAlgo === "logistic"
+                ? "Compare: Logistic Regression · Naive Bayes · KNN"
+                : "Compare: Linear Regression · Ridge Regression"}
+            </p>
+          </div>
+          <span className="ml-auto text-xs px-2 py-0.5 rounded-full font-semibold"
+            style={{ background: "rgba(167,139,250,0.12)", color: "#a78bfa" }}>New</span>
+        </div>
+
+        {/* Train / AutoML button */}
+        {!automlMode ? (
+          <button onClick={handleTrain}
+            disabled={training || featureCols.size === 0 || !targetCol}
+            className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-bold transition-all hover:-translate-y-0.5 disabled:opacity-50 disabled:translate-y-0"
+            style={{ background: "linear-gradient(135deg, #06b6d4, #0284c7)", color: "#fff", boxShadow: "0 0 20px rgba(6,182,212,0.25)" }}>
+            {training
+              ? <><Loader2 className="h-4 w-4 animate-spin" /> Training…</>
+              : <><Play className="h-4 w-4" /> Train Model</>}
+          </button>
+        ) : (
+          <button onClick={handleAutoML}
+            disabled={training || featureCols.size === 0 || !targetCol}
+            className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-bold transition-all hover:-translate-y-0.5 disabled:opacity-50 disabled:translate-y-0"
+            style={{ background: "linear-gradient(135deg, #a78bfa, #7c3aed)", color: "#fff", boxShadow: "0 0 20px rgba(167,139,250,0.25)" }}>
+            {training
+              ? <><Loader2 className="h-4 w-4 animate-spin" /> Running AutoML…</>
+              : <><Sparkles className="h-4 w-4" /> Run AutoML</>}
+          </button>
+        )}
       </div>
 
       {/* Error */}
@@ -380,8 +570,69 @@ export function ModelTrainerTab({ activeRows, summary }: Props) {
         </div>
       )}
 
+      {/* AutoML results */}
+      {automlResults && automlResults.length > 0 && (
+        <div className="rounded-xl overflow-hidden"
+          style={{ background: "var(--color-bg-surface)", border: "1px solid rgba(167,139,250,0.3)", borderLeft: "3px solid #a78bfa" }}>
+          <div className="px-4 py-3 flex items-center gap-2"
+            style={{ borderBottom: "1px solid var(--color-border-subtle)" }}>
+            <Trophy className="h-4 w-4" style={{ color: "#a78bfa" }} />
+            <p className="text-xs font-bold uppercase tracking-widest" style={{ color: "#a78bfa" }}>
+              AutoML — Algorithm Comparison
+            </p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--color-border-subtle)" }}>
+                  <th className="px-4 py-2.5 text-left font-semibold" style={{ color: "var(--color-text-muted)" }}>Algorithm</th>
+                  {automlResults[0].type === "class"
+                    ? ["Accuracy", "Precision", "Recall", "F1"].map(h => <th key={h} className="px-4 py-2.5 text-left font-semibold" style={{ color: "var(--color-text-muted)" }}>{h}</th>)
+                    : ["R²", "RMSE", "MAE"].map(h => <th key={h} className="px-4 py-2.5 text-left font-semibold" style={{ color: "var(--color-text-muted)" }}>{h}</th>)
+                  }
+                </tr>
+              </thead>
+              <tbody>
+                {automlResults.map((entry, i) => {
+                  const isWinner = i === 0;
+                  const m = entry.metrics as ClassMetrics & RegMetrics;
+                  return (
+                    <tr key={entry.name}
+                      style={{
+                        borderBottom: "1px solid var(--color-border-subtle)",
+                        background: isWinner ? "rgba(167,139,250,0.06)" : "transparent",
+                      }}>
+                      <td className="px-4 py-3">
+                        <span className="flex items-center gap-2 font-semibold" style={{ color: isWinner ? "#a78bfa" : "var(--color-text-secondary)" }}>
+                          {isWinner && <Trophy className="h-3.5 w-3.5 shrink-0" style={{ color: "#f59e0b" }} />}
+                          {entry.name}
+                        </span>
+                      </td>
+                      {entry.type === "class" ? (
+                        <>
+                          <td className="px-4 py-3 font-bold" style={{ color: "#10b981" }}>{(m.accuracy * 100).toFixed(1)}%</td>
+                          <td className="px-4 py-3" style={{ color: "var(--color-text-secondary)" }}>{m.precision?.toFixed(3)}</td>
+                          <td className="px-4 py-3" style={{ color: "var(--color-text-secondary)" }}>{m.recall?.toFixed(3)}</td>
+                          <td className="px-4 py-3" style={{ color: "var(--color-text-secondary)" }}>{m.f1?.toFixed(3)}</td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="px-4 py-3 font-bold" style={{ color: "#10b981" }}>{m.r2?.toFixed(3)}</td>
+                          <td className="px-4 py-3" style={{ color: "var(--color-text-secondary)" }}>{m.rmse?.toFixed(3)}</td>
+                          <td className="px-4 py-3" style={{ color: "var(--color-text-secondary)" }}>{m.mae?.toFixed(3)}</td>
+                        </>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Results */}
-      {result && (
+      {result && !automlMode && (
         <div className="space-y-4">
           {/* Metrics */}
           <div className="rounded-xl p-5"

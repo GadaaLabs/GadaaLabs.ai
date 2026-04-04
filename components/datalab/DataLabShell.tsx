@@ -13,19 +13,20 @@ import { DataScienceAgent } from "./DataScienceAgent";
 import { TransformTab } from "./TransformTab";
 import { ModelTrainerTab } from "./ModelTrainerTab";
 import { CompareTab } from "./CompareTab";
+import { DataExplorerTab } from "./DataExplorerTab";
 import { computeStats, summaryToPrompt, type DatasetSummary } from "@/lib/datalab";
 import {
   BarChart2, Brain, MessageSquare, AlertCircle, Loader2, Send,
   RotateCcw, CheckCircle2, Zap, TrendingUp, Cpu,
   Sparkles, StickyNote, FlaskConical, Cpu as CpuIcon, Microscope,
-  FileText, Users, Wand2, Activity, GitCompare,
+  FileText, Users, Wand2, Activity, GitCompare, Table2,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────
 
-type Tab = "overview" | "charts" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes" | "transform" | "train" | "compare";
+type Tab = "overview" | "charts" | "explorer" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes" | "transform" | "train" | "compare";
 
 interface Message { role: "user" | "assistant"; content: string; }
 
@@ -134,6 +135,7 @@ export function DataLabShell() {
   const tabs: { id: Tab; label: string; icon: React.ElementType }[] = [
     { id: "overview",           label: "Overview",             icon: BarChart2 },
     { id: "charts",             label: "EDA Dashboard",        icon: TrendingUp },
+    { id: "explorer",           label: "Data Explorer",        icon: Table2 },
     { id: "transform",          label: "Transform",            icon: Wand2 },
     { id: "train",              label: "Train Model",          icon: Activity },
     { id: "compare",            label: "Compare",              icon: GitCompare },
@@ -293,6 +295,10 @@ export function DataLabShell() {
       {tab === "overview" && <StatsTable summary={summary} />}
 
       {tab === "charts" && <EDADashboard summary={summary} agentOutputs={agentOutputs} />}
+
+      {tab === "explorer" && (
+        <DataExplorerTab activeRows={activeRows} summary={summary} />
+      )}
 
       {tab === "transform" && rawRows.length > 0 && (
         <TransformTab
