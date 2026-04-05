@@ -18,20 +18,22 @@ import { ClusterAnalysisTab } from "./ClusterAnalysisTab";
 import { PivotTab } from "./PivotTab";
 import { AnomalyDetectionTab } from "./AnomalyDetectionTab";
 import { DataQualityTab } from "./DataQualityTab";
+import { ScatterMatrixTab } from "./ScatterMatrixTab";
+import { FeatureImportanceTab } from "./FeatureImportanceTab";
 import { preprocessAndCompute, summaryToPrompt, type DatasetSummary } from "@/lib/datalab";
 import {
   BarChart2, Brain, MessageSquare, AlertCircle, Loader2, Send,
   RotateCcw, CheckCircle2, Zap, TrendingUp, Cpu,
   Sparkles, StickyNote, FlaskConical, Cpu as CpuIcon, Microscope,
   FileText, Users, Wand2, Activity, GitCompare, Table2, Network, LayoutGrid, History,
-  AlertTriangle, ShieldCheck,
+  AlertTriangle, ShieldCheck, Combine,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────
 
-type Tab = "overview" | "charts" | "explorer" | "pivot" | "cluster" | "anomaly" | "quality" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes" | "transform" | "train" | "compare";
+type Tab = "overview" | "charts" | "explorer" | "pivot" | "scatter" | "cluster" | "anomaly" | "quality" | "analysis" | "tech-report" | "stakeholder-report" | "code" | "chat" | "notes" | "transform" | "train" | "importance" | "compare";
 
 type CategoryId = "explore" | "analyze" | "prepare" | "model" | "reports" | "tools";
 
@@ -43,10 +45,10 @@ interface CategoryConfig {
 }
 
 const CATEGORIES: CategoryConfig[] = [
-  { id: "explore",  label: "Explore",  color: "#06b6d4", tabs: ["overview", "charts", "explorer", "pivot"] },
+  { id: "explore",  label: "Explore",  color: "#06b6d4", tabs: ["overview", "charts", "explorer", "pivot", "scatter"] },
   { id: "analyze",  label: "Analyze",  color: "#f59e0b", tabs: ["cluster", "anomaly", "quality"] },
   { id: "prepare",  label: "Prepare",  color: "#a78bfa", tabs: ["transform", "compare"] },
-  { id: "model",    label: "Model",    color: "#10b981", tabs: ["train", "analysis", "code"] },
+  { id: "model",    label: "Model",    color: "#10b981", tabs: ["train", "importance", "analysis", "code"] },
   { id: "reports",  label: "Reports",  color: "#f472b6", tabs: ["tech-report", "stakeholder-report"] },
   { id: "tools",    label: "Tools",    color: "#6b7280", tabs: ["chat", "notes"] },
 ];
@@ -216,12 +218,14 @@ export function DataLabShell() {
     "charts":             { label: "EDA Dashboard",      icon: TrendingUp },
     "explorer":           { label: "Data Explorer",      icon: Table2 },
     "pivot":              { label: "Pivot Table",        icon: LayoutGrid },
+    "scatter":            { label: "Scatter Matrix",     icon: Combine },
     "cluster":            { label: "Clusters",           icon: Network },
     "anomaly":            { label: "Anomaly Detection",  icon: AlertTriangle },
     "quality":            { label: "Quality Scorecard",  icon: ShieldCheck },
     "transform":          { label: "Transform",          icon: Wand2 },
     "compare":            { label: "Compare",            icon: GitCompare },
     "train":              { label: "Train Model",        icon: Activity },
+    "importance":         { label: "Feature Importance", icon: BarChart2 },
     "analysis":           { label: "DS Agent",           icon: Microscope },
     "code":               { label: "ML Code",            icon: Cpu },
     "tech-report":        { label: "Tech Report",        icon: FileText },
@@ -451,6 +455,10 @@ export function DataLabShell() {
         <ModelTrainerTab activeRows={activeRows} summary={summary} />
       )}
 
+      {tab === "importance" && (
+        <FeatureImportanceTab activeRows={activeRows} summary={summary} />
+      )}
+
       {tab === "compare" && (
         <CompareTab summaryA={summary} />
       )}
@@ -461,6 +469,10 @@ export function DataLabShell() {
 
       {tab === "pivot" && (
         <PivotTab activeRows={activeRows} summary={summary} />
+      )}
+
+      {tab === "scatter" && (
+        <ScatterMatrixTab activeRows={activeRows} summary={summary} />
       )}
 
       {tab === "anomaly" && (
