@@ -232,6 +232,7 @@ export default function ServicesPage() {
                   href={url}
                   target="_blank"
                   rel="noopener noreferrer"
+                  aria-label={`View ${name} live`}
                   className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:opacity-80"
                   style={{
                     background: "rgba(6,182,212,0.1)",
@@ -265,10 +266,9 @@ export default function ServicesPage() {
           {steps.map(({ number, title, description }, i) => (
             <div key={number} className="flex flex-col items-center text-center relative">
               <div
-                className="flex h-14 w-14 items-center justify-center rounded-full mb-4 text-xl font-black"
+                className="flex h-14 w-14 items-center justify-center rounded-full mb-4 text-xl font-black text-white"
                 style={{
                   background: "linear-gradient(135deg, var(--color-purple-600), var(--color-cyan-500))",
-                  color: "#fff",
                   boxShadow: "var(--glow-purple-sm)",
                 }}
               >
@@ -335,10 +335,9 @@ export default function ServicesPage() {
             href={CALENDLY_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl font-semibold text-base transition-all hover:-translate-y-0.5 hover:opacity-90"
+            className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl font-semibold text-base transition-all hover:-translate-y-0.5 hover:opacity-90 text-white"
             style={{
               background: "linear-gradient(135deg, var(--color-purple-600), var(--color-purple-500))",
-              color: "#fff",
               boxShadow: "var(--glow-purple)",
             }}
           >
