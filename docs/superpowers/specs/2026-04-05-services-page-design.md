@@ -85,9 +85,9 @@ Each card shows: project name, description, a generic "Industry-leading web stac
 
 | Name | Description | URL | Category |
 |------|-------------|-----|----------|
-| Immigration Services | Professional site for an immigration consulting agency | https://preview.gadaalabs.com/ | Business Website |
-| Mimz Barbershop | Modern barbershop site with services and booking | https://mimz.gadaalabs.com/ | Business Website |
-| Perth City Barbershop | Clean, mobile-first site for a barbershop | https://perthcity.gadaalabs.com/ | Business Website |
+| Immigration Services | A polished, trust-building website for an immigration consulting agency — designed to turn anxious visitors into confident clients. | https://preview.gadaalabs.com/ | Business Website |
+| Mimz Barbershop | A sharp, modern site for a premium barbershop — built to make a strong first impression and keep clients coming back. | https://mimz.gadaalabs.com/ | Business Website |
+| Perth City Barbershop | A sleek, mobile-first site for a city barbershop that commands attention, communicates quality, and drives bookings. | https://perthcity.gadaalabs.com/ | Business Website |
 
 ### Block 4: How It Works
 Three-step horizontal strip:
