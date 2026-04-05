@@ -95,7 +95,7 @@ export function Footer() {
               </h3>
               <ul className="space-y-2">
                 {items.map((item) => {
-                  const isExternal = item.href.startsWith("https://");
+                  const isExternal = item.href.startsWith("http://") || item.href.startsWith("https://");
                   return (
                     <li key={item.href}>
                       {isExternal ? (
