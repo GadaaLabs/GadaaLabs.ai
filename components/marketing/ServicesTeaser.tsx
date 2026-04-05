@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Globe } from "lucide-react";
+import { Globe, ArrowRight } from "lucide-react";
 
 export function ServicesTeaser() {
   return (
@@ -41,7 +41,7 @@ export function ServicesTeaser() {
             boxShadow: "var(--glow-purple-sm)",
           }}
         >
-          View Our Services →
+          View Our Services <ArrowRight className="h-4 w-4" />
         </Link>
       </div>
     </section>
