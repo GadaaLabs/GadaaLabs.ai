@@ -119,7 +119,7 @@ export function FeatureImportanceTab({ summary, activeRows }: FeatureImportanceT
   const usedRows = Math.min(activeRows.length, ROW_CAP);
   const targetColMeta = summary.columns.find(c => c.name === target);
   const barHeight = 32;
-  const chartHeight = Math.max(results.length * barHeight + 40, 200);
+  const chartHeight = Math.max(Math.min(results.length, 30) * barHeight + 40, 200);
 
   return (
     <div>
