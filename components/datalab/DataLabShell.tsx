@@ -26,7 +26,7 @@ import {
   RotateCcw, CheckCircle2, Zap, TrendingUp, Cpu,
   Sparkles, StickyNote, FlaskConical, Cpu as CpuIcon, Microscope,
   FileText, Users, Wand2, Activity, GitCompare, Table2, Network, LayoutGrid, History,
-  AlertTriangle, ShieldCheck, Combine,
+  AlertTriangle, ShieldCheck, Combine, ListOrdered,
 } from "lucide-react";
 
 // ─────────────────────────────────────────────
@@ -225,7 +225,7 @@ export function DataLabShell() {
     "transform":          { label: "Transform",          icon: Wand2 },
     "compare":            { label: "Compare",            icon: GitCompare },
     "train":              { label: "Train Model",        icon: Activity },
-    "importance":         { label: "Feature Importance", icon: BarChart2 },
+    "importance":         { label: "Feature Importance", icon: ListOrdered },
     "analysis":           { label: "DS Agent",           icon: Microscope },
     "code":               { label: "ML Code",            icon: Cpu },
     "tech-report":        { label: "Tech Report",        icon: FileText },

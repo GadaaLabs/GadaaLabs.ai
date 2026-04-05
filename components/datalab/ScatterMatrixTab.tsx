@@ -34,6 +34,7 @@ export function ScatterMatrixTab({ summary, activeRows }: ScatterMatrixTabProps)
 
   const sampledRows = useMemo(() => activeRows.slice(0, ROW_CAP), [activeRows]);
 
+  // Hooks must precede early returns (React rules of hooks). Both memos are cheap on empty input.
   if (activeRows.length === 0) {
     return (
       <div
