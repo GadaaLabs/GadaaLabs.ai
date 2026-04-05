@@ -3,7 +3,7 @@ import { Globe, ArrowRight } from "lucide-react";
 
 export function ServicesTeaser() {
   return (
-    <section className="mx-auto max-w-7xl px-6 pb-20">
+    <section className="mx-auto max-w-7xl px-6 pt-4 pb-20">
       <div
         className="rounded-2xl px-8 py-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6"
         style={{
