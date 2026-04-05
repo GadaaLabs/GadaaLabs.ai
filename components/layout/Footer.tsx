@@ -19,6 +19,10 @@ const links = {
     { label: "Contact", href: "/contact" },
     { label: "Dashboard", href: "/dashboard" },
   ],
+  Services: [
+    { label: "Services Overview", href: "/services" },
+    { label: "Book a Call", href: "https://calendly.com/seif-explorer4" },
+  ],
 };
 
 export function Footer() {
@@ -30,7 +34,7 @@ export function Footer() {
       }}
     >
       <div className="mx-auto max-w-7xl px-6 py-12">
-        <div className="grid grid-cols-2 gap-8 md:grid-cols-4">
+        <div className="grid grid-cols-2 gap-8 md:grid-cols-5">
           {/* Brand */}
           <div className="col-span-2 md:col-span-1">
             <Link href="/" className="flex items-center gap-2 mb-4">
@@ -90,17 +94,32 @@ export function Footer() {
                 {group}
               </h3>
               <ul className="space-y-2">
-                {items.map((item) => (
-                  <li key={item.href}>
-                    <Link
-                      href={item.href}
-                      className="text-sm transition-colors hover:text-white"
-                      style={{ color: "var(--color-text-secondary)" }}
-                    >
-                      {item.label}
-                    </Link>
-                  </li>
-                ))}
+                {items.map((item) => {
+                  const isExternal = item.href.startsWith("https://");
+                  return (
+                    <li key={item.href}>
+                      {isExternal ? (
+                        <a
+                          href={item.href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm transition-colors hover:text-white"
+                          style={{ color: "var(--color-text-secondary)" }}
+                        >
+                          {item.label}
+                        </a>
+                      ) : (
+                        <Link
+                          href={item.href}
+                          className="text-sm transition-colors hover:text-white"
+                          style={{ color: "var(--color-text-secondary)" }}
+                        >
+                          {item.label}
+                        </Link>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ))}
