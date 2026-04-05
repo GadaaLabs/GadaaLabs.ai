@@ -74,15 +74,20 @@ Static array of project objects hardcoded in the page file:
 type Project = {
   name: string
   description: string
-  url: string        // live subdomain under gadaalabs.com
-  tech: string[]     // e.g. ["Lovable.dev"] or ["Next.js", "Tailwind"]
-  category: string   // "Business Website" | "Landing Page" | "Portfolio"
+  url: string       // live subdomain under gadaalabs.com
+  category: string  // "Business Website" | "Landing Page" | "Portfolio"
 }
 ```
 
-Each card shows: project name, description, tech badge(s), category badge, and a "View Live →" link button (opens in new tab). Grid: 1 col mobile, 2 col tablet, 3 col desktop.
+Each card shows: project name, description, a generic "Industry-leading web stack" tech badge, category badge, and a "View Live →" link button (opens in new tab). No specific framework or tooling is named. Grid: 1 col mobile, 2 col tablet, 3 col desktop.
 
-Portfolio data is populated by the developer at implementation time with real project details.
+**Portfolio data (hardcoded):**
+
+| Name | Description | URL | Category |
+|------|-------------|-----|----------|
+| Immigration Services | Professional site for an immigration consulting agency | https://preview.gadaalabs.com/ | Business Website |
+| Mimz Barbershop | Modern barbershop site with services and booking | https://mimz.gadaalabs.com/ | Business Website |
+| Perth City Barbershop | Clean, mobile-first site for a barbershop | https://perthcity.gadaalabs.com/ | Business Website |
 
 ### Block 4: How It Works
 Three-step horizontal strip:
@@ -127,7 +132,8 @@ Footer grid expands from `md:grid-cols-4` (currently `md:grid-cols-4` with brand
 
 ## Data & Content
 
-- Portfolio project data: hardcoded static array in `app/services/page.tsx`
+- Portfolio project data: hardcoded static array in `app/services/page.tsx` (3 projects as of spec date)
+- Tech stack is not disclosed on cards — displayed as "Industry-leading web stack"
 - Calendly URL: `https://calendly.com/seif-explorer4`
 - No database, no CMS, no API calls needed
 - To add a new portfolio project: edit the static array and redeploy
